@@ -137,7 +137,7 @@ class ConvertToMHLOPass : public PassWrapper<ConvertToMHLOPass, FunctionPass> {
       *this, "legalize-chlo",
       llvm::cl::desc(
           "Also legalizes intermediate chlo ops to hlo (default true)"),
-      llvm::cl::init(true)};
+      llvm::cl::init(false)};
   Option<bool> use_tf2xla_fallback_{
       *this, "use-tf2xla-fallback",
       llvm::cl::desc(
