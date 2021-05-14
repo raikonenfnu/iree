@@ -79,7 +79,7 @@ static void buildHLOInputTransformPassPipeline(OpPassManager &passManager) {
 
   // Run passes to remove shape constraints. HLO lowering inserts them, but they
   // are not desired here.
-  passManager.addNestedPass<FuncOp>(mlir::createRemoveShapeConstraintsPass());
+  // passManager.addNestedPass<FuncOp>(mlir::createRemoveShapeConstraintsPass());
 }
 
 // Prepare TOSA for use as an input to the Flow dialect.
@@ -172,12 +172,12 @@ void buildFlowTransformPassPipeline(OpPassManager &passManager,
   passManager.addNestedPass<FuncOp>(
       Shape::createExpandFunctionDynamicDimsPass());
 
-  SmallVector<std::string> doNotRecurseOpNames = {"flow.dispatch.workgroups"};
-  passManager.addNestedPass<FuncOp>(
-      Shape::createTieDynamicShapesPass(doNotRecurseOpNames));
-  passManager.addNestedPass<FuncOp>(
-      Shape::createMaterializeShapeCalculationsPass());
-  passManager.addNestedPass<FuncOp>(Shape::createHoistShapeCalculationsPass());
+  // SmallVector<std::string> doNotRecurseOpNames =
+  // {"flow.dispatch.workgroups"}; passManager.addNestedPass<FuncOp>(
+  //     Shape::createTieDynamicShapesPass(doNotRecurseOpNames));
+  // passManager.addNestedPass<FuncOp>(
+  //     Shape::createMaterializeShapeCalculationsPass());
+  // passManager.addNestedPass<FuncOp>(Shape::createHoistShapeCalculationsPass());
 
   //----------------------------------------------------------------------------
   // Partitioning and dispatch region formation

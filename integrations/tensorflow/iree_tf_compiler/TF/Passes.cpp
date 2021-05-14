@@ -14,6 +14,9 @@
 
 #include "iree_tf_compiler/TF/Passes.h"
 
+#include "iree/compiler/Conversion/HLOToHLO/Passes.h"
+#include "iree/compiler/Conversion/HLOToLinalg/HLOToLinalgOnTensorPasses.h"
+#include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
 #include "iree/compiler/Dialect/Shape/Conversion/Passes.h"
 #include "iree/compiler/Dialect/Shape/Transforms/Passes.h"
 #include "iree_tf_compiler/dialect/tf_strings/ir/dialect.h"
@@ -93,12 +96,12 @@ void buildTFImportPassPipeline(OpPassManager &pm) {
   //----------------------------------------------------------------------------
   // Lowering shape-related constructs.
   //----------------------------------------------------------------------------
-  pm.addPass(iree_compiler::Shape::createConvertHLOToShapePass());
+  // pm.addPass(iree_compiler::Shape::createConvertHLOToShapePass());
   // TODO(GH-2277): Lower HLO shape constraints instead of eliding them here.
   pm.addPass(createRemoveShapeConstraintsPass());
   pm.addPass(createCanonicalizerPass());
-  pm.addPass(iree_compiler::Shape::createConvertShapeToShapexPass());
-  pm.addPass(createCanonicalizerPass());
+  // pm.addPass(iree_compiler::Shape::createConvertShapeToShapexPass());
+  // pm.addPass(createCanonicalizerPass());
 
   //----------------------------------------------------------------------------
   // Lowering intermediate dialects to module specific dialects.
@@ -154,7 +157,13 @@ void buildMHLOImportPassPipeline(OpPassManager &pm) {
   // Temporary: Does some special case fixups of HLO ops with dynamic
   // shapes until these can be done properly upstream.
   ////////////////////////////////////////////////////////////////////////////
-  pm.addPass(iree_compiler::Shape::createConvertHLOToShapePass());
+  // pm.addPass(iree_compiler::Shape::createConvertHLOToShapePass());
+
+  pm.addNestedPass<FuncOp>(
+      mlir::iree_compiler::IREE::Flow::createHLOToHLOPreprocessingPass());
+  pm.addNestedPass<FuncOp>(mlir::iree_compiler::createDecomposeHLOClampPass());
+  pm.addNestedPass<FuncOp>(
+      mlir::iree_compiler::createHLOToLinalgOnTensorsPass(true));
 }
 
 void registerMHLOImportPassPipeline() {

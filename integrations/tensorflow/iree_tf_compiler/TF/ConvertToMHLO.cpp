@@ -80,7 +80,7 @@ class ConvertToMHLOPass : public PassWrapper<ConvertToMHLOPass, FunctionPass> {
 
     // Populate with CHLO->HLO lowerings to account for TF ops legalized to
     // CHLO first.
-    chlo::PopulateLegalizeChloToHloPatterns(context, &patterns);
+    // chlo::PopulateLegalizeChloToHloPatterns(context, &patterns);
 
     // ConstantLike op is convenient to create splat constants, but is
     // canonicalized to plain HLO constant if statically shaped. Add the
@@ -88,7 +88,7 @@ class ConvertToMHLOPass : public PassWrapper<ConvertToMHLOPass, FunctionPass> {
     chlo::ConstantLikeOp::getCanonicalizationPatterns(patterns, context);
 
     ConversionTarget target(*context);
-    target.addIllegalDialect<chlo::HloClientDialect>();
+    target.addLegalDialect<chlo::HloClientDialect>();
     target.addLegalDialect<mhlo::MhloDialect>();
     target.addLegalDialect<mlir::StandardOpsDialect>();
     target.addLegalDialect<shape::ShapeDialect>();
