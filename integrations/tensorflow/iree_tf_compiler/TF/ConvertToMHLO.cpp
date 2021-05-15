@@ -38,6 +38,21 @@ namespace TF {
 
 namespace {
 
+/// Returns an ArrayAttr that contains `nLoops` attributes. All the attributes
+/// are "parallel" except the last `nReduction` elements, where are "reduction"
+/// attributes.
+SmallVector<StringRef, 3> getParallelAndReductionIterators(int nLoops,
+                                                           int nReduction) {
+  SmallVector<StringRef, 3> res(nLoops - nReduction,
+                                getParallelIteratorTypeName());
+  res.append(nReduction, getReductionIteratorTypeName());
+  return res;
+}
+
+SmallVector<StringRef, 3> getNParallelLoopsAttrs(int nParallelLoops) {
+  return getParallelAndReductionIterators(nParallelLoops, 0);
+}
+
 // Holds a static extent or Value for dynamic extents.
 class ExtentOrValue {
  public:
@@ -65,6 +80,149 @@ class ExtentOrValue {
   int64_t extent;
   Value value;
 };
+
+Value broadcast(OpBuilder &builder, Location loc, Value operand,
+                SmallVectorImpl<ExtentOrValue> &resultExtents,
+                SmallVectorImpl<bool> &isExpansion) {
+  auto operandType = operand.getType().cast<RankedTensorType>();
+  SmallVector<int64_t> resultShape;
+  SmallVector<Value> dynDims;
+  for (ExtentOrValue &dim : resultExtents) {
+    if (dim.isExtent()) {
+      resultShape.push_back(dim.getExtent());
+    } else {
+      resultShape.push_back(-1);
+      dynDims.push_back(dim.getValue());
+    }
+  }
+
+  // Traverse the right aligned operand dimensions and form expressions.
+  // We keep 1-dims in place instead of reshaping them away, relying on the
+  // DropUnitDims pass to run later.
+  SmallVector<AffineExpr> dimExprs;
+  dimExprs.reserve(operandType.getRank());
+  for (int i = resultExtents.size() - operandType.getRank();
+       i < resultExtents.size(); ++i) {
+    if (isExpansion[i]) {
+      dimExprs.push_back(builder.getAffineConstantExpr(0));
+    } else {
+      dimExprs.push_back(builder.getAffineDimExpr(i));
+    }
+  }
+
+  int nloops = resultExtents.size();
+  Value init = builder.create<linalg::InitTensorOp>(
+      loc, dynDims, resultShape, operandType.getElementType());
+  auto generic = builder.create<linalg::GenericOp>(
+      loc, TypeRange{init.getType()}, ValueRange{operand},
+      /*outputBuffers=*/ValueRange{init},
+      llvm::makeArrayRef({
+          AffineMap::get(/*dimCount=*/nloops, /*symbolCount=*/0, dimExprs,
+                         builder.getContext()),
+          builder.getMultiDimIdentityMap(nloops),
+      }),
+      getNParallelLoopsAttrs(nloops),
+      [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange args) {
+        nestedBuilder.create<linalg::YieldOp>(loc, *args.begin());
+      });
+  return generic.getResult(0);
+}
+
+Optional<ExtentOrValue> computeResultExtent(OpBuilder &builder, Location loc,
+                                            ExtentOrValue &lhsDim,
+                                            ExtentOrValue &rhsDim,
+                                            bool &isLhsExpansion,
+                                            bool &isRhsExpansion) {
+  if (lhsDim.isExtent() && rhsDim.isExtent()) {
+    // Both are static. Just check.
+    if (lhsDim.getExtent() != rhsDim.getExtent() &&
+        !(lhsDim.getExtent() == 1 || rhsDim.getExtent() == 1)) {
+      // Statically illegal.
+      emitError(loc) << "cannot broadcast extents of differing size unless "
+                        "if one of them is 1 (got "
+                     << lhsDim.getExtent() << ", " << rhsDim.getExtent() << ")";
+      return llvm::None;
+    }
+
+    // Static expansions.
+    if (lhsDim.isUnitExtent() && rhsDim.isUnitExtent()) {
+      // For the fully static case, we can trivially check the 1-equality,
+      // and know we are not expanding.
+      isLhsExpansion = false;
+      isRhsExpansion = false;
+    } else {
+      // Otherwise, mark the dim as expanding if it is 1.
+      isLhsExpansion = lhsDim.isUnitExtent();
+      isRhsExpansion = rhsDim.isUnitExtent();
+    }
+    return ExtentOrValue(std::max(lhsDim.getExtent(), rhsDim.getExtent()));
+  }
+
+  // At least one of them is dynamic.
+  // Branch on whether one of them is a static-1, which is the only case
+  // we allow for dynamic expansion.
+  if (lhsDim.isUnitExtent() || rhsDim.isUnitExtent()) {
+    if (lhsDim.isUnitExtent()) {
+      isLhsExpansion = true;
+      isRhsExpansion = false;
+      return rhsDim;
+    } else {
+      isLhsExpansion = false;
+      isRhsExpansion = true;
+      return lhsDim;
+    }
+  }
+
+  // At least one is dynamic and neither are a static 1.
+  // In this case, we do not allow either to be an expanding dim and
+  // error if this is the case at runtime.
+  isLhsExpansion = false;
+  isRhsExpansion = false;
+  Value lhsExtentValue = lhsDim.convertToValue(builder, loc);
+  Value rhsExtentValue = rhsDim.convertToValue(builder, loc);
+
+  Value isEqual = builder.create<CmpIOp>(loc, CmpIPredicate::eq, lhsExtentValue,
+                                         rhsExtentValue);
+  builder.create<AssertOp>(
+      loc, isEqual,
+      builder.getStringAttr("mismatched dynamic broadcast extents"));
+
+  // Here, if one of them is static, that has to be the result extent
+  // (because we checked the error condition above).
+  if (lhsDim.isExtent()) {
+    return ExtentOrValue(lhsDim.getExtent());
+  } else if (rhsDim.isExtent()) {
+    return ExtentOrValue(rhsDim.getExtent());
+  }
+
+  // Both are dynamic. Compute the max.
+  Value lhsIsGreater = builder.create<CmpIOp>(loc, CmpIPredicate::sge,
+                                              lhsExtentValue, rhsExtentValue);
+  Value resultExtent = builder.create<SelectOp>(loc, lhsIsGreater,
+                                                lhsExtentValue, rhsExtentValue);
+  return ExtentOrValue(resultExtent);
+}
+
+void padExtents(SmallVectorImpl<ExtentOrValue> &extents, int size) {
+  for (int i = 0; i < size; ++i) {
+    extents.push_back({1});
+  }
+}
+
+void appendExtents(OpBuilder &builder, Location loc,
+                   SmallVectorImpl<ExtentOrValue> &extents, Value v,
+                   RankedTensorType t) {
+  for (int i = 0; i < t.getRank(); ++i) {
+    if (t.isDynamicDim(i)) {
+      // Emit a dim op.
+      Value dim = builder.create<memref::DimOp>(loc, v, i);
+      extents.push_back(dim);
+    } else {
+      // Static dim.
+      extents.push_back({t.getDimSize(i)});
+    }
+  }
+}
 
 template <typename ChloOpTy, typename HloOpTy, typename Adaptor>
 struct ConvertRankedBroadcastBinaryOp : public OpConversionPattern<ChloOpTy> {
@@ -121,131 +279,17 @@ struct ConvertRankedBroadcastBinaryOp : public OpConversionPattern<ChloOpTy> {
     }
 
     // Broadcast the operands.
-    Value lhsBcast = lhsNeedsBroadcast ?
-        broadcast(rewriter, loc, lhs, resultExtents, isLhsExpansion)
-        : lhs;
-    Value rhsBcast = rhsNeedsBroadcast ?
-        broadcast(rewriter, loc, rhs, resultExtents, isRhsExpansion)
-        : rhs;
+    Value lhsBcast =
+        lhsNeedsBroadcast
+            ? broadcast(rewriter, loc, lhs, resultExtents, isLhsExpansion)
+            : lhs;
+    Value rhsBcast =
+        rhsNeedsBroadcast
+            ? broadcast(rewriter, loc, rhs, resultExtents, isRhsExpansion)
+            : rhs;
 
     rewriter.replaceOpWithNewOp<HloOpTy>(op, lhsBcast, rhsBcast);
     return success();
-  }
-
-  static Value broadcast(OpBuilder &builder, Location loc, Value operand,
-                         SmallVectorImpl<ExtentOrValue> &resultExtents,
-                         SmallVectorImpl<bool> &isExpansion) {
-    auto operandType = operand.getType().cast<RankedTensorType>();
-    SmallVector<int64_t> resultShape;
-    SmallVector<Value> dynDims;
-    for (ExtentOrValue &dim : resultExtents) {
-      if (dim.isExtent()) {
-        resultShape.push_back(dim.getExtent());
-      } else {
-        resultShape.push_back(-1);
-        dynDims.push_back(dim.getValue());
-      }
-    }
-
-    Value init = builder.create<linalg::InitTensorOp>(
-        loc, dynDims, resultShape, operandType.getElementType());
-    // TODO: Generic.
-    return init;
-  }
-
-  static Optional<ExtentOrValue> computeResultExtent(
-      OpBuilder &builder, Location loc, ExtentOrValue &lhsDim,
-      ExtentOrValue &rhsDim, bool &isLhsExpansion, bool &isRhsExpansion) {
-    if (lhsDim.isExtent() && rhsDim.isExtent()) {
-      // Both are static. Just check.
-      if (lhsDim.getExtent() != rhsDim.getExtent() &&
-          !(lhsDim.getExtent() == 1 || rhsDim.getExtent() == 1)) {
-        // Statically illegal.
-        emitError(loc) << "cannot broadcast extents of differing size unless "
-                          "if one of them is 1 (got "
-                       << lhsDim.getExtent() << ", " << rhsDim.getExtent()
-                       << ")";
-        return llvm::None;
-      }
-
-      // Static expansions.
-      if (lhsDim.isUnitExtent() && rhsDim.isUnitExtent()) {
-        // For the fully static case, we can trivially check the 1-equality,
-        // and know we are not expanding.
-        isLhsExpansion = false;
-        isRhsExpansion = false;
-      } else {
-        // Otherwise, mark the dim as expanding if it is 1.
-        isLhsExpansion = lhsDim.isUnitExtent();
-        isRhsExpansion = rhsDim.isUnitExtent();
-      }
-      return ExtentOrValue(std::max(lhsDim.getExtent(), rhsDim.getExtent()));
-    }
-
-    // At least one of them is dynamic.
-    // Branch on whether one of them is a static-1, which is the only case
-    // we allow for dynamic expansion.
-    if (lhsDim.isUnitExtent() || rhsDim.isUnitExtent()) {
-      if (lhsDim.isUnitExtent()) {
-        isLhsExpansion = true;
-        isRhsExpansion = false;
-        return rhsDim;
-      } else {
-        isLhsExpansion = false;
-        isRhsExpansion = true;
-        return lhsDim;
-      }
-    }
-
-    // At least one is dynamic and neither are a static 1.
-    // In this case, we do not allow either to be an expanding dim and
-    // error if this is the case at runtime.
-    isLhsExpansion = false;
-    isRhsExpansion = false;
-    Value lhsExtentValue = lhsDim.convertToValue(builder, loc);
-    Value rhsExtentValue = rhsDim.convertToValue(builder, loc);
-
-    Value isEqual = builder.create<CmpIOp>(loc, CmpIPredicate::eq,
-                                           lhsExtentValue, rhsExtentValue);
-    builder.create<AssertOp>(
-        loc, isEqual,
-        builder.getStringAttr("mismatched dynamic broadcast extents"));
-
-    // Here, if one of them is static, that has to be the result extent
-    // (because we checked the error condition above).
-    if (lhsDim.isExtent()) {
-      return ExtentOrValue(lhsDim.getExtent());
-    } else if (rhsDim.isExtent()) {
-      return ExtentOrValue(rhsDim.getExtent());
-    }
-
-    // Both are dynamic. Compute the max.
-    Value lhsIsGreater = builder.create<CmpIOp>(loc, CmpIPredicate::sge,
-                                                lhsExtentValue, rhsExtentValue);
-    Value resultExtent = builder.create<SelectOp>(
-        loc, lhsIsGreater, lhsExtentValue, rhsExtentValue);
-    return ExtentOrValue(resultExtent);
-  }
-
-  static void padExtents(SmallVectorImpl<ExtentOrValue> &extents, int size) {
-    for (int i = 0; i < size; ++i) {
-      extents.push_back({1});
-    }
-  }
-
-  static void appendExtents(OpBuilder &builder, Location loc,
-                            SmallVectorImpl<ExtentOrValue> &extents, Value v,
-                            RankedTensorType t) {
-    for (int i = 0; i < t.getRank(); ++i) {
-      if (t.isDynamicDim(i)) {
-        // Emit a dim op.
-        Value dim = builder.create<memref::DimOp>(loc, v, i);
-        extents.push_back(dim);
-      } else {
-        // Static dim.
-        extents.push_back({t.getDimSize(i)});
-      }
-    }
   }
 };
 
