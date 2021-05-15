@@ -41,7 +41,14 @@ class BroadcastAdd(tf.Module):
       tf.TensorSpec([None, 16], tf.float32),
       tf.TensorSpec([1, 16], tf.float32)
   ])
-  def f(self, a, b):
+  def half_broadcast(self, a, b):
+    return a + b
+
+  @tf.function(input_signature=[
+      tf.TensorSpec([None, 16], tf.float32),
+      tf.TensorSpec([None, 16], tf.float32)
+  ])
+  def dyn_non_broadcast(self, a, b):
     return a + b
 
 
@@ -51,8 +58,19 @@ class StaticAdd(tf.Module):
       tf.TensorSpec([10, 16], tf.float32),
       tf.TensorSpec([1, 16], tf.float32)
   ])
-  def f(self, a, b):
+  def broadcast(self, a, b):
     return a + b
+
+
+class StaticNonBroadcastAdd(tf.Module):
+
+  @tf.function(input_signature=[
+      tf.TensorSpec([10, 16], tf.float32),
+      tf.TensorSpec([10, 16], tf.float32)
+  ])
+  def non_broadcast(self, a, b):
+    return a + b
+
 
 class DynamicTanh(tf.Module):
   @tf.function(input_signature=[tf.TensorSpec([None, 16], tf.float32)])
@@ -64,6 +82,7 @@ MODELS = (
     (BroadcastAdd, "broadcast_add.sm"),
     (DynamicTanh, "dynamic_tanh.sm"),
     (StaticAdd, "static_add.sm"),
+    (StaticNonBroadcastAdd, "static_non_broadcast_add.sm"),
 )
 
 try:
