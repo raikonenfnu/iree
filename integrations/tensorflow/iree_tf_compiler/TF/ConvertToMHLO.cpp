@@ -106,6 +106,8 @@ struct ConvertRankedBroadcastBinaryOp : public OpConversionPattern<ChloOpTy> {
     SmallVector<ExtentOrValue> resultExtents(resultRank);
     SmallVector<bool> isLhsExpansion(resultRank);
     SmallVector<bool> isRhsExpansion(resultRank);
+    bool lhsNeedsBroadcast = resultRank != lhsType.getRank();
+    bool rhsNeedsBroadcast = resultRank != rhsType.getRank();
     for (int i = 0; i < resultRank; i++) {
       auto resultExtent = computeResultExtent(
           rewriter, loc, lhsBcastExtents[i], rhsBcastExtents[i],
@@ -114,13 +116,17 @@ struct ConvertRankedBroadcastBinaryOp : public OpConversionPattern<ChloOpTy> {
         return rewriter.notifyMatchFailure(op,
                                            "could not compute result extent");
       resultExtents[i] = *resultExtent;
+      if (isLhsExpansion[i]) lhsNeedsBroadcast = true;
+      if (isRhsExpansion[i]) rhsNeedsBroadcast = true;
     }
 
     // Broadcast the operands.
-    Value lhsBcast =
-        broadcast(rewriter, loc, lhs, resultExtents, isLhsExpansion);
-    Value rhsBcast =
-        broadcast(rewriter, loc, rhs, resultExtents, isRhsExpansion);
+    Value lhsBcast = lhsNeedsBroadcast ?
+        broadcast(rewriter, loc, lhs, resultExtents, isLhsExpansion)
+        : lhs;
+    Value rhsBcast = rhsNeedsBroadcast ?
+        broadcast(rewriter, loc, rhs, resultExtents, isRhsExpansion)
+        : rhs;
 
     rewriter.replaceOpWithNewOp<HloOpTy>(op, lhsBcast, rhsBcast);
     return success();
@@ -194,8 +200,8 @@ struct ConvertRankedBroadcastBinaryOp : public OpConversionPattern<ChloOpTy> {
     // At least one is dynamic and neither are a static 1.
     // In this case, we do not allow either to be an expanding dim and
     // error if this is the case at runtime.
-    isLhsExpansion = true;
-    isRhsExpansion = true;
+    isLhsExpansion = false;
+    isRhsExpansion = false;
     Value lhsExtentValue = lhsDim.convertToValue(builder, loc);
     Value rhsExtentValue = rhsDim.convertToValue(builder, loc);
 
