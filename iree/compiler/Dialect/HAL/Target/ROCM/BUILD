@@ -13,6 +13,7 @@
 # limitations under the License.
 
 load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
+load("//build_tools/embed_data:build_defs.bzl", "c_embed_data")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -28,15 +29,34 @@ endif()
 """,
 )
 
+c_embed_data(
+    name = "rocm_ockl",
+    srcs = ["@rocm//:ockl_root"],
+    c_file_output = "rocm_ockl.c",
+    flatten = True,
+    h_file_output = "rocm_ockl.h",
+)
+
+c_embed_data(
+    name = "rocm_ocml",
+    srcs = ["@rocm//:ocml_root"],
+    c_file_output = "rocm_ocml.c",
+    flatten = True,
+    h_file_output = "rocm_ocml.h",
+)
+
 cc_library(
     name = "ROCM",
     srcs = [
         "ROCMTarget.cpp",
+        "ROCMTargetUtils.cpp",
     ],
     hdrs = [
         "ROCMTarget.h",
     ],
     deps = [
+        ":rocm_ockl",
+        ":rocm_ocml",
         "//iree/base/internal:flatcc",
         "//iree/compiler/Conversion/LinalgToLLVMGPU",
         "//iree/compiler/Dialect/HAL/Target",

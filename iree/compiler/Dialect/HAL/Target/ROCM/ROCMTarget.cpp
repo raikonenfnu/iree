@@ -50,7 +50,7 @@ static std::string translateModuleToISA(llvm::Module &module,
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager codegenPasses;
     targetMachine.addPassesToEmitFile(codegenPasses, pstream, nullptr,
-                                      llvm::CGFT_AssemblyFile);
+                                      llvm::CGFT_ObjectFile);
     codegenPasses.run(module);
   }
   return targetISA;
@@ -120,6 +120,8 @@ class ROCMTargetBackend final : public TargetBackend {
         workgroup_size[it.index()] = it.value().getZExtValue();
       }
       workgroupSizes.push_back(workgroup_size);
+      llvmFunc->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
+      llvmFunc->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
     }
 
     std::unique_ptr<llvm::TargetMachine> targetMachine;
@@ -144,12 +146,16 @@ class ROCMTargetBackend final : public TargetBackend {
     iree_compiler::FlatbufferBuilder builder;
     iree_ROCMExecutableDef_start_as_root(builder);
 
+    // Link module to Device Library
+    LinkROCDLIfNecessary(llvmModule.get());
+
     // Serialize hsaco kernel into the binary that we will embed in the
     // final flatbuffer.
     std::string targetISA = translateModuleToISA(*llvmModule, *targetMachine);
+    std::string targetHSACO = createHsaco(targetISA, libraryName);
     auto hsacoRef = flatbuffers_uint8_vec_create(
-        builder, reinterpret_cast<const uint8_t *>(targetISA.c_str()),
-        targetISA.size());
+        builder, reinterpret_cast<const uint8_t *>(targetHSACO.c_str()),
+        targetHSACO.size());
 
     auto entryPointNames = llvm::to_vector<8>(llvm::map_range(
         targetOp.getBlock()
