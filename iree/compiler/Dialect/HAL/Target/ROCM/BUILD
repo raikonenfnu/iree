@@ -32,6 +32,7 @@ cc_library(
     name = "ROCM",
     srcs = [
         "ROCMTarget.cpp",
+        "ROCMTargetUtils.cpp",
     ],
     hdrs = [
         "ROCMTarget.h",
