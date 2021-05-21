@@ -68,6 +68,25 @@ iree_cc_binary(
     iree::vm::bytecode_module
 )
 
+if(${IREE_BUILD_EXPERIMENTAL_ROCM})
+  iree_cc_binary(
+    NAME
+      simple_embedding_rocm
+    SRCS
+      "device_rocm.c"
+      "simple_embedding.c"
+    DEPS
+      ::simple_embedding_test_bytecode_module_c
+      ::simple_embedding_test_llvm_aot_rv64
+      iree::base
+      iree::hal
+      experimental::rocm::registration
+      iree::modules::hal
+      iree::vm
+      iree::vm::bytecode_module
+  )
+endif()
+
 iree_cc_binary(
   NAME
     simple_embedding_local_sync
@@ -98,6 +117,9 @@ iree_bytecode_module(
     "-iree-mlir-to-vm-bytecode-module"
     "-iree-hal-target-backends=dylib-llvm-aot"
     "-iree-hal-target-backends=vulkan-spirv"
+    "-iree-hal-target-backends=rocm"
+    "-iree-rocm-target-chip=gfx906"
+    "-iree-rocm-link-bc=true"
     "-iree-llvm-debug-symbols=false"
   PUBLIC
 )
