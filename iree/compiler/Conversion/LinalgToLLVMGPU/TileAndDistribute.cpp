@@ -18,6 +18,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include <fstream>
 
 namespace mlir {
 namespace iree_compiler {
@@ -399,13 +400,13 @@ struct TileAndDistributeToThreads
         (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
       }
 
-      {
-        OwningRewritePatternList promotionPatterns(&getContext());
-        populatePromotionPatterns(context, promotionPatterns);
-        (void)applyPatternsAndFoldGreedily(funcOp,
-                                           std::move(promotionPatterns));
-        applyCanonicalizationPatternsForTiling(context, funcOp);
-      }
+      // {
+      //   OwningRewritePatternList promotionPatterns(&getContext());
+      //   populatePromotionPatterns(context, promotionPatterns);
+      //   (void)applyPatternsAndFoldGreedily(funcOp,
+      //                                      std::move(promotionPatterns));
+      //   applyCanonicalizationPatternsForTiling(context, funcOp);
+      // }
 
       {
         // Apply last level of tiling and distribute to threads.
@@ -425,6 +426,13 @@ struct TileAndDistributeToThreads
         populateAffineMinSCFCanonicalizationPattern(patterns);
         (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
       }
+      std::string mlirModuleStr;
+      llvm::raw_string_ostream ssm(mlirModuleStr);
+      ssm << *module;
+
+      std::ofstream output("/tmp/tileMLIR.mlir");
+      output << mlirModuleStr;
+      output.close();
     }
   }
 };

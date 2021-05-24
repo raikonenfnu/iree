@@ -92,8 +92,11 @@ LogicalResult LinkWithBitcodeVector(
 
 static std::vector<std::string> GetROCDLPaths() {
   // AMDGPU version-neutral bitcodes.
-  static std::vector<std::string> *rocdl_filenames =
-      new std::vector<std::string>({"ocml.bc", "ockl.bc"});
+    static std::vector<std::string> *rocdl_filenames = new std::vector<std::string>(
+    {"hc.bc", "opencl.bc", "ocml.bc", "ockl.bc", "oclc_finite_only_off.bc", "oclc_daz_opt_off.bc",
+     "oclc_correctly_rounded_sqrt_on.bc", "oclc_unsafe_math_off.bc", "oclc_wavefrontsize64_on.bc", "oclc_isa_version_906.bc"});
+  // static std::vector<std::string> *rocdl_filenames =
+  //     new std::vector<std::string>({"ocml.bc", "ockl.bc", "oclc_isa_version_906.bc"});
 
   // Construct full path to ROCDL bitcode libraries.
   std::string rocdl_dir_path = "/opt/rocm/amdgcn/bitcode";

@@ -230,8 +230,10 @@ static iree_status_t iree_hal_rocm_device_queue_submit(
   // support semaphores.
   // TODO(raikonenfnu): currently run on default/null stream, when cmd buffer
   // stream work with device->stream, we'll change
+  printf("syncing!\n");
   ROCM_RETURN_IF_ERROR(device->context_wrapper.syms, hipStreamSynchronize(0),
                        "hipStreamSynchronize");
+  printf("syncing done!\n");
   return iree_ok_status();
 }
 

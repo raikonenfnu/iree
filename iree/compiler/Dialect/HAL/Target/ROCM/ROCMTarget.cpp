@@ -22,6 +22,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include <fstream>
 
 namespace mlir {
 namespace iree_compiler {
@@ -93,6 +94,14 @@ class ROCMTargetBackend final : public TargetBackend {
 
     ModuleOp innerModuleOp = targetOp.getInnerModule();
 
+    std::string mlirModuleStr;
+    llvm::raw_string_ostream ssm(mlirModuleStr);
+    ssm << *innerModuleOp;
+    std::string FirstFilename = "/tmp/final/" + libraryName + "_mlir.mlir";
+    std::ofstream output(FirstFilename);
+    output << mlirModuleStr;
+    output.close();
+
     // Remove all the functions that are not part of the ROCM kernel.
     // TODO: Find a better solution to handle this.
     auto illegalFuncOps = llvm::to_vector<4>(innerModuleOp.getOps<FuncOp>());
@@ -154,6 +163,13 @@ class ROCMTargetBackend final : public TargetBackend {
 
     // Serialize hsaco kernel into the binary that we will embed in the
     // final flatbuffer.
+    std::string moduleStr;
+    llvm::raw_string_ostream ss(moduleStr);
+    std::string SecondFilename = "/tmp/final/" + libraryName + "_llvm.mlir";
+    std::ofstream out(SecondFilename);
+    ss << *llvmModule;
+    out << moduleStr;
+    out.close();
     std::string targetISA = translateModuleToISA(*llvmModule, *targetMachine);
     std::string targetHSACO = createHsaco(targetISA, libraryName);
     auto hsacoRef = flatbuffers_uint8_vec_create(
@@ -181,10 +197,12 @@ class ROCMTargetBackend final : public TargetBackend {
     iree_ROCMExecutableDef_end_as_root(builder);
 
     // Add the binary data to the target executable.
-    executableBuilder.create<iree_compiler::IREE::HAL::ExecutableBinaryOp>(
+    auto binaryOp = executableBuilder.create<iree_compiler::IREE::HAL::ExecutableBinaryOp>(
         targetOp.getLoc(), targetOp.sym_name(),
         executableBuilder.getStringAttr("HSACO"),
         builder.getBufferAttr(executableBuilder.getContext()));
+      binaryOp.mime_typeAttr(
+        executableBuilder.getStringAttr("application/x-flatbuffers"));
 
     return success();
   }

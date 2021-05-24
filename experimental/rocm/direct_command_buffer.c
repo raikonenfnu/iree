@@ -23,6 +23,7 @@ typedef struct {
   iree_hal_command_category_t allowed_categories;
   iree_hal_queue_affinity_t queue_affinity;
   size_t total_size;
+  size_t binding_count;
   // Keep track of the current set of kernel arguments.
   void *current_descriptor[];
 } iree_hal_rocm_direct_command_buffer_t;
@@ -280,6 +281,7 @@ static iree_status_t iree_hal_rocm_direct_command_buffer_push_descriptor_set(
         compare_binding_index);
   assert(binding_count < IREE_HAL_ROCM_MAX_BINDING_COUNT &&
          "binding count larger than the max expected.");
+  // printf("pointer:");
   for (iree_host_size_t i = 0; i < binding_count; i++) {
     iree_hal_descriptor_set_binding_t binding = bindings[binding_used[i].index];
     hipDeviceptr_t device_ptr =
@@ -287,7 +289,12 @@ static iree_status_t iree_hal_rocm_direct_command_buffer_push_descriptor_set(
             iree_hal_buffer_allocated_buffer(binding.buffer)) +
         iree_hal_buffer_byte_offset(binding.buffer) + binding.offset;
     *((hipDeviceptr_t *)command_buffer->current_descriptor[i]) = device_ptr;
+    // printf("%p",iree_hal_buffer_byte_offset(binding.buffer));
+    // printf("+%p",device_ptr);
+    // printf("+%lu,",binding.length);
   }
+  // printf("\n");
+    command_buffer->binding_count = binding_count;
   return iree_ok_status();
 }
 
@@ -317,10 +324,16 @@ static iree_status_t iree_hal_rocm_direct_command_buffer_dispatch(
       iree_hal_rocm_native_executable_for_entry_point(executable, entry_point);
   // TODO(raikonenfnu): Currently using NULL stream, need to figure out way to
   // access proper stream from command buffer
+  // printf("launching:%d!\n",size);
+  // printf("pointer:");
+  // for (int id = 0; id < command_buffer->binding_count; id++) {
+    // printf("%p,",command_buffer->current_descriptor[id]);
+  // }
+  // printf("\n");
   ROCM_RETURN_IF_ERROR(
       command_buffer->context->syms,
       hipModuleLaunchKernel(func, workgroup_x, workgroup_y, workgroup_z,
-                            block_size_x, block_size_y, block_size_z, 0, 0,
+                            block_size_x, block_size_y, block_size_z, size, 0,
                             command_buffer->current_descriptor, NULL),
       "hipModuleLaunchKernel");
   return iree_ok_status();

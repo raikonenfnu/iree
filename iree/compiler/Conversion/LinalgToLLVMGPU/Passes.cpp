@@ -37,7 +37,7 @@ static void addLinalgToLLVMGPUPasses(OpPassManager &pm, bool useROCM) {
       createRemoveSingleIterationLoopPass());
 
   // Linalg -> vector
-  pm.nest<ModuleOp>().addNestedPass<FuncOp>(createVectorizationPass());
+  // pm.nest<ModuleOp>().addNestedPass<FuncOp>(createVectorizationPass());
   pm.nest<ModuleOp>().addNestedPass<FuncOp>(createCanonicalizerPass());
   pm.nest<ModuleOp>().addNestedPass<FuncOp>(createCSEPass());
 
