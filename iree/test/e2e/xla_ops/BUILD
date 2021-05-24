@@ -49,6 +49,20 @@ iree_check_single_backend_test_suite(
 )
 
 iree_check_single_backend_test_suite(
+    name = "check_rocm",
+    srcs = glob(
+        ["*.mlir"],
+        exclude = [
+            "reduce_window.mlir",
+            "round.mlir",
+            "sort.mlir",
+        ],
+    ),
+    driver = "rocm",
+    target_backend = "rocm",
+)
+
+iree_check_single_backend_test_suite(
     name = "check_dylib-llvm-aot_dylib",
     srcs = glob(
         ["*.mlir"],

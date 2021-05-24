@@ -227,10 +227,15 @@ function(iree_check_single_backend_test_suite)
   # Omit tests for which the specified driver or target backend is not enabled.
   # This overlaps with directory exclusions and other filtering mechanisms.
   string(TOUPPER ${_RULE_DRIVER} _UPPERCASE_DRIVER)
-  if(NOT DEFINED IREE_HAL_DRIVER_${_UPPERCASE_DRIVER})
+  set(DRIVE_PREFIX "IREE_HAL_DRIVER")
+  # TODO(raikonenfnu): Remove this once ROCm HAL graduates from experimental
+  if(${_UPPERCASE_DRIVER} STREQUAL "ROCM")
+    set(DRIVE_PREFIX "IREE_BUILD_EXPERIMENTAL")
+  endif()
+  if(NOT DEFINED ${DRIVE_PREFIX}_${_UPPERCASE_DRIVER})
     message(SEND_ERROR "Unknown driver '${_RULE_DRIVER}'. Check IREE_ALL_HAL_DRIVERS.")
   endif()
-  if(NOT IREE_HAL_DRIVER_${_UPPERCASE_DRIVER})
+  if(NOT ${DRIVE_PREFIX}_${_UPPERCASE_DRIVER})
     return()
   endif()
   string(TOUPPER ${_RULE_TARGET_BACKEND} _UPPERCASE_TARGET_BACKEND)
