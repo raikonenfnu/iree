@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 #include <memory>
+#include <set>
+#include <unordered_map>
 
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/Shape/IR/ShapeDialect.h"
@@ -270,14 +272,281 @@ struct ConstOpConversion : public OpConversionPattern<mhlo::ConstOp> {
 
 }  // namespace
 
+//===----------------------------------------------------------------------===//
+// mhlo.Einsum conversion patterns.
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Returns an ArrayAttr that contains `nLoops` attributes. All the attributes
+/// are "parallel" except the last `nReduction` elements, where are "reduction"
+/// attributes.
+SmallVector<StringRef, 3> GetLoopsAttrs(std::set<char> input_ind,
+                                        std::set<char> reduction_dims) {
+  SmallVector<StringRef, 3> res;
+  for (char dim : input_ind) {
+    if (reduction_dims.find(dim) == reduction_dims.end())
+      res.push_back(getParallelIteratorTypeName());
+    else
+      res.push_back(getReductionIteratorTypeName());
+  }
+  return res;
+}
+
+Value GetInitTensor(OpBuilder &b, Location loc, ShapedType type,
+                    ArrayRef<Value> dyn_sizes) {
+  return b.create<linalg::InitTensorOp>(loc, dyn_sizes, type.getShape(),
+                                        type.getElementType());
+}
+
+SmallVector<Value, 2> ExtractDynamicSizes(
+    OpBuilder &b, Location loc, Value tensorA, Value tensorB,
+    std::vector<std::pair<int, size_t>> dim_map) {
+  auto tensorA_type = tensorA.getType().dyn_cast<RankedTensorType>();
+  auto tensorB_type = tensorB.getType().dyn_cast<RankedTensorType>();
+  if (!tensorA_type && !tensorB_type) return {};
+  auto tensorA_shape = tensorA_type.getShape();
+  auto tensorB_shape = tensorB_type.getShape();
+  SmallVector<Value, 2> dyn_sizes;
+  for (auto ind : dim_map) {
+    auto arg_number = ind.first;
+    auto dim_arg_index = ind.second;
+    Value tensor;
+    ArrayRef<int64_t> tensor_shape;
+    if (arg_number == 0) {
+      tensor = tensorA;
+      tensor_shape = tensorA_shape;
+    } else if (arg_number == 1) {
+      tensor = tensorB;
+      tensor_shape = tensorB_shape;
+    }
+
+    if (tensor_shape[dim_arg_index] != ShapedType::kDynamicSize) continue;
+    dyn_sizes.push_back(b.create<memref::DimOp>(loc, tensor, dim_arg_index));
+  }
+  return dyn_sizes;
+}
+
+// Adds indices/axes that are missing from output set
+std::set<char> findSummationAxes(std::set<char> input_set,
+                                 std::set<char> output_set) {
+  std::set<char> summation_axes;
+  for (auto ind : input_set) {
+    if (output_set.find(ind) == output_set.end()) summation_axes.insert(ind);
+  }
+  return summation_axes;
+}
+
+SmallVector<AffineExpr, 4> getExprFromConfig(
+    std::set<char> input_set, std::string loop_dims,
+    std::unordered_map<char, AffineExpr> char_affine_dim_umap) {
+  SmallVector<AffineExpr, 4> OutputExpr;
+  for (char const &dim : loop_dims) {
+    OutputExpr.push_back(char_affine_dim_umap[dim]);
+  }
+  return OutputExpr;
+}
+
+std::vector<std::pair<int, size_t>> findDimMapping(std::string inputA_ind,
+                                                   std::string inputB_ind,
+                                                   std::string output_loop) {
+  std::vector<std::pair<int, size_t>> dim_map;
+  for (char const &ind : output_loop) {
+    int arg_number = 0;
+    auto pos = inputA_ind.find(ind);
+    if (pos == std::string::npos) {
+      arg_number = 1;
+      pos = inputB_ind.find(ind);
+    }
+    dim_map.emplace_back(arg_number, pos);
+  }
+  return dim_map;
+}
+
+std::string rangeStr(size_t number) {
+  std::string range_str;
+  for (size_t i = 0; i < number; i++) range_str.append(std::to_string(i));
+  return range_str;
+}
+
+// Convert mhlo.einsum op into linalg.generic
+class EinsumToLinalgConverter : public OpConversionPattern<mhlo::EinsumOp> {
+ public:
+  using OpConversionPattern<mhlo::EinsumOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      mhlo::EinsumOp op, ArrayRef<Value> args,
+      ConversionPatternRewriter &rewriter) const final {
+    // Find maximum rank / number of loops.
+    auto get_rank = [](Value v) {
+      return v.getType().cast<ShapedType>().getRank();
+    };
+    auto is_scalar = [&](Value v) { return get_rank(v) == 0; };
+    auto einsum_config = op.einsum_config().str();
+
+    // Setting Up Commonly Used Symbols as strings
+    std::string arrow = "->";
+    std::string comma = ",";
+    std::string ellipsis = "...";
+
+    // With the assumption of binary Input Operand and Single Output
+    // Get the inputs and output operands' indices
+    // einsum_config = "inputA_loop,inputB_loop->output_loop"
+    std::size_t pos_arrow = einsum_config.find(arrow);
+    std::size_t pos_comma = einsum_config.find(comma);
+
+    std::string inputA_loop = einsum_config.substr(0, pos_comma);
+    std::string inputB_loop = einsum_config.substr(
+        pos_comma + comma.size(), pos_arrow - (pos_comma + comma.size()));
+    std::string output_loop = einsum_config.substr(pos_arrow + arrow.size());
+
+    // Check for Invalid Configs
+    // 1.Check that there is only maximum 2 inputs
+    // 2.Check that there is only maximum 1 output
+    // 3.Check that there is 1 arrow
+    if (inputB_loop.find(comma) != std::string::npos ||
+        output_loop.find(comma) != std::string::npos ||
+        output_loop.find(arrow) != std::string::npos) {
+      llvm::errs() << "Invalid Einsum Config!\n";
+      return failure();
+    }
+
+    // Find result type, if on tensors.
+    Optional<ShapedType> result_ty;
+    result_ty = this->typeConverter->convertType(op->getResultTypes().front())
+                    .template dyn_cast<ShapedType>();
+
+    // Check result type compatibility.
+    if (!result_ty || !result_ty->hasRank() ||
+        !(result_ty->getElementType().isSignlessIntOrFloat() ||
+          result_ty->getElementType().isa<ComplexType>())) {
+      return rewriter.notifyMatchFailure(
+          op, "mismatched operand/result types or iterator count");
+    }
+
+    // Find elilipsis in loop and replace with dim index
+    // Find number of dimensions/ranks elipsis represent and replace with
+    // chars(0-9)
+    std::vector<std::string *> all_loops = {&inputA_loop, &inputB_loop,
+                                            &output_loop};
+    std::vector<int> batch_rank_vec;
+    size_t max_operand_sz = 3;  // 2 Inputs + 1 output operand
+    for (auto loop : llvm::enumerate(all_loops)) {
+      size_t preElip = loop.value()->find(ellipsis);
+      if (preElip != std::string::npos) {
+        size_t postElip = loop.value()->size() - (preElip + ellipsis.size());
+        size_t operand_rank = loop.index() < (max_operand_sz - 1)
+                                  ? get_rank(args[loop.index()])
+                                  : result_ty->getRank();
+        size_t batch_rank = operand_rank - (preElip + postElip);
+        if (batch_rank > 10) {
+          llvm::errs() << "Maximum batch dimension that ellipsis(\"...\") can "
+                          "represent is 10!\n";
+          return failure();
+        }
+        std::string batch_str = rangeStr(batch_rank);
+        loop.value()->replace(preElip, ellipsis.size(), batch_str);
+        // llvm::outs()<<loop.value()<<"\n";
+        batch_rank_vec.push_back(batch_rank);
+      }
+    }
+    // Check that all ellipsis represent same rank of batch
+    if (batch_rank_vec.size() > 1) {
+      if (!std::equal(batch_rank_vec.begin() + 1, batch_rank_vec.end(),
+                      batch_rank_vec.begin())) {
+        llvm::errs() << "Invalid Elipsis(ellipsis) within Einsum config!\n";
+        return failure();
+      }
+    }
+
+    // Find all unique indices in the input and output
+    std::set<char> input_ind;
+    std::set<char> output_ind;
+    for (auto indA : inputA_loop) input_ind.insert(indA);
+    for (auto indB : inputB_loop) input_ind.insert(indB);
+    for (auto indOut : output_loop) output_ind.insert(indOut);
+
+    // 2.Check for contraction/summation indices
+    std::set<char> reduction_axe = findSummationAxes(input_ind, output_ind);
+
+    // Find input/output values and types.
+    auto loc = op.getLoc();
+    ValueRange inputs = args;
+
+    // Setting up Initial buffer for Output Tensor
+    Value output;
+    auto dim_map = findDimMapping(inputA_loop, inputB_loop, output_loop);
+    auto dyn_sizes =
+        ExtractDynamicSizes(rewriter, loc, args.front(), args.back(), dim_map);
+    output = GetInitTensor(rewriter, loc, *result_ty, dyn_sizes);
+
+    // Create indexing maps.
+    int64_t nloops = input_ind.size();
+    std::unordered_map<char, AffineExpr> char_affine_dim_umap;
+    for (auto it : llvm::enumerate(input_ind)) {
+      char_affine_dim_umap[it.value()] = rewriter.getAffineDimExpr(it.index());
+    }
+    SmallVector<AffineMap, 4> maps;
+    std::vector<std::string> input_loops = {inputA_loop, inputB_loop};
+    for (auto it : llvm::enumerate(inputs)) {
+      AffineMap scalar_map = AffineMap::get(nloops, 0, rewriter.getContext());
+      auto inputExprs = getExprFromConfig(input_ind, input_loops[it.index()],
+                                          char_affine_dim_umap);
+      AffineMap multidim_map =
+          AffineMap::get(nloops, 0, inputExprs, rewriter.getContext());
+      maps.push_back(is_scalar(it.value()) ? scalar_map : multidim_map);
+    }
+    auto inputExprs =
+        getExprFromConfig(input_ind, output_loop, char_affine_dim_umap);
+    AffineMap multidim_map =
+        AffineMap::get(nloops, 0, inputExprs, rewriter.getContext());
+    maps.push_back(multidim_map);
+
+    // Creating Regions to be put into linalg.generic
+    auto reduction_region = [&](OpBuilder &nestedBuilder, Location nestedLoc,
+                                ValueRange args) {
+      auto MulOp =
+          nestedBuilder.create<mlir::MulFOp>(nestedLoc, args[0], args[1]);
+      auto AddOp = nestedBuilder.create<mlir::AddFOp>(nestedLoc, args[2],
+                                                      MulOp.getResult());
+      nestedBuilder.create<linalg::YieldOp>(nestedLoc, AddOp.getResult());
+    };
+
+    auto pointwise_region = [&](OpBuilder &nestedBuilder, Location nestedLoc,
+                                ValueRange args) {
+      auto MulOp =
+          nestedBuilder.create<mlir::MulFOp>(nestedLoc, args[0], args[1]);
+      nestedBuilder.create<linalg::YieldOp>(nestedLoc, MulOp.getResult());
+    };
+
+    // Selecting different region based on whether or not einsum has
+    // contraction/summation axes
+    llvm::function_ref<void(OpBuilder &, Location, ValueRange)> region_used;
+    bool hasReduction = reduction_axe.size() > 0;
+    if (hasReduction)
+      region_used = reduction_region;
+    else
+      region_used = pointwise_region;
+
+    // Build `linalg.generic` op.
+    auto linalg_op = rewriter.create<linalg::GenericOp>(
+        loc, result_ty ? *result_ty : TypeRange{}, inputs, output, maps,
+        GetLoopsAttrs(input_ind, reduction_axe), region_used);
+    rewriter.replaceOp(op, linalg_op->getResults());
+    return success();
+  }
+};
+}  // namespace
+
 void populateMHLOToLinalgOnTensorsConversionPatterns(
     MLIRContext *context, TypeConverter &typeConverter,
     OwningRewritePatternList &patterns) {
   mhlo::populateHLOToLinalgConversionPattern(context, typeConverter, &patterns);
   // TODO(#5809): Drop ConcatenateOp lowering in favor of the upstream version
   //              then remove the PatternBenefit here
-  patterns.insert<ConstOpConversion, ConcatenateOpConversion, FftOpConversion>(
-      typeConverter, context, PatternBenefit(1000));
+  patterns.insert<ConstOpConversion, ConcatenateOpConversion, FftOpConversion,
+                  EinsumToLinalgConverter>(typeConverter, context,
+                                           PatternBenefit(1000));
 }
 
 std::unique_ptr<OperationPass<FuncOp>> createMHLOToLinalgOnTensorsPass() {
