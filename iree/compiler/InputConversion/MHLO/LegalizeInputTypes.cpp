@@ -76,7 +76,7 @@ LogicalResult convertOperation(Operation *oldOp,
                                FlowTypeConverter &typeConverter,
                                BlockAndValueMapping &mapping,
                                OpBuilder &builder) {
-  if (isa<linalg::LinalgDialect>(oldOp->getDialect())) {
+  if (isa<linalg::LinalgDialect>(oldOp->getDialect()) || oldOp->getName().getStringRef() == "tf.TensorScatterAdd") {
     // Currently we assume all Linalg ops only contain valid types.
     // TODO: Support converting Linalg types when unsupported.
     builder.clone(*oldOp, mapping);

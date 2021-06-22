@@ -44,7 +44,9 @@ class VerifyFullyConvertedPass
   void runOnFunction() override {
     DenseSet<Operation *> illegalOps;
     getFunction().walk([&](Operation *op) {
-      if (isTFOp(op)) illegalOps.insert(op);
+      if (isTFOp(op)) {
+        if(op->getName().getStringRef() != "tf.TensorScatterAdd") illegalOps.insert(op);
+      }
     });
     if (!illegalOps.empty()) {
       emitLegalizationErrors(getFunction().getLoc(), illegalOps);

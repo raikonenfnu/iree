@@ -30,6 +30,10 @@ struct VerifyCompilerMHLOInputLegalityPass
     conversionTarget.addIllegalDialect<mhlo::MhloDialect>();
     conversionTarget.addIllegalDialect<chlo::HloClientDialect>();
     conversionTarget.addIllegalDialect<mlir::shape::ShapeDialect>();
+    conversionTarget.addLegalOp<mhlo::EinsumOp>();
+    conversionTarget.addLegalOp<mhlo::RngUniformOp>();
+
+    // conversionTarget.addLegalOp<mhlo::EinsumOp>();
 
     // NOTE: It is not fully illegal to tunnel input dialect ops through to
     // backends that expect them. When such situations arise, the container
