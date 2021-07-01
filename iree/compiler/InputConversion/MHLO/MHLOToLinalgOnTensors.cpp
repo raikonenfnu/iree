@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 #include <memory>
+#include <set>
+#include <unordered_map>
 
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "iree/compiler/Dialect/Shape/IR/ShapeDialect.h"
@@ -270,14 +272,504 @@ struct ConstOpConversion : public OpConversionPattern<mhlo::ConstOp> {
 
 }  // namespace
 
+//===----------------------------------------------------------------------===//
+// mhlo.Einsum conversion patterns.
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+/// Returns an ArrayAttr that contains `nLoops` attributes. All the attributes
+/// are "parallel" except the last `nReduction` elements, where are "reduction"
+/// attributes.
+SmallVector<StringRef, 3> GetLoopsAttrs(std::set<char> input_ind,
+                                        std::set<char> reduction_dims) {
+  SmallVector<StringRef, 3> res;
+  for (char dim : input_ind) {
+    if (reduction_dims.find(dim) == reduction_dims.end())
+      res.push_back(getParallelIteratorTypeName());
+    else
+      res.push_back(getReductionIteratorTypeName());
+  }
+  return res;
+}
+
+Value GetInitTensor(OpBuilder &b, Location loc, ShapedType type,
+                    ArrayRef<Value> dyn_sizes) {
+  return b.create<linalg::InitTensorOp>(loc, dyn_sizes, type.getShape(),
+                                        type.getElementType());
+}
+
+SmallVector<Value, 2> ExtractDynamicSizes(
+    OpBuilder &b, Location loc, Value tensorA, Value tensorB,
+    std::vector<std::pair<int, size_t>> dim_map) {
+  auto tensorA_type = tensorA.getType().dyn_cast<RankedTensorType>();
+  auto tensorB_type = tensorB.getType().dyn_cast<RankedTensorType>();
+  if (!tensorA_type && !tensorB_type) return {};
+  auto tensorA_shape = tensorA_type.getShape();
+  auto tensorB_shape = tensorB_type.getShape();
+  SmallVector<Value, 2> dyn_sizes;
+  for (auto ind : dim_map) {
+    auto arg_number = ind.first;
+    auto dim_arg_index = ind.second;
+    Value tensor;
+    ArrayRef<int64_t> tensor_shape;
+    if (arg_number == 0) {
+      tensor = tensorA;
+      tensor_shape = tensorA_shape;
+    } else if (arg_number == 1) {
+      tensor = tensorB;
+      tensor_shape = tensorB_shape;
+    }
+
+    if (tensor_shape[dim_arg_index] != ShapedType::kDynamicSize) continue;
+    dyn_sizes.push_back(b.create<memref::DimOp>(loc, tensor, dim_arg_index));
+  }
+  return dyn_sizes;
+}
+
+// Adds indices/axes that are missing from output set
+std::set<char> findSummationAxes(std::set<char> input_set,
+                                 std::set<char> output_set) {
+  std::set<char> summation_axes;
+  for (auto ind : input_set) {
+    if (output_set.find(ind) == output_set.end()) summation_axes.insert(ind);
+  }
+  return summation_axes;
+}
+
+SmallVector<AffineExpr, 4> getExprFromConfig(
+    std::set<char> input_set, std::string loop_dims,
+    std::unordered_map<char, AffineExpr> char_affine_dim_umap) {
+  SmallVector<AffineExpr, 4> OutputExpr;
+  for (char const &dim : loop_dims) {
+    OutputExpr.push_back(char_affine_dim_umap[dim]);
+  }
+  return OutputExpr;
+}
+
+std::vector<std::pair<int, size_t>> findDimMapping(std::string inputA_ind,
+                                                   std::string inputB_ind,
+                                                   std::string output_loop) {
+  std::vector<std::pair<int, size_t>> dim_map;
+  for (char const &ind : output_loop) {
+    int arg_number = 0;
+    auto pos = inputA_ind.find(ind);
+    if (pos == std::string::npos) {
+      arg_number = 1;
+      pos = inputB_ind.find(ind);
+    }
+    dim_map.emplace_back(arg_number, pos);
+  }
+  return dim_map;
+}
+
+std::string rangeStr(size_t number) {
+  std::string range_str;
+  for (size_t i = 0; i < number; i++) range_str.append(std::to_string(i));
+  return range_str;
+}
+
+// Convert mhlo.einsum op into linalg.generic
+class EinsumToLinalgConverter : public OpConversionPattern<mhlo::EinsumOp> {
+ public:
+  using OpConversionPattern<mhlo::EinsumOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      mhlo::EinsumOp op, ArrayRef<Value> args,
+      ConversionPatternRewriter &rewriter) const final {
+    // Find maximum rank / number of loops.
+    auto get_rank = [](Value v) {
+      return v.getType().cast<ShapedType>().getRank();
+    };
+    auto is_scalar = [&](Value v) { return get_rank(v) == 0; };
+    auto einsum_config = op.einsum_config().str();
+
+    // Setting Up Commonly Used Symbols as strings
+    std::string arrow = "->";
+    std::string comma = ",";
+    std::string ellipsis = "...";
+
+    // With the assumption of binary Input Operand and Single Output
+    // Get the inputs and output operands' indices
+    // einsum_config = "inputA_loop,inputB_loop->output_loop"
+    std::size_t pos_arrow = einsum_config.find(arrow);
+    std::size_t pos_comma = einsum_config.find(comma);
+
+    std::string inputA_loop = einsum_config.substr(0, pos_comma);
+    std::string inputB_loop = einsum_config.substr(
+        pos_comma + comma.size(), pos_arrow - (pos_comma + comma.size()));
+    std::string output_loop = einsum_config.substr(pos_arrow + arrow.size());
+
+    // Check for Invalid Configs
+    // 1.Check that there is only maximum 2 inputs
+    // 2.Check that there is only maximum 1 output
+    // 3.Check that there is 1 arrow
+    if (inputB_loop.find(comma) != std::string::npos ||
+        output_loop.find(comma) != std::string::npos ||
+        output_loop.find(arrow) != std::string::npos) {
+      llvm::errs() << "Invalid Einsum Config!\n";
+      return failure();
+    }
+
+    // Find result type, if on tensors.
+    Optional<ShapedType> result_ty;
+    result_ty = this->typeConverter->convertType(op->getResultTypes().front())
+                    .template dyn_cast<ShapedType>();
+
+    // Check result type compatibility.
+    if (!result_ty || !result_ty->hasRank() ||
+        !(result_ty->getElementType().isSignlessIntOrFloat() ||
+          result_ty->getElementType().isa<ComplexType>())) {
+      return rewriter.notifyMatchFailure(
+          op, "mismatched operand/result types or iterator count");
+    }
+
+    // Find elilipsis in loop and replace with dim index
+    // Find number of dimensions/ranks elipsis represent and replace with
+    // chars(0-9)
+    std::vector<std::string *> all_loops = {&inputA_loop, &inputB_loop,
+                                            &output_loop};
+    std::vector<int> batch_rank_vec;
+    size_t max_operand_sz = 3;  // 2 Inputs + 1 output operand
+    for (auto loop : llvm::enumerate(all_loops)) {
+      size_t preElip = loop.value()->find(ellipsis);
+      if (preElip != std::string::npos) {
+        size_t postElip = loop.value()->size() - (preElip + ellipsis.size());
+        size_t operand_rank = loop.index() < (max_operand_sz - 1)
+                                  ? get_rank(args[loop.index()])
+                                  : result_ty->getRank();
+        size_t batch_rank = operand_rank - (preElip + postElip);
+        if (batch_rank > 10) {
+          llvm::errs() << "Maximum batch dimension that ellipsis(\"...\") can "
+                          "represent is 10!\n";
+          return failure();
+        }
+        std::string batch_str = rangeStr(batch_rank);
+        loop.value()->replace(preElip, ellipsis.size(), batch_str);
+        batch_rank_vec.push_back(batch_rank);
+      }
+    }
+    // Check that all ellipsis represent same rank of batch
+    if (batch_rank_vec.size() > 1) {
+      if (!std::equal(batch_rank_vec.begin() + 1, batch_rank_vec.end(),
+                      batch_rank_vec.begin())) {
+        llvm::errs() << "Invalid Elipsis(ellipsis) within Einsum config!\n";
+        return failure();
+      }
+    }
+
+    // Find all unique indices in the input and output
+    std::set<char> input_ind;
+    std::set<char> output_ind;
+    for (auto indA : inputA_loop) input_ind.insert(indA);
+    for (auto indB : inputB_loop) input_ind.insert(indB);
+    for (auto indOut : output_loop) output_ind.insert(indOut);
+
+    // 2.Check for contraction/summation indices
+    std::set<char> reduction_axe = findSummationAxes(input_ind, output_ind);
+
+    // Find input/output values and types.
+    auto loc = op.getLoc();
+    ValueRange inputs = args;
+
+    // Setting up Initial buffer for Output Tensor
+    Value output;
+    auto dim_map = findDimMapping(inputA_loop, inputB_loop, output_loop);
+    auto dyn_sizes =
+        ExtractDynamicSizes(rewriter, loc, args.front(), args.back(), dim_map);
+    output = GetInitTensor(rewriter, loc, *result_ty, dyn_sizes);
+
+    // Create indexing maps.
+    int64_t nloops = input_ind.size();
+    std::unordered_map<char, AffineExpr> char_affine_dim_umap;
+    for (auto it : llvm::enumerate(input_ind)) {
+      char_affine_dim_umap[it.value()] = rewriter.getAffineDimExpr(it.index());
+    }
+    SmallVector<AffineMap, 4> maps;
+    std::vector<std::string> input_loops = {inputA_loop, inputB_loop};
+    for (auto it : llvm::enumerate(inputs)) {
+      AffineMap scalar_map = AffineMap::get(nloops, 0, rewriter.getContext());
+      auto inputExprs = getExprFromConfig(input_ind, input_loops[it.index()],
+                                          char_affine_dim_umap);
+      AffineMap multidim_map =
+          AffineMap::get(nloops, 0, inputExprs, rewriter.getContext());
+      maps.push_back(is_scalar(it.value()) ? scalar_map : multidim_map);
+    }
+    auto inputExprs =
+        getExprFromConfig(input_ind, output_loop, char_affine_dim_umap);
+    AffineMap multidim_map =
+        AffineMap::get(nloops, 0, inputExprs, rewriter.getContext());
+    maps.push_back(multidim_map);
+
+    // Creating Regions to be put into linalg.generic
+    auto reduction_region = [&](OpBuilder &nestedBuilder, Location nestedLoc,
+                                ValueRange args) {
+      auto MulOp =
+          nestedBuilder.create<mlir::MulFOp>(nestedLoc, args[0], args[1]);
+      auto AddOp = nestedBuilder.create<mlir::AddFOp>(nestedLoc, args[2],
+                                                      MulOp.getResult());
+      nestedBuilder.create<linalg::YieldOp>(nestedLoc, AddOp.getResult());
+    };
+
+    auto pointwise_region = [&](OpBuilder &nestedBuilder, Location nestedLoc,
+                                ValueRange args) {
+      auto MulOp =
+          nestedBuilder.create<mlir::MulFOp>(nestedLoc, args[0], args[1]);
+      nestedBuilder.create<linalg::YieldOp>(nestedLoc, MulOp.getResult());
+    };
+
+    // Selecting different region based on whether or not einsum has
+    // contraction/summation axes
+    llvm::function_ref<void(OpBuilder &, Location, ValueRange)> region_used;
+    bool hasReduction = reduction_axe.size() > 0;
+    if (hasReduction)
+      region_used = reduction_region;
+    else
+      region_used = pointwise_region;
+
+    // Build `linalg.generic` op.
+    auto linalg_op = rewriter.create<linalg::GenericOp>(
+        loc, result_ty ? *result_ty : TypeRange{}, inputs, output, maps,
+        GetLoopsAttrs(input_ind, reduction_axe), region_used);
+    rewriter.replaceOp(op, linalg_op->getResults());
+    return success();
+  }
+};
+}  // namespace
+
+/// Returns an ArrayAttr that contains `nLoops` attributes. All the attributes
+/// are "parallel" except the last `nReduction` elements, where are "reduction"
+/// attributes.
+SmallVector<StringRef, 3> GetParallelAndReductionIterators(
+    unsigned nLoops, unsigned nReduction) {
+  SmallVector<StringRef, 3> res(nLoops - nReduction,
+                                getParallelIteratorTypeName());
+  res.append(nReduction, getReductionIteratorTypeName());
+  return res;
+}
+
+SmallVector<StringRef, 3> GetNParallelLoopsAttrs(unsigned nParallelLoops) {
+  return GetParallelAndReductionIterators(nParallelLoops, 0);
+}
+
+SmallVector<int64_t, 4> Extract1DVector(DenseIntElementsAttr elements) {
+  SmallVector<int64_t, 4> ret;
+  for (const APInt &element : elements) {
+    ret.push_back(element.getLimitedValue());
+  }
+  return ret;
+}
+
+struct ScatterAddOnTensorsConversion
+    : public OpConversionPattern<mhlo::ScatterOp> {
+  using OpConversionPattern<mhlo::ScatterOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      mhlo::ScatterOp op, ArrayRef<Value> args,
+      ConversionPatternRewriter &rewriter) const final {
+    mhlo::ScatterOp::Adaptor adaptor(args);
+
+    // Check if it is a tensor_scatter_nd_add-like op.
+    auto &body_ops = op.getRegion().front().getOperations();
+    if (body_ops.size() != 2) return failure();
+    if (!isa<mhlo::AddOp>(body_ops.front())) return failure();
+
+    auto operand_ty = adaptor.operand().getType().dyn_cast<RankedTensorType>();
+    auto indices_ty =
+        adaptor.scatter_indices().getType().dyn_cast<RankedTensorType>();
+    if (!operand_ty || !indices_ty) return failure();
+
+    // Linalg operations put all the computation to the innermost loop. Since we
+    // also iterate over scatter_indices() with some loops, we can only check
+    // one scatter index in one iteration. If there are multiple indices (ie,
+    // the index depth is greater than 1), we don't have a way to keep the
+    // comparison state. E.g., if the index_depth is 2, like indices = [[0, 1]],
+    // we should use the update value only if (i == 0 and j == 1). However, we
+    // can not get both indices in one iteration unless we pack them together.
+    auto index_vector_dim =
+        op.scatter_dimension_numbers().index_vector_dim().getInt();
+    if (index_vector_dim != indices_ty.getRank() - 1) {
+      return rewriter.notifyMatchFailure(
+          op, "require index_vector_dim to be the last dim");
+    }
+
+    // One of indices dims is index depth vector.
+    int indices_rank = indices_ty.getRank();
+    int64_t nloops = operand_ty.getRank() + indices_ty.getRank() - 1;
+    if (indices_rank == 1) nloops += 1;
+    SmallVector<AffineMap, 3> indexing_maps;
+    {
+      SmallVector<AffineExpr> exprs;
+      for (int64_t i = 0, e = operand_ty.getRank(); i < e; ++i)
+        exprs.push_back(rewriter.getAffineDimExpr(i));
+      indexing_maps.push_back(AffineMap::get(nloops, /*symbolCount=*/0, exprs,
+                                             rewriter.getContext()));
+    }
+    {
+      SmallVector<AffineExpr> exprs;
+      for (int64_t i = operand_ty.getRank(); i < nloops; ++i)
+        exprs.push_back(rewriter.getAffineDimExpr(i));
+      // The index depth is 1.
+      if (indices_rank != 1) exprs.push_back(rewriter.getAffineConstantExpr(0));
+      indexing_maps.push_back(AffineMap::get(nloops, /*symbolCount=*/0, exprs,
+                                             rewriter.getContext()));
+
+      // Setting up update data access pattern using update_window_dim
+      if (indices_rank != 1) exprs.pop_back();
+      auto update_window_dims =
+          Extract1DVector(op.scatter_dimension_numbers().update_window_dims());
+      for (auto d : update_window_dims) {
+        exprs.push_back(rewriter.getAffineDimExpr(d));
+      }
+      indexing_maps.push_back(AffineMap::get(nloops, /*symbolCount=*/0, exprs,
+                                             rewriter.getContext()));
+    }
+    // Output and Buffer has same type and access pattern
+    indexing_maps.push_back(indexing_maps.front());
+
+    auto result_ty = this->typeConverter->convertType(op.getResult().getType())
+                         .cast<ShapedType>();
+    auto scatter_dims_to_operand_dims = Extract1DVector(
+        op.scatter_dimension_numbers().scatter_dims_to_operand_dims());
+    assert(scatter_dims_to_operand_dims.size() == 1);
+    // Do not need init_tensor because we'd like to initialize the output as
+    // operand.
+    auto linalg_op = rewriter.create<linalg::GenericOp>(
+        op.getLoc(), /*resultTensors=*/result_ty,
+        /*inputs=*/
+        ValueRange{adaptor.operand(), adaptor.scatter_indices(),
+                   adaptor.updates()},
+        /*outputs=*/adaptor.operand(), indexing_maps,
+        GetNParallelLoopsAttrs(nloops),
+        [&](OpBuilder &b, Location loc, ValueRange args) {
+          Value cmp_idx =
+              b.create<linalg::IndexOp>(loc, scatter_dims_to_operand_dims[0]);
+          Value idx = b.create<IndexCastOp>(loc, b.getIndexType(), args[1]);
+          Value pred = b.create<CmpIOp>(loc, b.getI1Type(), CmpIPredicate::eq,
+                                        cmp_idx, idx);
+          // Use the output arg, so some update values won't be init value
+          // again.
+          Value add;
+          if (args[2].getType().isF32()) {
+            add = b.create<AddFOp>(loc, args[2], args[3]);
+          } else {
+            add = b.create<AddIOp>(loc, args[2], args[3]);
+          }
+          Value res =
+              b.create<SelectOp>(loc, add.getType(), pred, add, args[3]);
+          b.create<linalg::YieldOp>(loc, res);
+        });
+    rewriter.replaceOp(op, linalg_op.getResults());
+    return success();
+  }
+};
+
+// temp1 = (cast(I32, index(D.m)) + seed) * multiplier + increment
+// temp2 = (cast(I32, index(D.n)) + temp1) * multiplier + increment
+// ...
+// tempN = (cast(I32, index(D.(last_dim))) + tempNmin1) * multiplier + increment
+Value lcg_helper(OpBuilder &b, Location loc, Value ind, Value update,
+                 Value multiplier, Value increment) {
+  Value add = b.create<AddIOp>(loc, ind, update);
+  Value mult = b.create<MulIOp>(loc, add, mult);
+  Value inc = b.create<AddIOp>(loc, mult, increment);
+  return inc;
+}
+
+// Code below wont work:
+struct RngUniformConversion : public OpConversionPattern<mhlo::RngUniformOp> {
+  using OpConversionPattern<mhlo::RngUniformOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      mhlo::RngUniformOp op, ArrayRef<Value> args,
+      ConversionPatternRewriter &rewriter) const final {
+    // Get Target Rank
+    Type int32Type = IntegerType::get(op.getContext(), /*width=*/32);
+    auto loc = op.getLoc();
+    auto targetTy = op->getResult(0).getType().dyn_cast<ShapedType>();
+    auto targetRank = targetTy.getRank();
+    // Start Init Tensor
+    Value output;
+    Value initTensor = rewriter.create<linalg::InitTensorOp>(
+        loc, ArrayRef<Value>({}), targetTy.getShape(),
+        targetTy.getElementType());
+    auto result_ty = this->typeConverter->convertType(op.getResult().getType())
+                         .cast<ShapedType>();
+    // Create Indexing Map from target's rank
+    SmallVector<AffineMap, 3> indexing_maps;
+    indexing_maps.push_back(AffineMap::get(targetRank, /*symbolCount=*/0,
+                                           SmallVector<AffineExpr>({}),
+                                           rewriter.getContext()));
+    indexing_maps.push_back(AffineMap::get(targetRank, /*symbolCount=*/0,
+                                           SmallVector<AffineExpr>({}),
+                                           rewriter.getContext()));
+    SmallVector<AffineExpr> output_exprs;
+    for (int i = 0; i < targetRank; i++) {
+      output_exprs.push_back(rewriter.getAffineDimExpr(i));
+    }
+    indexing_maps.push_back(AffineMap::get(
+        targetRank, /*symbolCount=*/0, output_exprs, rewriter.getContext()));
+    // Create Region according to https://reviews.llvm.org/D101364 random
+    // algorithm and
+    // https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/Linalg/IR/LinalgNamedStructuredOps.yaml
+    auto linalg_op = rewriter.create<linalg::GenericOp>(
+        op.getLoc(), /*resultTensors=*/result_ty,
+        /*inputs=*/ValueRange{args[0], args[1]},
+        /*outputs=*/initTensor, indexing_maps,
+        GetNParallelLoopsAttrs(targetRank),
+        [&](OpBuilder &b, Location loc, ValueRange args) {
+          // Use the output arg, so some update values won't be init value
+          // again.
+          llvm::SmallVector<Value> update_vec = {
+              b.create<ConstantOp>(loc, b.getI32IntegerAttr(0))};
+          Value multiplier =
+              b.create<ConstantOp>(loc, b.getI32IntegerAttr(1103515245));
+          Value increment_step =
+              b.create<ConstantOp>(loc, b.getI32IntegerAttr(12345));
+          // temp1 = (cast(I32, index(D.m)) + seed) * multiplier + increment
+          // temp2 = (cast(I32, index(D.n)) + temp1) * multiplier + increment
+          // ...
+          // tempN = (cast(I32, index(D.(last_dim))) + tempNmin1) * multiplier +
+          // increment
+          for (int rank_it = 0; rank_it < targetRank; rank_it++) {
+            Value update = update_vec.back();
+            Value ind = b.create<linalg::IndexOp>(loc, rank_it);
+            Value cast_ind = b.create<IndexCastOp>(loc, int32Type, ind);
+            Value add_res = b.create<AddIOp>(loc, cast_ind, update);
+            Value mult_res = b.create<MulIOp>(loc, add_res, multiplier);
+            Value inc = b.create<AddIOp>(loc, mult_res, increment_step);
+            update_vec.push_back(inc);
+          }
+          // Scaling:(max - min) * const(F64, 2.3283064e-10)
+          Value epsilon = b.create<ConstantOp>(
+              loc, b.getFloatAttr(args[0].getType(), 2.3283063999999999E-10));
+          Value range = b.create<SubFOp>(loc, args[1], args[0]);
+          Value scale = b.create<MulFOp>(loc, range, epsilon);
+          // Res = cast(T, cast(F64, tempN) * scaling + min)
+          auto scaleFloatType = scale.getType().dyn_cast<FloatType>();
+          Value update_cast =
+              b.create<UIToFPOp>(loc, scaleFloatType, update_vec.back());
+          Value scale_update = b.create<MulFOp>(loc, update_cast, scale);
+          Value res = b.create<AddFOp>(loc, scale_update, args[0]);
+          // todo(raikonenfnu): if result type is int set it to the correct
+          // width
+          b.create<linalg::YieldOp>(loc, res);
+        });
+    rewriter.replaceOp(op, linalg_op.getResults());
+    return success();
+  }
+};
+
 void populateMHLOToLinalgOnTensorsConversionPatterns(
     MLIRContext *context, TypeConverter &typeConverter,
     OwningRewritePatternList &patterns) {
   mhlo::populateHLOToLinalgConversionPattern(context, typeConverter, &patterns);
   // TODO(#5809): Drop ConcatenateOp lowering in favor of the upstream version
   //              then remove the PatternBenefit here
-  patterns.insert<ConstOpConversion, ConcatenateOpConversion, FftOpConversion>(
-      typeConverter, context, PatternBenefit(1000));
+  patterns.insert<ConstOpConversion, ConcatenateOpConversion, FftOpConversion,
+                  EinsumToLinalgConverter, ScatterAddOnTensorsConversion,
+                  RngUniformConversion>(typeConverter, context,
+                                        PatternBenefit(1000));
 }
 
 std::unique_ptr<OperationPass<FuncOp>> createMHLOToLinalgOnTensorsPass() {
