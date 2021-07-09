@@ -18,12 +18,17 @@ iree_cc_library(
   DEPS
     iree::base
 <<<<<<< HEAD
+<<<<<<< HEAD
     iree::base::cc
     iree::base::core_headers
 =======
     iree::base::core_headers
     iree::base::cc
 >>>>>>> Refresh ROCM backend
+=======
+    iree::base::cc
+    iree::base::core_headers
+>>>>>>> Add rocm examples
     iree::base::tracing
     iree::hal
     experimental::rocm

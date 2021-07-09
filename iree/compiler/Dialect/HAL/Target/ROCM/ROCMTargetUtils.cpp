@@ -97,7 +97,7 @@ static std::vector<std::string> GetROCDLPaths(std::string targetChip,
   std::string chipId = targetChip.substr(lenOfChipPrefix);
   std::string chip_isa_bc = "oclc_isa_version_" + chipId + ".bc";
   static std::vector<std::string> *rocdl_filenames =
-      new std::vector<std::string>({"ocml.bc", "ockl.bc",
+      new std::vector<std::string>({"hc.bc","ocml.bc", "ockl.bc", "oclc_finite_only_off.bc", "oclc_correctly_rounded_sqrt_on.bc", "oclc_wavefrontsize64_on.bc",
                                     "oclc_unsafe_math_off.bc",
                                     "oclc_daz_opt_off.bc", chip_isa_bc});
 
