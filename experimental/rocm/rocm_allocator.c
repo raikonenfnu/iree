@@ -8,8 +8,12 @@
 
 #include <stddef.h>
 
+<<<<<<< HEAD
 #include "experimental/rocm/dynamic_symbols.h"
+=======
+>>>>>>> Refresh ROCM backend
 #include "experimental/rocm/rocm_buffer.h"
+#include "experimental/rocm/dynamic_symbols.h"
 #include "experimental/rocm/status_util.h"
 #include "iree/base/api.h"
 #include "iree/base/tracing.h"

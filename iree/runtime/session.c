@@ -213,23 +213,29 @@ iree_runtime_session_append_bytecode_module_from_file(
 
   // TODO(#3909): actually map the memory here. For now we just load the
   // contents.
+  printf("Allocate session\n");
   iree_allocator_t flatbuffer_allocator =
       iree_runtime_session_host_allocator(session);
   iree_byte_span_t flatbuffer_data;
+  printf("Read data\n");
   IREE_RETURN_AND_END_ZONE_IF_ERROR(
       z0, iree_file_read_contents(file_path, flatbuffer_allocator,
                                   &flatbuffer_data));
 
+  printf("Append bytecode from memory\n");
   iree_status_t status =
       iree_runtime_session_append_bytecode_module_from_memory(
           session,
           iree_make_const_byte_span(flatbuffer_data.data,
                                     flatbuffer_data.data_length),
           flatbuffer_allocator);
+  printf("Free it\n");
   if (!iree_status_is_ok(status)) {
+    printf("Freeing it\n");
     iree_allocator_free(flatbuffer_allocator, flatbuffer_data.data);
   }
 
+  printf("Done all\n");
   IREE_TRACE_ZONE_END(z0);
   return status;
 }

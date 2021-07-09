@@ -236,30 +236,30 @@ iree_status_t run_sample(iree_string_view_t bytecode_module_path,
   fprintf(stdout, "Calling functions\n\n");
 
   // Example of prediction
-  // if (iree_status_is_ok(status)) {
-  //   iree_hal_buffer_view_t* result_buffer_view = NULL;
-  //   status = predict(session, &result_buffer_view);
-  //   if (iree_status_is_ok(status)) {
-  //     fprintf(stdout, "Predict Result: ");
-  //     status = iree_hal_buffer_view_fprint(stdout, result_buffer_view,
-  //                                          /*max_element_count=*/4096);
-  //     fprintf(stdout, "\n");
-  //   }
-  //   iree_hal_buffer_view_release(result_buffer_view);
-  // }
-
-  // Example of Training
   if (iree_status_is_ok(status)) {
     iree_hal_buffer_view_t* result_buffer_view = NULL;
-    status = learn(session, &result_buffer_view);
+    status = predict(session, &result_buffer_view);
     if (iree_status_is_ok(status)) {
-      fprintf(stdout, "Training Loss: ");
+      fprintf(stdout, "Predict Result: ");
       status = iree_hal_buffer_view_fprint(stdout, result_buffer_view,
                                            /*max_element_count=*/4096);
       fprintf(stdout, "\n");
     }
     iree_hal_buffer_view_release(result_buffer_view);
   }
+
+  // Example of Training
+  // if (iree_status_is_ok(status)) {
+  //   iree_hal_buffer_view_t* result_buffer_view = NULL;
+  //   status = learn(session, &result_buffer_view);
+  //   if (iree_status_is_ok(status)) {
+  //     fprintf(stdout, "Training Loss: ");
+  //     status = iree_hal_buffer_view_fprint(stdout, result_buffer_view,
+  //                                          /*max_element_count=*/4096);
+  //     fprintf(stdout, "\n");
+  //   }
+  //   iree_hal_buffer_view_release(result_buffer_view);
+  // }
 
 
   //===-------------------------------------------------------------------===//

@@ -17,8 +17,13 @@ iree_cc_library(
     "driver_module.c"
   DEPS
     iree::base
+<<<<<<< HEAD
     iree::base::cc
     iree::base::core_headers
+=======
+    iree::base::core_headers
+    iree::base::cc
+>>>>>>> Refresh ROCM backend
     iree::base::tracing
     iree::hal
     experimental::rocm
