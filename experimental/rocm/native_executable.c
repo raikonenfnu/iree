@@ -23,6 +23,7 @@ typedef struct iree_hal_rocm_native_executable_function_t {
   uint32_t block_size_x;
   uint32_t block_size_y;
   uint32_t block_size_z;
+  const char * function_name;
 } iree_hal_rocm_native_executable_function_t;
 
 typedef struct iree_hal_rocm_native_executable_t {
@@ -86,6 +87,7 @@ iree_status_t iree_hal_rocm_native_executable_create(
     executable->entry_functions[i].block_size_x = block_sizes_vec[i].x;
     executable->entry_functions[i].block_size_y = block_sizes_vec[i].y;
     executable->entry_functions[i].block_size_z = block_sizes_vec[i].z;
+    executable->entry_functions[i].function_name = entry_name;
   }
 
   iree_hal_resource_initialize(&iree_hal_rocm_native_executable_vtable,
@@ -112,6 +114,7 @@ iree_status_t iree_hal_rocm_native_executable_block_size(
   *x = executable->entry_functions[entry_point].block_size_x;
   *y = executable->entry_functions[entry_point].block_size_y;
   *z = executable->entry_functions[entry_point].block_size_z;
+  printf("fn name:%s\n",executable->entry_functions[entry_point].function_name);
   return iree_ok_status();
 }
 

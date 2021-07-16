@@ -322,7 +322,7 @@ SmallVector<Value, 2> ExtractDynamicSizes(
     }
 
     if (tensor_shape[dim_arg_index] != ShapedType::kDynamicSize) continue;
-    dyn_sizes.push_back(b.create<memref::DimOp>(loc, tensor, dim_arg_index));
+    dyn_sizes.push_back(b.create<tensor::DimOp>(loc, tensor, dim_arg_index));
   }
   return dyn_sizes;
 }
@@ -338,7 +338,7 @@ std::set<char> findSummationAxes(std::set<char> input_set,
 }
 
 SmallVector<AffineExpr, 4> getExprFromConfig(
-    std::set<char> input_set, std::string loop_dims,
+    std::deque<char> input_set, std::string loop_dims,
     std::unordered_map<char, AffineExpr> char_affine_dim_umap) {
   SmallVector<AffineExpr, 4> OutputExpr;
   for (char const &dim : loop_dims) {
@@ -367,6 +367,25 @@ std::string rangeStr(size_t number) {
   std::string range_str;
   for (size_t i = 0; i < number; i++) range_str.append(std::to_string(i));
   return range_str;
+}
+
+/// Returns a permutation AffineMap that puts all reduction dimensions to the
+/// last. The order of parallel loops and reduction loops are all sorted. E.g.,
+/// if `rank` is 4 and `reductionDims` is {1, 3}, then
+/// "(d0, d1, d2, d3) -> (d0, d2, d1, d3)" is used. The inverse permutation of
+/// the AffineMap is returned.
+AffineMap GetTransposeMapForReduction(MLIRContext* context, int rank,
+                                      ArrayRef<int64_t> reduction_dims) {
+  llvm::SmallSetVector<int, 4> s;
+  for (auto dim : reduction_dims) s.insert(dim);
+
+  SmallVector<unsigned, 4> permutation;
+  for (int i = 0; i < rank; ++i)
+    if (!s.count(i)) permutation.push_back(i);
+  for (auto dim : reduction_dims) permutation.push_back(dim);
+
+  auto map = AffineMap::getPermutationMap(permutation, context);
+  return inversePermutation(map);
 }
 
 // Convert mhlo.einsum op into linalg.generic
@@ -480,23 +499,38 @@ class EinsumToLinalgConverter : public OpConversionPattern<mhlo::EinsumOp> {
     output = GetInitTensor(rewriter, loc, *result_ty, dyn_sizes);
 
     // Create indexing maps.
+    // Ensures reduced dim is at the back
     int64_t nloops = input_ind.size();
-    std::unordered_map<char, AffineExpr> char_affine_dim_umap;
-    for (auto it : llvm::enumerate(input_ind)) {
-      char_affine_dim_umap[it.value()] = rewriter.getAffineDimExpr(it.index());
+    std::deque<char> input_deck;
+    for (char it : input_ind) {
+      if(reduction_axe.find(it) != reduction_axe.end()) {
+        input_deck.push_back(it);
+      } else{
+        input_deck.push_front(it);
+      }
     }
+
+    std::unordered_map<char, AffineExpr> char_affine_dim_umap;
+    int dim_ind = 0;
+    for (char it : input_deck) {
+      if(reduction_axe.find(it) != reduction_axe.end()) continue;
+      char_affine_dim_umap[it] = rewriter.getAffineDimExpr(dim_ind);
+      dim_ind++;
+    }
+    // todo:just change the loop order from input_ind to set reduction loop at the end, otherwise woudltn work well with getexprfromconfig
+
     SmallVector<AffineMap, 4> maps;
     std::vector<std::string> input_loops = {inputA_loop, inputB_loop};
     for (auto it : llvm::enumerate(inputs)) {
       AffineMap scalar_map = AffineMap::get(nloops, 0, rewriter.getContext());
-      auto inputExprs = getExprFromConfig(input_ind, input_loops[it.index()],
+      auto inputExprs = getExprFromConfig(input_deck, input_loops[it.index()],
                                           char_affine_dim_umap);
       AffineMap multidim_map =
           AffineMap::get(nloops, 0, inputExprs, rewriter.getContext());
       maps.push_back(is_scalar(it.value()) ? scalar_map : multidim_map);
     }
     auto inputExprs =
-        getExprFromConfig(input_ind, output_loop, char_affine_dim_umap);
+        getExprFromConfig(input_deck, output_loop, char_affine_dim_umap);
     AffineMap multidim_map =
         AffineMap::get(nloops, 0, inputExprs, rewriter.getContext());
     maps.push_back(multidim_map);
@@ -551,118 +585,6 @@ SmallVector<StringRef, 3> GetParallelAndReductionIterators(
 SmallVector<StringRef, 3> GetNParallelLoopsAttrs(unsigned nParallelLoops) {
   return GetParallelAndReductionIterators(nParallelLoops, 0);
 }
-
-SmallVector<int64_t, 4> Extract1DVector(DenseIntElementsAttr elements) {
-  SmallVector<int64_t, 4> ret;
-  for (const APInt &element : elements) {
-    ret.push_back(element.getLimitedValue());
-  }
-  return ret;
-}
-
-struct ScatterAddOnTensorsConversion
-    : public OpConversionPattern<mhlo::ScatterOp> {
-  using OpConversionPattern<mhlo::ScatterOp>::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(
-      mhlo::ScatterOp op, ArrayRef<Value> args,
-      ConversionPatternRewriter &rewriter) const final {
-    mhlo::ScatterOp::Adaptor adaptor(args);
-
-    // Check if it is a tensor_scatter_nd_add-like op.
-    auto &body_ops = op.getRegion().front().getOperations();
-    if (body_ops.size() != 2) return failure();
-    if (!isa<mhlo::AddOp>(body_ops.front())) return failure();
-
-    auto operand_ty = adaptor.operand().getType().dyn_cast<RankedTensorType>();
-    auto indices_ty =
-        adaptor.scatter_indices().getType().dyn_cast<RankedTensorType>();
-    if (!operand_ty || !indices_ty) return failure();
-
-    // Linalg operations put all the computation to the innermost loop. Since we
-    // also iterate over scatter_indices() with some loops, we can only check
-    // one scatter index in one iteration. If there are multiple indices (ie,
-    // the index depth is greater than 1), we don't have a way to keep the
-    // comparison state. E.g., if the index_depth is 2, like indices = [[0, 1]],
-    // we should use the update value only if (i == 0 and j == 1). However, we
-    // can not get both indices in one iteration unless we pack them together.
-    auto index_vector_dim =
-        op.scatter_dimension_numbers().index_vector_dim().getInt();
-    if (index_vector_dim != indices_ty.getRank() - 1) {
-      return rewriter.notifyMatchFailure(
-          op, "require index_vector_dim to be the last dim");
-    }
-
-    // One of indices dims is index depth vector.
-    int indices_rank = indices_ty.getRank();
-    int64_t nloops = operand_ty.getRank() + indices_ty.getRank() - 1;
-    if (indices_rank == 1) nloops += 1;
-    SmallVector<AffineMap, 3> indexing_maps;
-    {
-      SmallVector<AffineExpr> exprs;
-      for (int64_t i = 0, e = operand_ty.getRank(); i < e; ++i)
-        exprs.push_back(rewriter.getAffineDimExpr(i));
-      indexing_maps.push_back(AffineMap::get(nloops, /*symbolCount=*/0, exprs,
-                                             rewriter.getContext()));
-    }
-    {
-      SmallVector<AffineExpr> exprs;
-      for (int64_t i = operand_ty.getRank(); i < nloops; ++i)
-        exprs.push_back(rewriter.getAffineDimExpr(i));
-      // The index depth is 1.
-      if (indices_rank != 1) exprs.push_back(rewriter.getAffineConstantExpr(0));
-      indexing_maps.push_back(AffineMap::get(nloops, /*symbolCount=*/0, exprs,
-                                             rewriter.getContext()));
-
-      // Setting up update data access pattern using update_window_dim
-      if (indices_rank != 1) exprs.pop_back();
-      auto update_window_dims =
-          Extract1DVector(op.scatter_dimension_numbers().update_window_dims());
-      for (auto d : update_window_dims) {
-        exprs.push_back(rewriter.getAffineDimExpr(d));
-      }
-      indexing_maps.push_back(AffineMap::get(nloops, /*symbolCount=*/0, exprs,
-                                             rewriter.getContext()));
-    }
-    // Output and Buffer has same type and access pattern
-    indexing_maps.push_back(indexing_maps.front());
-
-    auto result_ty = this->typeConverter->convertType(op.getResult().getType())
-                         .cast<ShapedType>();
-    auto scatter_dims_to_operand_dims = Extract1DVector(
-        op.scatter_dimension_numbers().scatter_dims_to_operand_dims());
-    assert(scatter_dims_to_operand_dims.size() == 1);
-    // Do not need init_tensor because we'd like to initialize the output as
-    // operand.
-    auto linalg_op = rewriter.create<linalg::GenericOp>(
-        op.getLoc(), /*resultTensors=*/result_ty,
-        /*inputs=*/
-        ValueRange{adaptor.operand(), adaptor.scatter_indices(),
-                   adaptor.updates()},
-        /*outputs=*/adaptor.operand(), indexing_maps,
-        GetNParallelLoopsAttrs(nloops),
-        [&](OpBuilder &b, Location loc, ValueRange args) {
-          Value cmp_idx =
-              b.create<linalg::IndexOp>(loc, scatter_dims_to_operand_dims[0]);
-          Value idx = b.create<IndexCastOp>(loc, b.getIndexType(), args[1]);
-          Value pred = b.create<CmpIOp>(loc, b.getI1Type(), CmpIPredicate::eq,
-                                        cmp_idx, idx);
-          // Use the output arg, so some update values won't be init value
-          // again.
-          Value add;
-          if (args[2].getType().isF32()) {
-            add = b.create<AddFOp>(loc, args[2], args[3]);
-          } else {
-            add = b.create<AddIOp>(loc, args[2], args[3]);
-          }
-          Value res =
-              b.create<SelectOp>(loc, add.getType(), pred, add, args[3]);
-          b.create<linalg::YieldOp>(loc, res);
-        });
-    rewriter.replaceOp(op, linalg_op.getResults());
-    return success();
-  }
-};
 
 // temp1 = (cast(I32, index(D.m)) + seed) * multiplier + increment
 // temp2 = (cast(I32, index(D.n)) + temp1) * multiplier + increment
@@ -767,7 +689,7 @@ void populateMHLOToLinalgOnTensorsConversionPatterns(
   // TODO(#5809): Drop ConcatenateOp lowering in favor of the upstream version
   //              then remove the PatternBenefit here
   patterns.insert<ConstOpConversion, ConcatenateOpConversion, FftOpConversion,
-                  EinsumToLinalgConverter, ScatterAddOnTensorsConversion,
+                  EinsumToLinalgConverter,
                   RngUniformConversion>(typeConverter, context,
                                         PatternBenefit(1000));
 }

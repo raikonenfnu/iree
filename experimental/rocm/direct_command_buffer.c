@@ -340,6 +340,11 @@ static iree_status_t iree_hal_rocm_direct_command_buffer_dispatch(
                             block_size_x, block_size_y, block_size_z, 0, 0,
                             command_buffer->current_descriptor, NULL),
       "hipModuleLaunchKernel");
+    ROCM_RETURN_IF_ERROR(
+      command_buffer->context->syms,
+      hipStreamSynchronize(0),
+      "hipStreamSynchronize");
+      printf("Done!\n");
   return iree_ok_status();
 }
 

@@ -23,6 +23,8 @@
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 
+#include <fstream>
+
 namespace mlir {
 namespace iree_compiler {
 namespace IREE {
@@ -171,6 +173,25 @@ class ROCMTargetBackend final : public TargetBackend {
             .getOps<iree_compiler::IREE::HAL::ExecutableEntryPointOp>(),
         [&](auto op) { return op.getName(); }));
     auto entryPointsRef = builder.createStringVec(entryPointNames);
+    for(auto names : entryPointNames) {
+      if(names == "__inference_learn_29190_dispatch_111"){
+        std::string moduleStr;
+        llvm::raw_string_ostream ss(moduleStr);
+        ss << *llvmModule;
+
+        std::ofstream file("/tmp/__inference_learn_29190_dispatch_111.llvmir");
+        file << moduleStr;
+        file.close();
+
+        std::string moduleStrMlir;
+        llvm::raw_string_ostream ssMlir(moduleStrMlir);
+        ssMlir << *innerModuleOp;
+
+        std::ofstream output("/tmp/__inference_learn_29190_dispatch_111.mlir");
+        output << moduleStrMlir;
+        output.close();
+      }
+    }
 
     iree_ROCMBlockSizeDef_vec_start(builder);
     auto blockSizes = workgroupSizes.begin();
