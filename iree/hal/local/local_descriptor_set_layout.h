@@ -14,7 +14,7 @@
 extern "C" {
 #endif  // __cplusplus
 
-#define IREE_HAL_LOCAL_MAX_DESCRIPTOR_BINDING_COUNT 32
+#define IREE_HAL_LOCAL_MAX_DESCRIPTOR_BINDING_COUNT 100
 
 typedef struct iree_hal_local_descriptor_set_layout_t {
   iree_hal_resource_t resource;
