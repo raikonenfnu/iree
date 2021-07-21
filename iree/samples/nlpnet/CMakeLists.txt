@@ -34,39 +34,39 @@ endif()
 #     iree::vm::bytecode_module
 # )
 
-iree_cc_binary(
-  NAME
-    iree-run-nlplearn-module-rocm
-  SRCS
-    "device_rocm.c"
-    "iree-run-nlpnet-train.c"
-  DEPS
-    ::nlpnet_bytecode_module_c
-    iree::tools::utils::image_util
-    experimental::rocm::registration
-    iree::base
-    iree::hal
-    iree::modules::hal
-    iree::vm
-    iree::vm::bytecode_module
-)
-
 # iree_cc_binary(
 #   NAME
-#     iree-run-nlplearn-module-cuda
+#     iree-run-nlplearn-module-rocm
 #   SRCS
-#     "device_cuda.c"
+#     "device_rocm.c"
 #     "iree-run-nlpnet-train.c"
 #   DEPS
 #     ::nlpnet_bytecode_module_c
 #     iree::tools::utils::image_util
-#     iree::hal::cuda::registration
+#     experimental::rocm::registration
 #     iree::base
 #     iree::hal
 #     iree::modules::hal
 #     iree::vm
 #     iree::vm::bytecode_module
 # )
+
+iree_cc_binary(
+  NAME
+    iree-run-nlplearn-module-cuda
+  SRCS
+    "device_cuda.c"
+    "iree-run-nlpnet-train.c"
+  DEPS
+    ::nlpnet_bytecode_module_c
+    iree::tools::utils::image_util
+    iree::hal::cuda::registration
+    iree::base
+    iree::hal
+    iree::modules::hal
+    iree::vm
+    iree::vm::bytecode_module
+)
 
 # iree_cc_binary(
 #   NAME
@@ -100,11 +100,11 @@ iree_bytecode_module(
   FLAGS
     "-iree-mlir-to-vm-bytecode-module"
     # "-iree-hal-target-backends=dylib-llvm-aot"
-    # "-iree-hal-target-backends=cuda"
-    "-iree-hal-target-backends=rocm"
-    "-iree-rocm-target-chip=gfx908"
-    "-iree-rocm-link-bc=true"
-    "-iree-rocm-bc-dir=/home/stanley/nod/amdgcn/bitcode"
+    "-iree-hal-target-backends=cuda"
+    # "-iree-hal-target-backends=rocm"
+    # "-iree-rocm-target-chip=gfx908"
+    # "-iree-rocm-link-bc=true"
+    # "-iree-rocm-bc-dir=/home/stanley/nod/amdgcn/bitcode"
     "-iree-llvm-debug-symbols=false"
   PUBLIC
 )

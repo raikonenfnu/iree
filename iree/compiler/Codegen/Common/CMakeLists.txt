@@ -24,6 +24,7 @@ iree_cc_library(
     Common
   SRCS
     "CleanupBufferAllocViewPass.cpp"
+    "ConvertContractionToMatmul.cpp"
     "DemoteF32ToF16.cpp"
     "FlattenMemRefSubspanPass.cpp"
     "FoldTensorExtractOpPass.cpp"

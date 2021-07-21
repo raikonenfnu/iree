@@ -300,7 +300,6 @@ Value lcg_helper(OpBuilder& b, Location loc, Value ind, Value update,
   return inc;
 }
 
-// Code below wont work:
 struct RngUniformConversion : public OpConversionPattern<mhlo::RngUniformOp> {
   using OpConversionPattern<mhlo::RngUniformOp>::OpConversionPattern;
 

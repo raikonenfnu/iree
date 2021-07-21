@@ -20,6 +20,13 @@ def CleanupBufferAllocView :
   let constructor = "mlir::iree_compiler::createCleanupBufferAllocViewPass()";
 }
 
+def ConvertContractionToMatmul :
+    Pass<"iree-codegen-convert-contraction-to-matmul", "FuncOp"> {
+  let summary =
+      "Pass to canonicalize linalg contraction op to linalg matmul";
+  let constructor = "mlir::iree_compiler::createConvertContractionToMatmulPass()";
+}
+
 def DemoteF32ToF16 :
     Pass<"iree-convert-f32-to-f16", "ModuleOp"> {
   let summary = "Convert f32 operations and values into equivalent f16 ones.";

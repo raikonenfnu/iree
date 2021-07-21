@@ -44,6 +44,9 @@ void addLinalgBufferizePasses(
 /// allocations and view operations.
 std::unique_ptr<OperationPass<FuncOp>> createCleanupBufferAllocViewPass();
 
+/// Pass to perform canonicalize linalg contraction op to linalg matmul
+std::unique_ptr<OperationPass<FuncOp>> createConvertContractionToMatmulPass();
+
 /// Create a pass to convert a model using f32 type to the equivalent one
 /// using f16.
 std::unique_ptr<OperationPass<ModuleOp>> createDemoteF32ToF16Pass();
