@@ -109,7 +109,7 @@ static void addLowerToLLVMGPUPasses(OpPassManager &pm, bool useROCM) {
 }
 
 void buildLLVMGPUTransformPassPipeline(OpPassManager &pm, bool useROCM) {
-  pm.nest<ModuleOp>().addNestedPass<FuncOp>(createConvertContractionToMatmulPass());
+  // pm.nest<ModuleOp>().addNestedPass<FuncOp>(createConvertContractionToMatmulPass());
   pm.addPass(createLLVMGPULowerExecutableTargetPass());
   //===--------------------------------------------------------------------===//
   // Convert Linalg ops to LLVM+NVVM/ROCDL ops.

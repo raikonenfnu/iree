@@ -842,6 +842,7 @@ struct MHLOToMHLOPreprocessingPass
     }
 
     OwningRewritePatternList patterns(&getContext());
+    mhlo::PopulateEinsumToDotGeneralPatterns(context, &patterns);
     mhlo::PopulateUnfuseBatchNormPatterns(context, &patterns);
     mhlo::PopulateComplexLoweringPatterns(context, &patterns);
     mhlo::PopulateGatherToTorchIndexSelectPatterns(context, &patterns);
