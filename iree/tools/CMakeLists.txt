@@ -427,6 +427,25 @@ if(${IREE_BUILD_COMPILER})
     HOSTONLY
   )
 
+  iree_cc_binary(
+    NAME
+      iree-linalg-matmul-counter
+    SRCS
+      "iree-linalg-matmul-counter.cc"
+    DEPS
+      ::init_passes_and_dialects
+      ::init_targets
+      iree::base
+      iree::base::cc
+      LLVMSupport
+      MLIRIR
+      MLIROptLib
+      MLIRSupport
+    DATA
+      lld
+    HOSTONLY
+  )
+
   # IreeFileCheck
   # We could encapsulate this in iree_sh_binary, but we only have one use of it
   # in the project and this file is already not covered by Bazel->CMake
