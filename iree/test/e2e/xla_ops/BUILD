@@ -61,6 +61,7 @@ iree_check_single_backend_test_suite(
             "remainder.mlir",
             "reshape.mlir",
             "reverse.mlir",
+            "rng.mlir",
             "rsqrt.mlir",
             "scatter.mlir",
             "select.mlir",
@@ -205,6 +206,7 @@ iree_check_single_backend_test_suite(
             "remainder.mlir",
             "reshape.mlir",
             "reverse.mlir",
+            "rng.mlir",
             "rsqrt.mlir",
             "scatter.mlir",
             "scatter_dynamic.mlir",
@@ -270,6 +272,7 @@ iree_check_single_backend_test_suite(
             "remainder.mlir",
             "reshape.mlir",
             "reverse.mlir",
+            "rng.mlir",
             "rsqrt.mlir",
             "select.mlir",
             "sine.mlir",
@@ -284,6 +287,7 @@ iree_check_single_backend_test_suite(
         include = ["*.mlir"],
         exclude = [
             "fft.mlir",  # TODO(GH-6601): Eanble the test.
+            "rng.mlir",
             "round.mlir",
             "scatter.mlir",  # TODO(GH-6601): Enable the test.
             "scatter_dynamic.mlir",  # TODO(GH-6601): Enable the test.
