@@ -39,8 +39,14 @@ Attribute convertAttribute(Location loc, Attribute value,
 
   if (auto attr = value.dyn_cast<IntegerAttr>()) {
     // TODO(b/130356985): saturate when signedness is known.
-    return IntegerAttr::get(
+    switch(newType.getIntOrFloatBitWidth()) {
+      case 64:
+        return IntegerAttr::get(
+        newType, attr.getValue().trunc(32));
+      default:
+        return IntegerAttr::get(
         newType, attr.getValue().trunc(newType.getIntOrFloatBitWidth()));
+    }
   } else if (auto attr = value.dyn_cast<FloatAttr>()) {
     switch (newType.getIntOrFloatBitWidth()) {
       case 32:
@@ -57,6 +63,7 @@ Attribute convertAttribute(Location loc, Attribute value,
   } else if (auto attr = value.dyn_cast<DenseIntElementsAttr>()) {
     auto newElementType = newType.cast<ShapedType>().getElementType();
     auto newElementBitWidth = newElementType.getIntOrFloatBitWidth();
+    if(newElementBitWidth == 64) newElementBitWidth = 32;
     return attr.mapValues(newElementType, [&](APInt src) {
       // TODO(b/130356985): saturate when signedness is known.
       return src.trunc(newElementBitWidth);
