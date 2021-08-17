@@ -136,6 +136,7 @@ def invoke_immediate(command_line: List[str],
   run_args = {}
   input_file_handle = None
   stderr_handle = sys.stderr
+  file_err = open("/tmp/imm_error.mlir", "w")
   try:
     # Redirect input.
     if input_file is not None:
@@ -147,7 +148,7 @@ def invoke_immediate(command_line: List[str],
     # Capture output.
     # TODO(#4131) python>=3.7: Use capture_output=True.
     run_args["stdout"] = subprocess.PIPE
-    run_args["stderr"] = subprocess.PIPE
+    run_args["stderr"] = file_err
     process = subprocess.run(command_line, **run_args)
     if process.returncode != 0:
       raise CompilerToolError(process)
@@ -155,6 +156,7 @@ def invoke_immediate(command_line: List[str],
     _write_binary_stderr(stderr_handle, process.stderr)
     return process.stdout
   finally:
+    file_err.close()
     if input_file_handle:
       input_file_handle.close()
 
@@ -177,10 +179,11 @@ def invoke_pipeline(command_lines: List[List[str]], immediate_input=None):
   # Create all stages.
   for i in range(len(command_lines)):
     command_line = command_lines[i]
+    file_err = open("/tmp/pipe_error.mlir", "w")
     popen_args = {
         "stdin": prev_out,
         "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
+        "stderr": file_err,
     }
     process = subprocess.Popen(command_line, **popen_args)
     prev_out = process.stdout

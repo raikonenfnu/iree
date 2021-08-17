@@ -136,7 +136,8 @@ class CompilerOptions:
                strip_symbols: bool = False,
                crash_reproducer_path: Optional[str] = None,
                enable_tflite_bindings: bool = False,
-               enable_benchmark: bool = False):
+               enable_benchmark: bool = False,
+               print_ir_after_all: bool = False):
     self.output_file = output_file
     self.target_backends = target_backends
     self.input_type = InputType.parse(input_type)
@@ -152,7 +153,7 @@ class CompilerOptions:
     self.crash_reproducer_path = crash_reproducer_path
     self.enable_tflite_bindings = enable_tflite_bindings
     self.enable_benchmark = enable_benchmark
-
+    self.print_ir_after_all = print_ir_after_all
 
 def build_compile_command_line(input_file: str, tfs: TempFileSaver,
                                options: CompilerOptions) -> List[str]:
@@ -197,6 +198,8 @@ def build_compile_command_line(input_file: str, tfs: TempFileSaver,
     cl.append("--mlir-print-op-on-diagnostic=true")
   else:
     cl.append("--mlir-print-op-on-diagnostic=false")
+  if options.self.print_ir_after_all:
+    cl.append("--print-ir-after-all")
 
   # Other options to set if specified.
   if options.strip_debug_ops:

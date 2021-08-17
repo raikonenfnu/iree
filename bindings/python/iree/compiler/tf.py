@@ -85,6 +85,7 @@ class ImportOptions(CompilerOptions):
                save_temp_mid_level_input: Optional[str] = None,
                save_temp_iree_input: Optional[str] = None,
                use_tosa: bool = False,
+               print_ir_after_all: bool = False,
                **kwargs):
     """Initialize options from keywords.
 
@@ -118,6 +119,7 @@ class ImportOptions(CompilerOptions):
     self.save_temp_mid_level_input = save_temp_mid_level_input
     self.save_temp_iree_input = save_temp_iree_input
     self.use_tosa = use_tosa
+    self.print_ir_after_all = print_ir_after_all
 
 
 def build_import_command_line(input_path: str, tfs: TempFileSaver,
@@ -151,6 +153,8 @@ def build_import_command_line(input_path: str, tfs: TempFileSaver,
     cl.append("--mlir-print-debuginfo")
   if options.output_generic_mlir:
     cl.append("--mlir-print-op-generic")
+  if options.print_ir_after_all:
+    cl.append("--print-ir-after-all")
 
   # Save temps flags.
   save_tf_input = tfs.alloc_optional("tf-input.mlir",
