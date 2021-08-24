@@ -108,7 +108,8 @@ static bool GenerateHeader(const std::string& header_file,
 }
 
 static bool SlurpFile(const std::string& file_name, std::string* contents) {
-  constexpr std::streamoff kMaxSize = 100000000;
+  //constexpr std::streamoff kMaxSize = 100000000;
+  constexpr std::streamoff kMaxSize = 2000000000;
   std::ifstream f(file_name, std::ios::in | std::ios::binary);
   // get length of file:
   f.seekg(0, f.end);
