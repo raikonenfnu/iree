@@ -48,12 +48,15 @@ iree_status_t create_sample_device(iree_hal_device_t** device) {
 
 const iree_const_byte_span_t load_bytecode_module_data() {
 #if IREE_ARCH_X86_64
+  printf("X64\n");
   const struct iree_file_toc_t* module_file_toc =
       iree_samples_simple_embedding_test_module_dylib_x86_64_create();
 #elif IREE_ARCH_RISCV_64
+  printf("RISCV64\n");
   const struct iree_file_toc_t* module_file_toc =
       iree_samples_simple_embedding_test_module_dylib_riscv_64_create();
 #elif IREE_ARCH_ARM_64
+  printf("ARM64\n");
   const struct iree_file_toc_t* module_file_toc =
       iree_samples_simple_embedding_test_module_dylib_arm_64_create();
 #else

@@ -13,12 +13,12 @@
 #include "iree/hal/local/task_device.h"
 #include "iree/modules/hal/module.h"
 #include "iree/runtime/api.h"
-#include "iree/samples/static_library/simple_mul_c.h"
+#include "iree/samples/riscv_collection/riscv_mul/riscv_mul_c.h"
 #include "iree/task/api.h"
 #include "iree/vm/bytecode_module.h"
 
 // Compiled static library module here to avoid IO:
-#include "iree/samples/static_library/simple_mul.h"
+#include "iree/samples/riscv_collection/riscv_mul/riscv_mul.h"
 
 // A function to create the HAL device from the different backend targets.
 // The HAL device is returned based on the implementation, and it must be
@@ -31,7 +31,7 @@ iree_status_t create_device_with_static_loader(iree_hal_device_t** device) {
 
   // Load the statically embedded library
   const iree_hal_executable_library_header_t** static_library =
-      simple_mul_dispatch_0_library_query(
+      riscv_mul_dispatch_0_library_query(
           IREE_HAL_EXECUTABLE_LIBRARY_LATEST_VERSION, /*reserved=*/NULL);
   const iree_hal_executable_library_header_t** libraries[1] = {static_library};
 
@@ -98,7 +98,7 @@ iree_status_t Run() {
 
   // Load bytecode module from the embedded data. Append to the session.
   const struct iree_file_toc_t* module_file_toc =
-      iree_samples_static_library_simple_mul_create();
+      iree_samples_static_library_riscv_mul_create();
   iree_const_byte_span_t module_data =
       iree_make_const_byte_span(module_file_toc->data, module_file_toc->size);
   iree_vm_module_t* bytecode_module = NULL;
@@ -112,7 +112,7 @@ iree_status_t Run() {
   }
 
   // Lookup the entry point function call.
-  const char kMainFunctionName[] = "module.simple_mul";
+  const char kMainFunctionName[] = "module.riscv_mul";
   iree_runtime_call_t call;
   memset(&call, 0, sizeof(call));
   if (iree_status_is_ok(status)) {
@@ -199,7 +199,7 @@ iree_status_t Run() {
   }
 
   // Cleanup call and buffers.
-  // iree_hal_buffer_unmap_range(&mapped_memory);
+  iree_hal_buffer_unmap_range(&mapped_memory);
   iree_hal_buffer_view_release(ret_buffer_view);
   iree_runtime_call_deinitialize(&call);
 

@@ -20,6 +20,7 @@ list(APPEND _TRANSLATE_ARGS "-iree-hal-target-backends=dylib-llvm-aot")
 list(APPEND _TRANSLATE_ARGS "-iree-llvm-link-static")
 list(APPEND _TRANSLATE_ARGS "-iree-llvm-static-library-output-path=simple_mul.o")
 list(APPEND _TRANSLATE_ARGS "${CMAKE_CURRENT_SOURCE_DIR}/simple_mul.mlir")
+list(APPEND _TRANSLATE_ARGS "-iree-vm-bytecode-source-listing=foo.mlir")
 list(APPEND _TRANSLATE_ARGS "-o")
 list(APPEND _TRANSLATE_ARGS "simple_mul.vmfb")
 

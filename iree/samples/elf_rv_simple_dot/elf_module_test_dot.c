@@ -10,7 +10,7 @@
 #include "iree/hal/local/executable_library.h"
 
 // ELF modules for various platforms embedded in the binary:
-#include "iree/hal/local/elf/testdata/simple_mul_dispatch.h"
+#include "iree/samples/elf_rv_simple_dot/sharedobject/simple_dot_dispatch.h"
 
 static iree_status_t query_arch_test_file_data(
     iree_const_byte_span_t* out_file_data) {
@@ -24,6 +24,7 @@ static iree_status_t query_arch_test_file_data(
 #elif defined(IREE_ARCH_RISCV_32)
   pattern = iree_make_cstring_view("*_riscv_32.so");
 #elif defined(IREE_ARCH_RISCV_64)
+  printf("using RISCV64 of course!\n");
   pattern = iree_make_cstring_view("*_riscv_64.so");
 #elif defined(IREE_ARCH_X86_32)
   pattern = iree_make_cstring_view("*_x86_32.so");
@@ -34,8 +35,8 @@ static iree_status_t query_arch_test_file_data(
 #endif  // IREE_ARCH_*
 
   if (!iree_string_view_is_empty(pattern)) {
-    for (size_t i = 0; i < simple_mul_dispatch_size(); ++i) {
-      const struct iree_file_toc_t* file_toc = &simple_mul_dispatch_create()[i];
+    for (size_t i = 0; i < simple_dot_dispatch_size(); ++i) {
+      const struct iree_file_toc_t* file_toc = &simple_dot_dispatch_create()[i];
       if (iree_string_view_match_pattern(iree_make_cstring_view(file_toc->name),
                                          pattern)) {
         *out_file_data =
@@ -57,9 +58,11 @@ static iree_status_t run_test() {
   iree_elf_import_table_t import_table;
   memset(&import_table, 0, sizeof(import_table));
   iree_elf_module_t module;
+  printf("init elf\n");
   IREE_RETURN_IF_ERROR(iree_elf_module_initialize_from_memory(
       file_data, &import_table, iree_allocator_system(), &module));
 
+  printf("query elf\n");
   void* query_fn_ptr = NULL;
   IREE_RETURN_IF_ERROR(iree_elf_module_lookup_export(
       &module, IREE_HAL_EXECUTABLE_LIBRARY_EXPORT_NAME, &query_fn_ptr));
@@ -82,7 +85,7 @@ static iree_status_t run_test() {
                             "library version error");
   }
 
-  if (strncmp(header->name, "simple_mul_dispatch_0", strlen(header->name)) !=
+  if (strncmp(header->name, "simple_dot_dispatch_0", strlen(header->name)) !=
       0) {
     return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                             "library name mismatches");
@@ -94,19 +97,19 @@ static iree_status_t run_test() {
   }
 
   // ret0 = arg0 * arg1
-  float arg0[4] = {1.0f, 2.0f, 3.0f, 4.0f};
-  float arg1[4] = {100.0f, 200.0f, 300.0f, 400.0f};
-  float ret0[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-  const float expected[4] = {100.0f, 400.0f, 900.0f, 1600.0f};
+  // float arg0[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+  // float arg1[4] = {100.0f, 200.0f, 300.0f, 400.0f};
+  float ret0[2] = {0.0f, 0.0f};
+  const float expected[2] = {30.0f, 30.0f};
 
-  size_t binding_lengths[3] = {
-      sizeof(arg0),
-      sizeof(arg1),
+  size_t binding_lengths[1] = {
+      // sizeof(arg0),
+      // sizeof(arg1),
       sizeof(ret0),
   };
-  void* binding_ptrs[3] = {
-      arg0,
-      arg1,
+  void* binding_ptrs[1] = {
+      // arg0,
+      // arg1,
       ret0,
   };
   iree_hal_vec3_t workgroup_count = {{1, 1, 1}};
