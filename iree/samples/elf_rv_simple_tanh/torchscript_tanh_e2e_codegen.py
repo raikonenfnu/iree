@@ -8,8 +8,10 @@ import torch
 import torch_mlir
 
 import npcomp
+from npcomp.passmanager import *
 from npcomp.compiler.pytorch.backend import iree, frontend_lowering
 from npcomp.compiler.utils import logging
+import iree.compiler as ireec
 
 import os
 
@@ -18,6 +20,13 @@ logging.enable()
 # RUN: %PYTHON %s | npcomp-opt | FileCheck %s
 
 mb = torch_mlir.ModuleBuilder()
+
+def compile_to_mlir(imported_module):
+    with imported_module.context as context:
+        pipeline_str = "npcomp-backend-to-iree-frontend-pipeline"
+        pm = PassManager.parse(pipeline_str)
+        pm.run(imported_module)
+    return str(imported_module)
 
 class TestModule(torch.nn.Module):
     def __init__(self):
@@ -40,8 +49,7 @@ class_annotator.annotateArgs(recursivescriptmodule._c._type(), ['forward'], [
 mb.import_module(recursivescriptmodule._c, class_annotator)
 #mb.module.operation.print()
 
-backend = iree.IreeNpcompBackend()
-compiled = backend.compile_mlir_str(frontend_lowering.lower_object_graph(mb.module))
+compiled = compile_to_mlir(frontend_lowering.lower_object_graph(mb.module))
 ARITFACTS_DIR = "/tmp"
 mlir_path = os.path.join(ARITFACTS_DIR, "tanh.mlir")
 with open(mlir_path, "wt") as output_file:

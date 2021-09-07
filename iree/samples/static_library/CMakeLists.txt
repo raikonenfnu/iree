@@ -74,21 +74,13 @@ SRCS
   "static_library_demo.c"
 DEPS
   ::simple_mul_c
-  iree::runtime
   iree::hal::local::loaders::static_library_loader
-  iree::hal::local::task_driver
-  iree::task::api
+  iree::hal::local::sync_driver
+  iree::base
+  iree::hal
+  iree::hal::local
+  iree::modules::hal
+  iree::vm
+  iree::vm::bytecode_module
   simple_mul
-)
-
-iree_lit_test(
-  NAME
-    static_library_demo_test
-  TEST_FILE
-    "static_library_demo_test.txt"
-  DATA
-    ::static_library_demo
-    iree::tools::IreeFileCheck
-  LABELS
-    "hostonly"
 )

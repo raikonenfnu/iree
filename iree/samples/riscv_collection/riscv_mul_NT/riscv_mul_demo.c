@@ -12,7 +12,7 @@
 #include "iree/hal/local/loaders/static_library_loader.h"
 #include "iree/hal/local/sync_device.h"
 #include "iree/modules/hal/module.h"
-#include "iree/samples/static_library/simple_mul_c.h"
+#include "iree/samples/riscv_collection/riscv_mul_NT/riscv_mul_c.h"
 #include "iree/vm/bytecode_module.h"
 
 // Replacing runtime/api.h
@@ -24,7 +24,7 @@
 #include "iree/vm/api.h"
 
 // Compiled static library module here to avoid IO:
-#include "iree/samples/static_library/simple_mul.h"
+#include "iree/samples/riscv_collection/riscv_mul_NT/riscv_mul.h"
 
 // A function to create the HAL device from the different backend targets.
 // The HAL device is returned based on the implementation, and it must be
@@ -37,7 +37,7 @@ iree_status_t create_device_with_static_loader(iree_hal_device_t** device) {
 
   // Load the statically embedded library
   const iree_hal_executable_library_header_t** static_library =
-      simple_mul_dispatch_0_library_query(
+      riscv_mul_dispatch_0_library_query(
           IREE_HAL_EXECUTABLE_LIBRARY_LATEST_VERSION, /*reserved=*/NULL);
   const iree_hal_executable_library_header_t** libraries[1] = {static_library};
 
@@ -51,11 +51,9 @@ iree_status_t create_device_with_static_loader(iree_hal_device_t** device) {
 
   // Create the device and release the executor and loader afterwards.
   if (iree_status_is_ok(status)) {
-    iree_string_view_t identifier = iree_make_cstring_view("dylib");
-    status = iree_hal_sync_device_create(identifier, &params,
+    iree_hal_sync_device_create(iree_make_cstring_view("dylib"), &params,
                                 /*loader count*/ 1, &library_loader,
                                 iree_allocator_system(), device);
-    iree_status_fprint(stderr, status);
   }
   iree_hal_executable_loader_release(library_loader);
 
@@ -63,7 +61,6 @@ iree_status_t create_device_with_static_loader(iree_hal_device_t** device) {
 }
 
 iree_status_t Run() {
-  printf("hiz\n");
   IREE_RETURN_IF_ERROR(iree_hal_module_register_types());
   iree_status_t status = iree_ok_status();
 
@@ -78,7 +75,6 @@ iree_status_t Run() {
   }
 
   iree_vm_module_t* hal_module = NULL;
-  printf("dev:%p\n",device);
   if (iree_status_is_ok(status)) {
     status =
         iree_hal_module_create(device, iree_allocator_system(), &hal_module);
@@ -86,7 +82,7 @@ iree_status_t Run() {
 
   // Load bytecode module from the embedded data. Append to the session.
   const struct iree_file_toc_t* module_file_toc =
-      iree_samples_static_library_simple_mul_create();
+      iree_samples_static_library_riscv_mul_create();
   iree_const_byte_span_t module_data =
       iree_make_const_byte_span(module_file_toc->data, module_file_toc->size);
   iree_vm_module_t* bytecode_module = NULL;
@@ -95,7 +91,6 @@ iree_status_t Run() {
                                             iree_allocator_system(),
                                             &bytecode_module);
   }
-  printf("Done initializing Module and device\n");
 
   // Allocate a context that will hold the module state across invocations.
   iree_vm_context_t* context = NULL;
@@ -103,19 +98,16 @@ iree_status_t Run() {
   IREE_RETURN_IF_ERROR(iree_vm_context_create_with_modules(
       instance, &modules[0], IREE_ARRAYSIZE(modules), iree_allocator_system(),
       &context));
-  printf("Done initializing VM Context and bytecode module\n");
   iree_vm_module_release(hal_module);
   iree_vm_module_release(bytecode_module);
 
-  printf("Done releasing VM Context and bytecode module\n");
 
   // Lookup the entry point function call.
-  const char kMainFunctionName[] = "module.simple_mul";
+  const char kMainFunctionName[] = "module.riscv_mul";
   iree_vm_function_t main_function;
   IREE_RETURN_IF_ERROR(iree_vm_context_resolve_function(
       context, iree_make_cstring_view(kMainFunctionName), &main_function));
 
-  printf("Done initializing Entry name\n");
 
   // Populate initial values for 4 * 2 = 8.
   const int kElementCount = 4;
@@ -145,7 +137,6 @@ iree_status_t Run() {
                                   sizeof(float) * kElementCount),
         &arg1_buffer_view);
   }
-  printf("Done initializing Buffer View\n");
 
   // Queue buffer views for input.
   iree_vm_list_t* inputs = NULL;
@@ -171,7 +162,6 @@ iree_status_t Run() {
                            /*capacity=*/1, iree_allocator_system(), &outputs),
                        "can't allocate output vm list");
 
-  printf("Done initializing Inputs and Output\n");
 
 
   // Synchronously invoke the function.
@@ -179,7 +169,6 @@ iree_status_t Run() {
                                       /*policy=*/NULL, inputs, outputs,
                                       iree_allocator_system()));
 
-  printf("Done invoking\n");
 
   // Get the result buffers from the invocation.
   iree_hal_buffer_view_t* ret_buffer_view =
@@ -204,13 +193,11 @@ iree_status_t Run() {
                                 "result does not match element count ");
     }
   }
-  printf("wutt!\n");
   if (iree_status_is_ok(status)) {
     const float* data = (const float*)mapped_memory.contents.data;
     for (iree_host_size_t i = 0;
          i < mapped_memory.contents.data_length / sizeof(float); ++i) {
       if (data[i] != 8.0f) {
-        printf("%f,",data[i]);
         status = iree_make_status(IREE_STATUS_UNKNOWN, "result mismatches");
       }
     }
@@ -236,6 +223,6 @@ int main() {
     iree_status_free(result);
     return -1;
   }
-  printf("static_library_run passed\n");
+  printf("static_library_run passedss\n");
   return 0;
 }
