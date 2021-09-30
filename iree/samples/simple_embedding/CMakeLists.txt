@@ -264,6 +264,40 @@ iree_run_binary_test(
 
 endif()
 
+iree_cc_binary(
+  NAME
+    simple_embedding_rocm
+  SRCS
+    "device_rocm.c"
+    "simple_embedding.c"
+  DEPS
+    ::simple_embedding_test_bytecode_module_rocm_c
+    iree::base
+    iree::hal
+    experimental::rocm::registration
+    iree::modules::hal
+    iree::vm
+    iree::vm::bytecode_module
+)
+
+iree_bytecode_module(
+  NAME
+    simple_embedding_test_bytecode_module_rocm
+  SRC
+    "simple_embedding_test.mlir"
+  C_IDENTIFIER
+    "iree_samples_simple_embedding_test_module_rocm"
+  FLAGS
+    "-iree-input-type=mhlo"
+    "-iree-mlir-to-vm-bytecode-module"
+    "-iree-hal-target-backends=rocm"
+    "-iree-rocm-target-chip=gfx908"
+    "-iree-rocm-link-bc=true"
+    "-iree-rocm-bc-dir=/home/stanley/nod/bitcode"
+  PUBLIC
+)
+
+
 if(${IREE_HAL_DRIVER_CUDA} AND (${IREE_TARGET_BACKEND_CUDA} OR DEFINED IREE_HOST_BINARY_ROOT))
 
 iree_cc_binary(
