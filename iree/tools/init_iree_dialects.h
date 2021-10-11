@@ -23,6 +23,7 @@
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/VM/IR/VMDialect.h"
 #include "iree/compiler/Dialect/Vulkan/IR/VulkanDialect.h"
+#include "iree/compiler/Dialect/Nod/IR/nod_dialect.h"
 #include "mlir/IR/Dialect.h"
 
 namespace mlir {
@@ -40,6 +41,7 @@ inline void registerIreeDialects(DialectRegistry &registry) {
                   IREE::VMVX::VMVXDialect,
                   IREE::Vulkan::VulkanDialect,
                   mlir::iree::IREEDialect,
+                  IREE::Nod::NodDialect,
                   mlir::iree_pydm::IREEPyDMDialect>();
   // clang-format on
 
