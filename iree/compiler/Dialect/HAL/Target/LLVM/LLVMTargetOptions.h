@@ -59,6 +59,9 @@ struct LLVMTargetOptions {
   // True to keep linker artifacts for debugging.
   bool keepLinkerArtifacts = false;
 
+  // True to use Nod's Special Hardware
+  bool useNodHardware = false;
+
   // Build for IREE static library loading using this output path for
   // a "{staticLibraryOutput}.o" object file and "{staticLibraryOutput}.h"
   // header file.

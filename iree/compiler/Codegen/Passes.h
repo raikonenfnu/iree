@@ -174,6 +174,16 @@ void addTensorToVectorsPassPipeline(OpPassManager &passManager,
 /// module within the IREE::HAL::ExecutableOp.
 void buildLLVMCPUCodegenPassPipeline(OpPassManager &passManager);
 
+//----------------------------------------------------------------------------//
+// LLVM-Nod-CPU Pass Pipelines for lowering to LLVM dialect.
+//----------------------------------------------------------------------------//
+
+/// Like LLVM-CPU But with special passes for Custom Hardware
+/// Populates passes needed to lower a XLA HLO op to LLVM dialect via the
+/// structured ops path. The pass manager `pm` in here should operate on the
+/// module within the IREE::HAL::ExecutableOp.
+void buildLLVMNodCPUCodegenPassPipeline(OpPassManager &passManager);
+
 //------------------------------------------------------------------------------
 // LLVMGPU
 //------------------------------------------------------------------------------

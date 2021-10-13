@@ -165,6 +165,13 @@ LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
       llvm::cl::init(targetOptions.keepLinkerArtifacts));
   targetOptions.keepLinkerArtifacts = clKeepLinkerArtifacts;
 
+    static llvm::cl::opt<bool> clUseNodHardware(
+      "iree-llvm-use-nod-hardware",
+      llvm::cl::desc("Enable Nod Custom Hardware Optimizations"),
+      llvm::cl::init(targetOptions.useNodHardware));
+    targetOptions.useNodHardware = clUseNodHardware;
+
+
   static llvm::cl::opt<std::string> clStaticLibraryOutputPath(
       "iree-llvm-static-library-output-path",
       llvm::cl::desc(

@@ -112,5 +112,14 @@ void buildLLVMCPUCodegenPassPipeline(OpPassManager &passManager) {
   addLowerToLLVMPasses(nestedModulePM);
 }
 
+// Special Pipeline for custom Hardware Optimizations
+void buildLLVMNodCPUCodegenPassPipeline(OpPassManager &passManager) {
+  llvm::outs()<<"Compiling with Nod Custom\n";
+  passManager.addPass(createLLVMCPULowerExecutableTargetPass());
+  // passManager.addPass(createNodHardwarePass());
+  OpPassManager &nestedModulePM = passManager.nest<ModuleOp>();
+  addLowerToLLVMPasses(nestedModulePM);
+}
+
 }  // namespace iree_compiler
 }  // namespace mlir
