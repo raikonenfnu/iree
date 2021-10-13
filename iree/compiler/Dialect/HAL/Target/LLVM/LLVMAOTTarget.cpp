@@ -90,7 +90,11 @@ class LLVMAOTTargetBackend final : public TargetBackend {
   }
 
   void buildTranslationPassPipeline(OpPassManager &passManager) override {
-    buildLLVMCPUCodegenPassPipeline(passManager);
+    if(options_.useNodHardware) {
+      buildLLVMNodCPUCodegenPassPipeline(passManager);
+    } else {
+      buildLLVMCPUCodegenPassPipeline(passManager);
+    }
   }
 
   LogicalResult linkExecutables(mlir::ModuleOp moduleOp) override {
