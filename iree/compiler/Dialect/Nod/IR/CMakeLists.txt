@@ -67,4 +67,26 @@ iree_c_embed_data(
   PUBLIC
 )
 
+message(STATUS "MKL Directory: ${MKL_DIR}")
+iree_cc_library(
+  NAME
+    module
+  HDRS
+    "module.h"
+  SRCS
+    "module.cc"
+  INCLUDES
+    ${MKL_DIR}/include
+  DEPS
+    iree::base
+    iree::base::cc
+    iree::hal
+    iree::modules::hal
+    iree::vm
+    iree::vm::cc
+  PUBLIC
+)
+target_link_directories(iree_compiler_Dialect_Nod_IR_module PUBLIC ${MKL_DIR}/lib/intel64)
+target_link_libraries(iree_compiler_Dialect_Nod_IR_module PUBLIC mkl_intel_ilp64 mkl_gnu_thread mkl_core gomp)
+
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###

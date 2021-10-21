@@ -26,6 +26,8 @@ void populateNodToHALPatterns(MLIRContext *context,
       context, typeConverter);
   patterns.insert<HALOpConversion<MessageToTensorOp, MessageToBufferOp>>(
       context, typeConverter);
+  patterns.insert<HALOpConversion<MatmulTensorOp, MatmulBufferOp>>(
+      context, typeConverter);
 }
 
 void populateNodToVMPatterns(MLIRContext *context,
@@ -39,6 +41,8 @@ void populateNodToVMPatterns(MLIRContext *context,
       context, importSymbols, typeConverter, "nod.buffer_to_message");
   patterns.insert<VMImportOpConversion<IREE::Nod::MessageToBufferOp>>(
       context, importSymbols, typeConverter, "nod.message_to_buffer");
+  patterns.insert<VMImportOpConversion<IREE::Nod::MatmulBufferOp>>(
+      context, importSymbols, typeConverter, "nod.matmul_buffer");
   patterns.insert<VMImportOpConversion<IREE::Nod::PrintOp>>(
       context, importSymbols, typeConverter, "nod.print");
   patterns.insert<VMImportOpConversion<IREE::Nod::ReverseOp>>(

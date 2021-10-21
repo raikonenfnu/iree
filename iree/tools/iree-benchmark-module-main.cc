@@ -19,6 +19,7 @@
 #include "iree/base/internal/flags.h"
 #include "iree/base/status_cc.h"
 #include "iree/base/tracing.h"
+#include "iree/compiler/Dialect/Nod/IR/module.h"
 #include "iree/hal/api.h"
 #include "iree/hal/drivers/init.h"
 #include "iree/modules/hal/module.h"
@@ -159,6 +160,7 @@ class IREEBenchmark {
     inputs_.reset();
     iree_vm_context_release(context_);
     iree_vm_module_release(hal_module_);
+    iree_vm_module_release(native_module_);
     iree_vm_module_release(input_module_);
     if (FLAG_print_statistics) {
       IREE_IGNORE_ERROR(iree_hal_allocator_statistics_fprint(
@@ -171,7 +173,7 @@ class IREEBenchmark {
   iree_status_t Register() {
     IREE_TRACE_SCOPE0("IREEBenchmark::Register");
 
-    if (!instance_ || !device_ || !hal_module_ || !context_ || !input_module_) {
+    if (!instance_ || !device_ || !hal_module_ || !context_ || !input_module_ || !native_module_) {
       IREE_RETURN_IF_ERROR(Init());
     }
 
@@ -204,9 +206,13 @@ class IREEBenchmark {
                                   module_data_.size()),
         iree_allocator_null(), iree_allocator_system(), &input_module_));
 
+    IREE_CHECK_OK(iree_custom_native_module_register_types());
+    IREE_CHECK_OK(iree_custom_native_module_create(iree_allocator_system(),
+                                                   &native_module_));
+
     // Order matters. The input module will likely be dependent on the hal
     // module.
-    std::array<iree_vm_module_t*, 2> modules = {hal_module_, input_module_};
+    std::array<iree_vm_module_t*, 3> modules = {hal_module_, native_module_, input_module_};
     IREE_RETURN_IF_ERROR(iree_vm_context_create_with_modules(
         instance_, IREE_VM_CONTEXT_FLAG_NONE, modules.data(), modules.size(),
         iree_allocator_system(), &context_));
@@ -281,6 +287,7 @@ class IREEBenchmark {
   iree_vm_instance_t* instance_ = nullptr;
   iree_hal_device_t* device_ = nullptr;
   iree_vm_module_t* hal_module_ = nullptr;
+  iree_vm_module_t* native_module_ = nullptr;
   iree_vm_context_t* context_ = nullptr;
   iree_vm_module_t* input_module_ = nullptr;
   iree::vm::ref<iree_vm_list_t> inputs_;

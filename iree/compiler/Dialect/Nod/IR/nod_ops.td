@@ -98,6 +98,38 @@ def NOD_MessageToBufferOp : Op<NOD_Dialect, "message_to_buffer"> {
   );
 }
 
+def NOD_MatmulTensorOp : Op<NOD_Dialect, "matmul_tensor"> {
+  let summary = [{parses message contents as a tensor}];
+  let description = [{
+    Parses the message containing a IREE buffer parser-formatted tensor.
+  }];
+
+  let arguments = (ins
+    AnyTensor:$lhs_operand,
+    AnyTensor:$rhs_operand,
+    AnyTensor:$out_operand
+  );
+  let results = (outs
+    AnyTensor:$result
+  );
+}
+
+def NOD_MatmulBufferOp : Op<NOD_Dialect, "matmul_buffer"> {
+  let summary = [{parses message contents as a buffer}];
+  let description = [{
+    Parses the message containing a IREE buffer parser-formatted tensor.
+  }];
+
+  let arguments = (ins
+    HAL_BufferView:$lhs_buffer_view,
+    HAL_BufferView:$rhs_buffer_view,
+    HAL_BufferView:$out_buffer_view
+  );
+  let results = (outs
+    HAL_BufferView:$result
+  );
+}
+
 def NOD_PrintOp : Op<NOD_Dialect, "print"> {
   let summary = [{prints a message zero or more times}];
   let description = [{

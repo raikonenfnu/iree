@@ -27,6 +27,15 @@ vm.import @message_to_buffer(
 ) -> !vm.ref<!hal.buffer_view>
 attributes {nosideeffects}
 
+// Formats the tensor using the IREE buffer printer to have a shape/type and
+// the contents as a string.
+vm.import @matmul_buffer(
+  %lhs_buffer_view : !vm.ref<!hal.buffer_view>,
+  %rhs_buffer_view : !vm.ref<!hal.buffer_view>,
+  %out_buffer_view : !vm.ref<!hal.buffer_view>
+) -> !vm.ref<!hal.buffer_view>
+attributes {nosideeffects}
+
 // Prints the %message provided %count times.
 // Maps to the IREE::Nod::PrintOp.
 vm.import @print(

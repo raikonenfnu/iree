@@ -4,7 +4,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree/samples/nod_modules/module.h"
+#include "iree/compiler/Dialect/Nod/IR/module.h"
 
 #include <atomic>
 #include <cstdint>
@@ -14,6 +14,8 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <iostream>
+#include <math.h>
 
 #include "iree/base/api.h"
 #include "iree/base/status_cc.h"
@@ -21,7 +23,9 @@
 #include "iree/modules/hal/module.h"
 #include "iree/vm/native_module_cc.h"
 #include "iree/vm/ref_cc.h"
+#include "mkl.h"
 
+#define BYTE_TO_BIT 8
 //===----------------------------------------------------------------------===//
 // !custom.message type
 //===----------------------------------------------------------------------===//
@@ -153,6 +157,7 @@ class CustomModuleState final {
     // Convert the buffer view to a [shape]x[type]=[contents] string.
     std::string string_value(4096, '\0');
     iree_status_t status;
+    int iter = 0;
     do {
       iree_host_size_t actual_length = 0;
       status = iree_hal_buffer_view_format(
@@ -169,6 +174,140 @@ class CustomModuleState final {
         iree_allocator_system(), &message));
     return std::move(message);
   }
+
+  void SomeMatmul() {
+        double *A, *B, *C;
+        int m, n, k, i, j;
+        double alpha, beta;
+        m = 4, k = 4, n = 4;
+        alpha = 1.0; beta = 0.0;
+        A = (double *)mkl_malloc( m*k*sizeof( double ), 64 );
+        B = (double *)mkl_malloc( k*n*sizeof( double ), 64 );
+        C = (double *)mkl_malloc( m*n*sizeof( double ), 64 );
+        if (A == NULL || B == NULL || C == NULL) {
+          printf( "\n ERROR: Can't allocate memory for matrices. Aborting... \n\n");
+          mkl_free(A);
+          mkl_free(B);
+          mkl_free(C);
+        }
+        printf (" Intializing matrix data \n\n");
+        for (i = 0; i < (m*k); i++) {
+          A[i] = 3.0;
+        }
+        for (i = 0; i < (k*n); i++) {
+          B[i] = 1.0;
+        }
+        for (i = 0; i < (m*n); i++) {
+          C[i] = 0.0;
+        }
+        cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+        m, n, k, alpha, A, k, B, n, beta, C, n);
+
+        printf ("\n Top left corner of matrix C: \n");
+        for (i=0; i<std::min(m,6); i++) {
+        for (j=0; j<std::min(n,6); j++) {
+        printf ("%12.5G", C[j+i*n]);
+        }
+        printf ("\n");
+        }
+        printf ("\n Deallocating memory \n\n");
+        mkl_free(A);
+        mkl_free(B);
+        mkl_free(C);
+  }
+
+    template<typename T>
+    void Matmul(T* A, T* B, T** C, vm::ref<iree_hal_buffer_view_t> lhs_view, vm::ref<iree_hal_buffer_view_t> rhs_view) {
+      T alpha, beta;
+      alpha = 1.0; beta = 0.0;
+      const int* lhs_shape = iree_hal_buffer_view_shape_dims(lhs_view.get());
+      const int* rhs_shape = iree_hal_buffer_view_shape_dims(rhs_view.get());
+      int m = lhs_shape[0];
+      int k = rhs_shape[0];
+      int n = rhs_shape[1];
+      *C = (T *)mkl_malloc(m*n*sizeof(T), sizeof(T)*BYTE_TO_BIT);
+      cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+          m, n, k, alpha, A, k, B, n, beta, *C, n);
+      return;
+    }
+
+    template <typename T>
+    void MatmulDirect(T* A, T* B, T* C, vm::ref<iree_hal_buffer_view_t> lhs_view, vm::ref<iree_hal_buffer_view_t> rhs_view) {
+      T alpha, beta;
+      alpha = 1.0; beta = 0.0;
+      const int* lhs_shape = iree_hal_buffer_view_shape_dims(lhs_view.get());
+      const int* rhs_shape = iree_hal_buffer_view_shape_dims(rhs_view.get());
+      int m = lhs_shape[0];
+      int k = rhs_shape[0];
+      int n = rhs_shape[1];
+      cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+          m, n, k, alpha, A, k, B, n, beta, C, n);
+      return;
+    }
+
+    template <typename T>
+    iree_status_t MatrixFromBuffer(vm::ref<iree_hal_buffer_view_t> buffer_view, T** matrix) {
+      // 1.Get shape from buffer and allocate matrix
+      iree_host_size_t lhs_rank = iree_hal_buffer_view_shape_rank(buffer_view.get());
+      const int* lhs_shape = iree_hal_buffer_view_shape_dims(buffer_view.get());
+
+      // 1.Get data from buffer and set to matrix
+      iree_hal_buffer_mapping_t mapped_memory;
+      IREE_RETURN_IF_ERROR(iree_hal_buffer_map_range(
+          iree_hal_buffer_view_buffer(buffer_view.get()), IREE_HAL_MEMORY_ACCESS_READ,
+          0, IREE_WHOLE_BUFFER, &mapped_memory));
+          (*matrix) = ((T*)mapped_memory.contents.data);
+        iree_hal_buffer_unmap_range(&mapped_memory);
+        return iree_ok_status();
+    }
+
+    template <typename T>
+    iree_status_t BufferFromMatrix(iree_hal_buffer_view_t** out_buffer_view, T* matrix, iree_hal_dim_t* kShape) {
+      iree_status_t status;
+      int kElementCount = kShape[0]*kShape[1];
+      vm::ref<iree_hal_buffer_t> buffer;
+      iree_hal_memory_type_t input_memory_type =
+          IREE_HAL_MEMORY_TYPE_HOST_LOCAL | IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE;
+      IREE_RETURN_IF_ERROR(iree_hal_allocator_allocate_buffer(
+          host_local_allocator_.get(), input_memory_type,
+          IREE_HAL_BUFFER_USAGE_ALL, sizeof(T) * kElementCount, &buffer));
+
+      // Write Matrix to buffer
+      status = iree_hal_buffer_write_data(buffer.get(), 0, matrix, kElementCount*sizeof(T));
+
+      // Wrap buffers in shaped buffer views.
+      IREE_RETURN_IF_ERROR(iree_hal_buffer_view_create(
+          buffer.get(), kShape, IREE_ARRAYSIZE(kShape), IREE_HAL_ELEMENT_TYPE_FLOAT_32,
+          IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR, out_buffer_view));
+        return iree_ok_status();
+    }
+
+    template <typename T>
+    iree_status_t WriteToBuffer(vm::ref<iree_hal_buffer_view_t> out_buffer_view, T* matrix, iree_hal_dim_t* kShape) {
+      iree_status_t status;
+      int kElementCount = kShape[0]*kShape[1];
+      // Write Matrix to buffer
+      status = iree_hal_buffer_write_data(iree_hal_buffer_view_buffer(out_buffer_view.get()), 0, matrix, kElementCount*sizeof(T));
+      return iree_ok_status();
+    }
+
+  // Custom Nod Matmul
+  StatusOr<vm::ref<iree_hal_buffer_view_t>> MatmulBuffer(
+    vm::ref<iree_hal_buffer_view_t> lhs_buffer_view, vm::ref<iree_hal_buffer_view_t> rhs_buffer_view, vm::ref<iree_hal_buffer_view_t> res_buffer_view) {
+
+    // Convert the buffer view to a [shape]x[type]=[contents] string.
+      iree_status_t status;
+      float *A, *B, *C;
+      iree_hal_dim_t m = iree_hal_buffer_view_shape_dim(lhs_buffer_view.get(), 0);
+      iree_hal_dim_t n = iree_hal_buffer_view_shape_dim(rhs_buffer_view.get(), 1);
+      static iree_hal_dim_t kOutputShape[] = {m, n};
+      vm::ref<iree_hal_buffer_view_t> out_buffer_view;
+      MatrixFromBuffer(lhs_buffer_view, &A);
+      MatrixFromBuffer(rhs_buffer_view, &B);
+      MatrixFromBuffer(res_buffer_view, &C);
+      MatmulDirect(A, B, C, lhs_buffer_view, rhs_buffer_view);
+      return std::move(res_buffer_view);
+    }
 
   // custom.message_to_buffer(%message) -> %buffer_view
   StatusOr<vm::ref<iree_hal_buffer_view_t>> MessageToBuffer(
@@ -234,6 +373,8 @@ class CustomModuleState final {
 static const vm::NativeFunction<CustomModuleState> kCustomModuleFunctions[] = {
     vm::MakeNativeFunction("buffer_to_message",
                            &CustomModuleState::BufferToMessage),
+    vm::MakeNativeFunction("matmul_buffer",
+                           &CustomModuleState::MatmulBuffer),
     vm::MakeNativeFunction("message_to_buffer",
                            &CustomModuleState::MessageToBuffer),
     vm::MakeNativeFunction("print", &CustomModuleState::Print),

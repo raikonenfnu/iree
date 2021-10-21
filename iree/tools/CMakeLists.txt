@@ -66,6 +66,7 @@ iree_cc_binary(
     iree::base::internal::file_io
     iree::base::internal::flags
     iree::base::tracing
+    iree::compiler::Dialect::Nod::IR::module
     iree::hal
     iree::hal::drivers
     iree::modules::hal
@@ -219,6 +220,7 @@ if(${IREE_BUILD_COMPILER})
       iree::compiler::Dialect::VM::Transforms
       iree::compiler::Dialect::Vulkan::IR
       iree::compiler::Dialect::Nod::IR
+      iree::compiler::Dialect::Nod::Transforms
       iree::compiler::InputConversion::Common
       iree::compiler::InputConversion::MHLO
       iree::compiler::InputConversion::TOSA
