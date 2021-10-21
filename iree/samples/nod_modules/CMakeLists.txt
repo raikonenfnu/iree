@@ -15,23 +15,6 @@ if(NOT "${IREE_TARGET_BACKEND_DYLIB-LLVM-AOT}" OR
   return()
 endif()
 
-iree_cc_library(
-  NAME
-    module
-  HDRS
-    "module.h"
-  SRCS
-    "module.cc"
-  DEPS
-    iree::base
-    iree::base::cc
-    iree::hal
-    iree::modules::hal
-    iree::vm
-    iree::vm::cc
-  PUBLIC
-)
-
 iree_bytecode_module(
   NAME
     nod_modules_test_module
@@ -54,7 +37,7 @@ iree_cc_test(
     "nod_modules_test.cc"
   DEPS
     ::nod_modules_test_module_c
-    ::module
+    iree::compiler::Dialect::Nod::IR::module
     iree::base
     iree::base::logging
     iree::hal

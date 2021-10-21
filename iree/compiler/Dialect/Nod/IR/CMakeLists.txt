@@ -67,4 +67,38 @@ iree_c_embed_data(
   PUBLIC
 )
 
+message(STATUS "MKL Directory: ${MKL_DIR}")
+iree_cc_library(
+  NAME
+    module
+  HDRS
+    "module.h"
+  SRCS
+    "module.cc"
+  INCLUDES
+    ${MKL_DIR}/include
+  DEPS
+    iree::base
+    iree::base::cc
+    iree::hal
+    iree::modules::hal
+    iree::vm
+    iree::vm::cc
+  PUBLIC
+)
+if(NOT BACKEND)
+    set(BACKEND "")
+endif()
+
+
+if( BACKEND STREQUAL "mkl")
+  target_compile_definitions(iree_compiler_Dialect_Nod_IR_module PUBLIC BACKEND=0)
+  target_link_directories(iree_compiler_Dialect_Nod_IR_module PUBLIC ${MKL_DIR}/lib/intel64)
+  target_link_libraries(iree_compiler_Dialect_Nod_IR_module PUBLIC mkl_intel_ilp64 mkl_gnu_thread mkl_core gomp)
+elseif( BACKEND STREQUAL "accelerate")
+  set(BLA_VENDOR Apple)
+  target_compile_definitions(iree_compiler_Dialect_Nod_IR_module PUBLIC BACKEND=1)
+  target_include_directories(iree_compiler_Dialect_Nod_IR_module PRIVATE /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/Accelerate.framework/Versions/Current/Frameworks/vecLib.framework/Headers)
+  target_link_libraries(iree_compiler_Dialect_Nod_IR_module PRIVATE ${BLAS_LIBRARIES})
+endif()
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###

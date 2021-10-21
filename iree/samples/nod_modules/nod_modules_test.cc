@@ -11,7 +11,7 @@
 #include "iree/hal/dylib/registration/driver_module_sync.h"
 #include "iree/modules/hal/module.h"
 #include "iree/samples/nod_modules/nod_modules_test_module_c.h"
-#include "iree/samples/nod_modules/module.h"
+#include "iree/compiler/Dialect/Nod/IR/module.h"
 #include "iree/testing/gtest.h"
 #include "iree/testing/status_matchers.h"
 #include "iree/vm/api.h"
@@ -171,6 +171,66 @@ TEST_F(CustomModulesTest, PrintTensor) {
   IREE_ASSERT_OK(iree_custom_message_read_value(printed_message, result_buffer,
                                                 IREE_ARRAYSIZE(result_buffer)));
   EXPECT_STREQ("2x4xf32=[0 1 2 3][4 5 6 7]", result_buffer);
+}
+
+TEST_F(CustomModulesTest, matmul) {
+  // Allocate the buffer we'll be printing.
+  static iree_hal_dim_t kShape0[] = {2, 4};
+  static float kBufferContents[2 * 4] = {0.0f, 1.0f, 2.0f, 3.0f,
+                                         4.0f, 5.0f, 6.0f, 7.0f};
+  iree_hal_buffer_view_t* lhs_buffer_view = nullptr;
+  IREE_ASSERT_OK(iree_hal_buffer_view_wrap_or_clone_heap_buffer(
+      hal_allocator_, kShape0, IREE_ARRAYSIZE(kShape0),
+      IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
+      IREE_HAL_MEMORY_TYPE_HOST_LOCAL | IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
+      IREE_HAL_MEMORY_ACCESS_ALL, IREE_HAL_BUFFER_USAGE_ALL,
+      iree_make_byte_span((void*)kBufferContents, sizeof(kBufferContents)),
+      iree_allocator_null(), &lhs_buffer_view));
+
+  static iree_hal_dim_t kShape1[] = {4, 2};
+  iree_hal_buffer_view_t* rhs_buffer_view = nullptr;
+  IREE_ASSERT_OK(iree_hal_buffer_view_wrap_or_clone_heap_buffer(
+      hal_allocator_, kShape1, IREE_ARRAYSIZE(kShape1),
+      IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
+      IREE_HAL_MEMORY_TYPE_HOST_LOCAL | IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE,
+      IREE_HAL_MEMORY_ACCESS_ALL, IREE_HAL_BUFFER_USAGE_ALL,
+      iree_make_byte_span((void*)kBufferContents, sizeof(kBufferContents)),
+      iree_allocator_null(), &rhs_buffer_view));
+
+  // Pass in the tensor as an expanded HAL buffer.
+  iree::vm::ref<iree_vm_list_t> inputs;
+  IREE_ASSERT_OK(iree_vm_list_create(/*element_type=*/nullptr, 2,
+                                     iree_allocator_system(), &inputs));
+  iree_vm_ref_t lhs_buffer_view_ref =
+      iree_hal_buffer_view_move_ref(lhs_buffer_view);
+  iree_vm_ref_t rhs_buffer_view_ref =
+      iree_hal_buffer_view_move_ref(rhs_buffer_view);
+  IREE_ASSERT_OK(
+      iree_vm_list_push_ref_move(inputs.get(), &lhs_buffer_view_ref));
+  IREE_ASSERT_OK(
+      iree_vm_list_push_ref_move(inputs.get(), &rhs_buffer_view_ref));
+
+
+  // Prepare outputs list to accept the results from the invocation.
+  iree::vm::ref<iree_vm_list_t> outputs;
+  IREE_ASSERT_OK(iree_vm_list_create(/*element_type=*/nullptr, 1,
+                                     iree_allocator_system(), &outputs));
+
+  // Synchronously invoke the function.
+  IREE_ASSERT_OK(iree_vm_invoke(context_, LookupFunction("matmul"),
+                                IREE_VM_INVOCATION_FLAG_NONE,
+                                /*policy=*/nullptr, inputs.get(), outputs.get(),
+                                iree_allocator_system()));
+
+  // Read back the message that we printed inside of the module.
+  iree_custom_message_t* printed_message =
+      (iree_custom_message_t*)iree_vm_list_get_ref_deref(
+          outputs.get(), 0, iree_custom_message_get_descriptor());
+  ASSERT_NE(nullptr, printed_message);
+  char result_buffer[256];
+  IREE_ASSERT_OK(iree_custom_message_read_value(printed_message, result_buffer,
+                                                IREE_ARRAYSIZE(result_buffer)));
+  EXPECT_STREQ("2x2xf32=[28 34][76 98]", result_buffer);
 }
 
 TEST_F(CustomModulesTest, RoundTripTensor) {

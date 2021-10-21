@@ -4,7 +4,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#include "iree/samples/nod_modules/module.h"
+#include "iree/compiler/Dialect/Nod/IR/module.h"
 
 #include <atomic>
 #include <cstdint>
@@ -14,6 +14,8 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <iostream>
+#include <math.h>
 
 #include "iree/base/api.h"
 #include "iree/base/status_cc.h"
@@ -21,7 +23,13 @@
 #include "iree/modules/hal/module.h"
 #include "iree/vm/native_module_cc.h"
 #include "iree/vm/ref_cc.h"
+#if(BACKEND == 0)
+#include "mkl.h"
+#elif(BACKEND == 0)
+#include "cblas.h"
+#endif
 
+#define BYTE_TO_BIT 8
 //===----------------------------------------------------------------------===//
 // !custom.message type
 //===----------------------------------------------------------------------===//
@@ -170,6 +178,54 @@ class CustomModuleState final {
     return std::move(message);
   }
 
+    template <typename T>
+    void MatmulDirect(T* A, T* B, T* C, vm::ref<iree_hal_buffer_view_t> lhs_view, vm::ref<iree_hal_buffer_view_t> rhs_view) {
+      T alpha, beta;
+      alpha = 1.0; beta = 0.0;
+      const int* lhs_shape = iree_hal_buffer_view_shape_dims(lhs_view.get());
+      const int* rhs_shape = iree_hal_buffer_view_shape_dims(rhs_view.get());
+      int m = lhs_shape[0];
+      int k = rhs_shape[0];
+      int n = rhs_shape[1];
+      #ifdef BACKEND
+      cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+          m, n, k, alpha, A, k, B, n, beta, C, n);
+      #endif
+      return;
+    }
+
+    template <typename T>
+    iree_status_t MatrixFromBuffer(vm::ref<iree_hal_buffer_view_t> buffer_view, T** matrix) {
+      // 1.Get shape from buffer and allocate matrix
+      iree_host_size_t lhs_rank = iree_hal_buffer_view_shape_rank(buffer_view.get());
+      const int* lhs_shape = iree_hal_buffer_view_shape_dims(buffer_view.get());
+
+      // 1.Get data from buffer and set to matrix
+      iree_hal_buffer_mapping_t mapped_memory;
+      IREE_RETURN_IF_ERROR(iree_hal_buffer_map_range(
+          iree_hal_buffer_view_buffer(buffer_view.get()), IREE_HAL_MEMORY_ACCESS_READ,
+          0, IREE_WHOLE_BUFFER, &mapped_memory));
+          (*matrix) = ((T*)mapped_memory.contents.data);
+        iree_hal_buffer_unmap_range(&mapped_memory);
+        return iree_ok_status();
+    }
+
+  // Custom Nod Matmul
+  StatusOr<vm::ref<iree_hal_buffer_view_t>> MatmulBuffer(
+    vm::ref<iree_hal_buffer_view_t> lhs_buffer_view, vm::ref<iree_hal_buffer_view_t> rhs_buffer_view, vm::ref<iree_hal_buffer_view_t> res_buffer_view) {
+
+    // Convert the buffer view to a [shape]x[type]=[contents] string.
+      float *A, *B, *C;
+      iree_hal_dim_t m = iree_hal_buffer_view_shape_dim(lhs_buffer_view.get(), 0);
+      iree_hal_dim_t n = iree_hal_buffer_view_shape_dim(rhs_buffer_view.get(), 1);
+      vm::ref<iree_hal_buffer_view_t> out_buffer_view;
+      MatrixFromBuffer(lhs_buffer_view, &A);
+      MatrixFromBuffer(rhs_buffer_view, &B);
+      MatrixFromBuffer(res_buffer_view, &C);
+      MatmulDirect(A, B, C, lhs_buffer_view, rhs_buffer_view);
+      return std::move(res_buffer_view);
+    }
+
   // custom.message_to_buffer(%message) -> %buffer_view
   StatusOr<vm::ref<iree_hal_buffer_view_t>> MessageToBuffer(
       vm::ref<iree_custom_message_t> message) {
@@ -234,6 +290,8 @@ class CustomModuleState final {
 static const vm::NativeFunction<CustomModuleState> kCustomModuleFunctions[] = {
     vm::MakeNativeFunction("buffer_to_message",
                            &CustomModuleState::BufferToMessage),
+    vm::MakeNativeFunction("matmul_buffer",
+                           &CustomModuleState::MatmulBuffer),
     vm::MakeNativeFunction("message_to_buffer",
                            &CustomModuleState::MessageToBuffer),
     vm::MakeNativeFunction("print", &CustomModuleState::Print),
