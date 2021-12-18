@@ -18,6 +18,8 @@ iree_cc_library(
   SRCS
     "allocator.c"
     "allocator.h"
+    "allocator_caching.c"
+    "allocator_caching.h"
     "allocator_heap.c"
     "buffer.c"
     "buffer.h"

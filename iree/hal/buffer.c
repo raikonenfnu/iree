@@ -603,6 +603,7 @@ IREE_API_EXPORT iree_status_t iree_hal_buffer_read_data(
 IREE_API_EXPORT iree_status_t iree_hal_buffer_write_data(
     iree_hal_buffer_t* target_buffer, iree_device_size_t target_offset,
     const void* source_buffer, iree_device_size_t data_length) {
+  iree_hal_buffer_mapping_t target_mapping;
   if (data_length == 0) {
     return iree_ok_status();  // No-op.
   }
@@ -610,12 +611,10 @@ IREE_API_EXPORT iree_status_t iree_hal_buffer_write_data(
   IREE_ASSERT_ARGUMENT(source_buffer);
 
   IREE_TRACE_ZONE_BEGIN(z0);
-  iree_hal_buffer_mapping_t target_mapping;
   IREE_RETURN_AND_END_ZONE_IF_ERROR(
       z0, iree_hal_buffer_map_range(
               target_buffer, IREE_HAL_MEMORY_ACCESS_DISCARD_WRITE,
               target_offset, data_length, &target_mapping));
-
   memcpy(target_mapping.contents.data, source_buffer, data_length);
 
   iree_status_t status = iree_ok_status();
