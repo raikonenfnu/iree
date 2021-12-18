@@ -100,6 +100,7 @@ static iree_status_t iree_hal_cuda_buffer_map_range(
   }
 #endif  // !NDEBUG
   *out_data_ptr = data_ptr;
+  printf("CUDAing done!\n");
   return iree_ok_status();
 }
 

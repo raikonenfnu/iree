@@ -10,7 +10,9 @@
 #define IREE_HAL_API_H_
 
 #include "iree/hal/allocator.h"              // IWYU pragma: export
+#include "iree/hal/allocator_caching.h"      // IWYU pragma: export
 #include "iree/hal/buffer.h"                 // IWYU pragma: export
+#include "iree/hal/buffer_caching.h"         // IWYU pragma: export
 #include "iree/hal/buffer_view.h"            // IWYU pragma: export
 #include "iree/hal/command_buffer.h"         // IWYU pragma: export
 #include "iree/hal/descriptor_set.h"         // IWYU pragma: export

@@ -575,7 +575,8 @@ IREE_API_EXPORT iree_status_t iree_hal_buffer_write_data(
       z0, iree_hal_buffer_map_range(
               target_buffer, IREE_HAL_MEMORY_ACCESS_DISCARD_WRITE,
               target_offset, data_length, &target_mapping));
-
+  printf("range done!\n");
+  // TODO(swinata):Fix memcpy issue, test what memcpy look like in without allocator
   memcpy(target_mapping.contents.data, source_buffer, data_length);
 
   iree_status_t status = iree_ok_status();
@@ -696,6 +697,7 @@ IREE_API_EXPORT iree_status_t iree_hal_buffer_map_range(
     iree_hal_buffer_mapping_t* out_buffer_mapping) {
   IREE_ASSERT_ARGUMENT(buffer);
   IREE_ASSERT_ARGUMENT(out_buffer_mapping);
+  printf("memsetting in map:%p,%d\n",out_buffer_mapping,sizeof(*out_buffer_mapping));
   memset(out_buffer_mapping, 0, sizeof(*out_buffer_mapping));
   IREE_RETURN_IF_ERROR(iree_hal_buffer_validate_memory_type(
       iree_hal_buffer_memory_type(buffer), IREE_HAL_MEMORY_TYPE_HOST_VISIBLE));
@@ -718,6 +720,7 @@ IREE_API_EXPORT iree_status_t iree_hal_buffer_map_range(
   iree_hal_mapping_mode_t mapping_mode = IREE_HAL_MAPPING_MODE_SCOPED;
 
   IREE_TRACE_ZONE_BEGIN(z0);
+  printf("dispatching in map_range\n");
   iree_status_t status = _VTABLE_DISPATCH(buffer, map_range)(
       buffer, mapping_mode, buffer_mapping->allowed_access,
       buffer_mapping->byte_offset, buffer_mapping->contents.data_length,
