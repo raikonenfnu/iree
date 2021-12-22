@@ -42,11 +42,11 @@ ROCMTargetOptions getROCMTargetOptionsFromFlags() {
     static llvm::cl::opt<bool> clROCMLinkBC(
         "iree-rocm-link-bc",
         llvm::cl::desc("Whether to try Linking to AMD Bitcodes"),
-        llvm::cl::init(false));
+        llvm::cl::init(true));
 
     static llvm::cl::opt<std::string> clROCMBitcodeDir(
         "iree-rocm-bc-dir", llvm::cl::desc("Directory of ROCM Bitcode"),
-        llvm::cl::init("/opt/rocm/amdgcn/bitcode"));
+        llvm::cl::init("/home/stanley/nod/amdgcn/bitcode"));
 
     targetOptions.ROCMTargetChip = clROCMTargetChip;
     targetOptions.ROCMLinkBC = clROCMLinkBC;
@@ -149,8 +149,14 @@ class ROCMTargetBackend final : public TargetBackend {
         workgroup_size = {1, 1, 1};
       }
       workgroupSizes.push_back(workgroup_size);
+      // For GPU kernels,
+      // 1. Insert AMDGPU_KERNEL calling convention.
+      // 2. Insert amdgpu-flat-workgroup-size(1, 256) attribute.
+      // 3. Insert amdgpu-implicitarg-num-bytes=56 (which must be set on OpenCL
+      // and HIP kernels per Clang)
       llvmFunc->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
-      llvmFunc->addFnAttr("amdgpu-flat-work-group-size", "1, 1024");
+      llvmFunc->addFnAttr("amdgpu-flat-work-group-size", "1, 256");
+      llvmFunc->addFnAttr("amdgpu-implicitarg-num-bytes", "56");
     }
 
     std::unique_ptr<llvm::TargetMachine> targetMachine;
@@ -180,6 +186,11 @@ class ROCMTargetBackend final : public TargetBackend {
       LinkROCDLIfNecessary(llvmModule.get(), options_.ROCMTargetChip,
                            options_.ROCMBitcodeDir);
     }
+
+    //  Set amdgpu_hostcall if host calls have been linked, as needed by newer LLVM
+  if (llvmModule->getFunction("__ockl_hostcall_internal"))
+    if (!llvmModule->getModuleFlag("amdgpu_hostcall"))
+      llvmModule->addModuleFlag(llvm::Module::Override, "amdgpu_hostcall", 1);
 
     // Serialize hsaco kernel into the binary that we will embed in the
     // final flatbuffer.
