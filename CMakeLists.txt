@@ -59,6 +59,7 @@ option(IREE_BUILD_PYTHON_BINDINGS "Builds the IREE python bindings" OFF)
 
 option(IREE_BUILD_EXPERIMENTAL_REMOTING "Builds experimental remoting support." OFF)
 option(IREE_BUILD_EXPERIMENTAL_ROCM "Builds the experimental ROCm Backend." OFF)
+option(IREE_BUILD_EXPERIMENTAL_ALLOCATOR_CACHING "Builds the experimental HAL Caching Allocator." OFF)
 
 #-------------------------------------------------------------------------------
 # Derived flags based on primary options
