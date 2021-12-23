@@ -75,6 +75,7 @@ option(IREE_BUILD_PYTHON_BINDINGS "Builds the IREE python bindings" "${IREE_ENAB
 
 option(IREE_BUILD_EXPERIMENTAL_REMOTING "Builds experimental remoting support." OFF)
 option(IREE_BUILD_EXPERIMENTAL_ROCM "Builds the experimental ROCm Backend." OFF)
+option(IREE_BUILD_EXPERIMENTAL_ALLOCATOR_CACHING "Builds the experimental HAL Caching Allocator." OFF)
 option(IREE_ENABLE_NEW_INTEGRATION_TESTS "Enables new integration tests and disables old." OFF)
 
 #-------------------------------------------------------------------------------
