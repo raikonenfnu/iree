@@ -105,12 +105,72 @@ struct ConvertReduceToGPU final
   }
 };
 
+/// Converts extract_map(broadcast) to broadcast(extract_map).
+/// Example:
+/// ```
+/// %b = vector.broadcast %a : vector<32xf32> to vector<2x32xf32>
+/// %e = vector.extract_map %b[%id0, %id1] : vector<2x32xf32> to vector<1x4xf32>
+/// ```
+/// to:
+/// ```
+/// %e = vector.extract_map %a[%id1] : vector<32xf32> to vector<4xf32>
+/// %b = vector.broadcast %e : vector<4xf32> to vector<1x4xf32>
+/// ```
+struct ExtractMapBroadcastPattern final
+    : public OpRewritePattern<vector::ExtractMapOp> {
+  using OpRewritePattern<vector::ExtractMapOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::ExtractMapOp op,
+                                PatternRewriter &rewriter) const override {
+    auto broadcast = op.vector().getDefiningOp<vector::BroadcastOp>();
+    if (!broadcast)
+      return failure();
+    auto srcVecType = broadcast.getSourceType().dyn_cast<VectorType>();
+    if (!srcVecType) {
+      // Special case if the source is a scalar we don't need to distribute
+      // anything we can just broadcast the original source.
+      rewriter.replaceOpWithNewOp<vector::BroadcastOp>(op, op.getResultType(),
+                                                       broadcast.source());
+      return success();
+    }
+    VectorType dstVecType = broadcast.getVectorType();
+    SmallVector<int64_t> extractShape(srcVecType.getShape().begin(),
+                                      srcVecType.getShape().end());
+    SmallVector<Value> ids;
+    int64_t rankDiff = dstVecType.getRank() - srcVecType.getRank();
+    for (unsigned i : llvm::seq(unsigned(0), op.map().getNumResults())) {
+      unsigned dim = op.map().getDimPosition(i);
+      // If the dimension was broadcasted we don't need to distribute it.
+      if (dim - rankDiff >= srcVecType.getRank() ||
+          srcVecType.getDimSize(dim - rankDiff) != dstVecType.getDimSize(dim))
+        continue;
+      // It is not a broadcasted dimension and it is distributed by the
+      // extract_map. We need to propagate the distribution id and ajust the
+      // shape.
+      extractShape[i] = op.getResultType().getDimSize(i);
+      ids.push_back(op.ids()[i]);
+    }
+    Value source = broadcast.source();
+    // If there are still any dimension distributed add a new extract_map.
+    if (!ids.empty()) {
+      VectorType newVecType =
+          VectorType::get(extractShape, dstVecType.getElementType());
+      source = rewriter.create<vector::ExtractMapOp>(op.getLoc(), newVecType,
+                                                     source, ids);
+    }
+    rewriter.replaceOpWithNewOp<vector::BroadcastOp>(op, op.getResultType(),
+                                                     source);
+    return success();
+  }
+};
+
 struct LLVMGPUReduceToGPUPass
     : public LLVMGPUReduceToGPUBase<LLVMGPUReduceToGPUPass> {
   void runOnOperation() override {
     FuncOp funcOp = getOperation();
     RewritePatternSet patterns(funcOp.getContext());
-    patterns.insert<ConvertReduceToGPU>(funcOp.getContext());
+    patterns.insert<ConvertReduceToGPU, ExtractMapBroadcastPattern>(
+        funcOp.getContext());
     vector::populatePropagateVectorDistributionPatterns(patterns);
     (void)applyPatternsAndFoldGreedily(funcOp, std::move(patterns));
   }

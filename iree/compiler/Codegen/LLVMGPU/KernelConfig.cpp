@@ -196,13 +196,12 @@ static LogicalResult setContractConfig(FuncOp entryPoint, linalg::LinalgOp op) {
 
 static LogicalResult setReductionConfig(FuncOp entryPoint,
                                         linalg::GenericOp op) {
-  SmallVector<AffineExpr> reductionDims;
+  SmallVector<unsigned> reductionDims;
   op.getReductionDims(reductionDims);
   if (reductionDims.size() != 1 ||
-      reductionDims[0].cast<AffineDimExpr>().getPosition() !=
-          op.getNumLoops() - 1)
+      reductionDims[0] != op.getNumLoops() - 1)
     return failure();
-  if (failed(vectorizeStaticLinalgOpPrecondition(op))) return failure();
+  //if (failed(vectorizeStaticLinalgOpPrecondition(op))) return failure();
   // Only support cases where we can distribute the reduction on a full warp.
   ArrayRef<int64_t> inputShape = getUntiledShape(op.getInputOperand(0)->get());
   if (inputShape.back() % cudaWarpSize != 0) return failure();
