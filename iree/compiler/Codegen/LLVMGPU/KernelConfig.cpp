@@ -194,6 +194,49 @@ static LogicalResult setContractConfig(FuncOp entryPoint, linalg::LinalgOp op) {
       IREE::Codegen::DispatchLoweringPassPipeline::LLVMGPUMatmulSimt);
 }
 
+static LogicalResult setReductionConfig(FuncOp entryPoint,
+                                        linalg::GenericOp op) {
+  SmallVector<AffineExpr> reductionDims;
+  op.getReductionDims(reductionDims);
+  if (reductionDims.size() != 1 ||
+      reductionDims[0].cast<AffineDimExpr>().getPosition() !=
+          op.getNumLoops() - 1)
+    return failure();
+  if (failed(vectorizeStaticLinalgOpPrecondition(op))) return failure();
+  // Only support cases where we can distribute the reduction on a full warp.
+  ArrayRef<int64_t> inputShape = getUntiledShape(op.getInputOperand(0)->get());
+  if (inputShape.back() % cudaWarpSize != 0) return failure();
+
+  std::array<int64_t, 3> workgroupSize = {2 * cudaWarpSize, 1, 1};
+  SmallVector<unsigned> partitionedLoops = getPartitionedLoops(op);
+  size_t numLoops = partitionedLoops.back() + 1;
+  SmallVector<int64_t, 4> workgroupTileSizes(numLoops, 1);
+  llvm::DenseSet<unsigned> partitionedLoopsSet(partitionedLoops.begin(),
+                                               partitionedLoops.end());
+  // Don't try to vectorize the store op right now.
+  unsigned vectorSize = 1;
+  // Set the inner most parallel loop to `lowerTs`.
+  for (int64_t depth = numLoops; depth > 0; depth--) {
+    if (partitionedLoopsSet.count(depth - 1)) {
+      workgroupTileSizes[depth - 1] =
+          (workgroupSize[0] * vectorSize) / cudaWarpSize;
+      break;
+    }
+  }
+  // Tile the reduction size to the size of a warp so that we can distribute the
+  // load from the reduced dimension on the whole warp. Once we support
+  // unrolling multi-reduce op we can try to tile to 4 * warpSize to vectorize
+  // load.
+  workgroupTileSizes.append(reductionDims.size(), cudaWarpSize);
+  TileSizesListType tileSizes;
+  tileSizes.emplace_back(std::move(workgroupTileSizes));  // Workgroup level
+  return setOpConfigAndEntryPointFnTranslation(
+      entryPoint, op, tileSizes, /*nativeVectorSize=*/ArrayRef<int64_t>{},
+      IREE::Codegen::DispatchLoweringPassPipeline::LLVMGPUWarpLevelReduction,
+      workgroupSize);
+  return success();
+}
+
 static LogicalResult setFftConfig(FuncOp entryPoint,
                                   IREE::LinalgExt::FftOp op) {
   auto partitionedLoops = getPartitionedLoops(op);
@@ -362,6 +405,10 @@ static LogicalResult setRootConfig(FuncOp entryPointFn, Operation *computeOp) {
         linalgOp.getNumParallelLoops() >= 2) {
       return setContractConfig(entryPointFn, linalgOp);
     }
+  }
+  if (auto genericOp = dyn_cast<linalg::GenericOp>(computeOp)) {
+    if (succeeded(setReductionConfig(entryPointFn, genericOp)))
+      return success();
   }
   if (auto fftOp = dyn_cast<IREE::LinalgExt::FftOp>(computeOp)) {
     return setFftConfig(entryPointFn, fftOp);
