@@ -201,6 +201,14 @@ static LogicalResult setReductionConfig(FuncOp entryPoint,
   if (reductionDims.size() != 1 ||
       reductionDims[0] != op.getNumLoops() - 1)
     return failure();
+  // Transpose not supported yet.
+  for (unsigned i = 0; i < op.getNumInputs(); i++) {
+    if (!op.indexing_maps()[i]
+             .cast<AffineMapAttr>()
+             .getValue()
+             .isMinorIdentity())
+      return failure();
+  }
   //if (failed(vectorizeStaticLinalgOpPrecondition(op))) return failure();
   // Only support cases where we can distribute the reduction on a full warp.
   ArrayRef<int64_t> inputShape = getUntiledShape(op.getInputOperand(0)->get());
