@@ -301,6 +301,40 @@ iree_run_binary_test(
     ::simple_embedding_cuda
 )
 
+iree_cc_binary(
+  NAME
+    simple_embedding_rocm
+  SRCS
+    "device_rocm.c"
+    "simple_embedding.c"
+  DEPS
+    ::simple_embedding_test_bytecode_module_rocm_c
+    iree::base
+    iree::hal
+    experimental::rocm::registration
+    iree::modules::hal
+    iree::vm
+    iree::vm::bytecode_module
+)
+
+iree_bytecode_module(
+  NAME
+    simple_embedding_test_bytecode_module_rocm
+  SRC
+    "simple_embedding_test.mlir"
+  C_IDENTIFIER
+    "iree_samples_simple_embedding_test_module_rocm"
+  FLAGS
+    "-iree-input-type=mhlo"
+    "-iree-mlir-to-vm-bytecode-module"
+    "-iree-hal-target-backends=rocm"
+    "--iree-rocm-target-chip=gfx906"
+    "--iree-rocm-link-bc=true"
+    "--iree-rocm-bc-dir=/home/stanley/nod/amdgcn/bitcode"
+    "-iree-llvm-debug-symbols=false"
+  PUBLIC
+)
+
 endif()
 
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###

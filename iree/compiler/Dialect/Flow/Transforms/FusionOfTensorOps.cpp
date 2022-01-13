@@ -24,6 +24,16 @@ static llvm::cl::opt<bool> clEnableFusionWithReductionOps(
     llvm::cl::desc("Allow fusing generic ops with reductions"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<int> clMaxNumberOfUsetoFuseOp(
+    "iree-max-number-of-use-to-fuse-ops",
+    llvm::cl::desc("Maximum number of producer use to fuse"),
+    llvm::cl::init(1));
+
+static llvm::cl::opt<bool> clDefuseExpensiveOp(
+    "iree-defuse-expensive-ops",
+    llvm::cl::desc("Defuse if expensive op is in generic region"),
+    llvm::cl::init(false));
+
 namespace mlir {
 namespace iree_compiler {
 namespace IREE {
@@ -80,6 +90,7 @@ struct FusionOfTensorOpsPass
           if (operands.size() >= kIreeMaxOperandCount) return false;
 
           bool isBroadcast = false;
+          bool isExpensive = false;
           if (auto genericOp = dyn_cast<linalg::GenericOp>(producer)) {
             // Detect op that only broadcast input as fusing them makes the new
             // op cheaper.
@@ -94,13 +105,34 @@ struct FusionOfTensorOpsPass
                 }
               }
             }
+            // Detect if there exist expensive ops within the linalg region
+            if(clDefuseExpensiveOp) {
+              for (auto &op_iter : *genericOp.getBody()) {
+                if(dyn_cast<math::ExpOp>(op_iter) ) {
+                  isExpensive = true;
+                  break;
+                }
+                else if (dyn_cast<tensor::ExtractOp>(op_iter)) {
+                  isExpensive = true;
+                  break;
+                }
+              }
+            }
           }
+          // Count num of use
+          int numOfUse = std::distance(producerResult.getUsers().begin(), producerResult.getUsers().end());
+          // Only take into account isExpensive if numOfUse > 1;
+          isExpensive = (isExpensive && numOfUse > 1);
           // Only fuse if it has a single linalg generic user. It is a
           // simplistic heuristic to avoid duplicating ops that may be
           // expensive.
           // TODO: Add a cost model to allow ops to be duplicated.
+          // Less condition -> more false -> less fusion -> more dispatch
           if (!isBroadcast && !isa<arith::ConstantOp>(producer) &&
-              !llvm::hasSingleElement(producerResult.getUsers())) {
+              numOfUse > clMaxNumberOfUsetoFuseOp) {
+            return false;
+          }
+          if(isExpensive) {
             return false;
           }
           return llvm::all_of(producerResult.getUsers(), [](Operation *user) {
