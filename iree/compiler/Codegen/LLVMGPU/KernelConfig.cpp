@@ -36,13 +36,16 @@ static void getMatmulConfig(SmallVectorImpl<TileWorkgroupSizePair> &tileSizes) {
   // Pick tile size so that M*K and K*N dividible by wgSize * \*vecSize=*\4.
   // This way workgroup memory copy don't need to be masked. Once we support
   // masked load we can get performance out of more configuration.
+  // tileSizes.push_back(TileWorkgroupSizePair({{64, 128, 32}, {16, 8, 1}}));
   tileSizes.push_back(TileWorkgroupSizePair({{32, 128, 32}, {32, 8, 1}}));
   tileSizes.push_back(TileWorkgroupSizePair({{128, 64, 8}, {16, 8, 1}}));
   tileSizes.push_back(TileWorkgroupSizePair({{16, 256, 32}, {64, 2, 1}}));
+  // tileSizes.push_back(TileWorkgroupSizePair({{16, 32, 32}, {16, 8, 1}}));
   tileSizes.push_back(TileWorkgroupSizePair({{8, 32, 32}, {8, 8, 1}}));
 
   tileSizes.push_back(TileWorkgroupSizePair({{8, 128, 4}, {32, 1, 1}}));
   tileSizes.push_back(TileWorkgroupSizePair({{16, 64, 4}, {16, 2, 1}}));
+  // tileSizes.push_back(TileWorkgroupSizePair({{1, 128, 16}, {64, 1, 1}}));
   tileSizes.push_back(TileWorkgroupSizePair({{1, 128, 8}, {32, 1, 1}}));
 }
 
@@ -156,6 +159,7 @@ static LogicalResult setContractConfig(FuncOp entryPoint, linalg::LinalgOp op) {
         if (sizeK % config.tileSize[2] == 0 &&
             sizeN % config.tileSize[1] == 0 &&
             sizeM % config.tileSize[0] == 0) {
+          llvm::outs()<<sizeM<<","<<sizeN<<","<<sizeK<<"Getting TC!\n";
           return setMatmulConfig(config.tileSize[0], config.tileSize[1],
                                  config.tileSize[2], config.workgroupSize,
                                  IREE::Codegen::DispatchLoweringPassPipeline::
@@ -175,13 +179,26 @@ static LogicalResult setContractConfig(FuncOp entryPoint, linalg::LinalgOp op) {
     getMatmulConfig(tileSizeConfig);
     // Pick the best configuration where the original shape is aligned on the
     // tile size.
+    int bestConfigMetric = 0;
+    TileWorkgroupSizePair bestConfig;
+    bool foundConfig = false;
     for (TileWorkgroupSizePair &config : tileSizeConfig) {
-      if (sizeN % config.tileSize[1] == 0 && sizeM % config.tileSize[0] == 0) {
-        return setMatmulConfig(
-            config.tileSize[0], config.tileSize[1], config.tileSize[2],
-            config.workgroupSize,
-            IREE::Codegen::DispatchLoweringPassPipeline::LLVMGPUMatmulSimt);
+      if (sizeN % config.tileSize[1] == 0 && sizeM % config.tileSize[0] == 0 && sizeK % config.tileSize[2] == 0) {
+        int currentConfigMetric = config.tileSize[0]*config.tileSize[1]*config.tileSize[2];
+        if(bestConfigMetric < currentConfigMetric) {
+          bestConfigMetric = currentConfigMetric;
+          bestConfig = config;
+          foundConfig = true;
+        }
       }
+    }
+    if(foundConfig) {
+      llvm::outs()<<sizeM<<","<<sizeN<<","<<sizeK<<" Getting MatmulConfig!\n";
+      llvm::outs()<<bestConfig.tileSize[0]<<","<<bestConfig.tileSize[1]<<","<<" Chosen MatmulConfig!\n";
+        return setMatmulConfig(
+            bestConfig.tileSize[0], bestConfig.tileSize[1], bestConfig.tileSize[2],
+            bestConfig.workgroupSize,
+            IREE::Codegen::DispatchLoweringPassPipeline::LLVMGPUMatmulSimt);
     }
   }
   // If we haven't found any config, fall back to default config.
