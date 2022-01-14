@@ -6,6 +6,8 @@
 
 #include "iree/compiler/Codegen/LLVMGPU/KernelConfig.h"
 
+#include <fstream>
+#include "json.hpp"
 #include <numeric>
 
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtOps.h"
@@ -30,6 +32,16 @@ struct TileWorkgroupSizePair {
 };
 }  // namespace
 
+static void getConfigFromFile(SmallVectorImpl<TileWorkgroupSizePair> &tileSizes) {
+  std::ifstream i("/home/stanley/tilewgsizes.json");
+  nlohmann::json tileSizesJsonList;
+  i >> tileSizesJsonList;
+  for (auto it = tileSizesJsonList.begin(); it != tileSizesJsonList.end(); ++it) {
+    std::array<int64_t, 3> curTileSize = (*it)["tileSize"].get<std::array<int64_t, 3>>();
+    std::array<int64_t, 3> curWgSize = (*it)["wgSize"].get<std::array<int64_t, 3>>();
+    tileSizes.push_back(TileWorkgroupSizePair({curTileSize, curWgSize}));
+  }
+}
 /// Return the best combination of tile size and wg size. It will then used to
 /// pick the best size aligned with the shape dimension.
 static void getMatmulConfig(SmallVectorImpl<TileWorkgroupSizePair> &tileSizes) {
@@ -176,29 +188,19 @@ static LogicalResult setContractConfig(FuncOp entryPoint, linalg::LinalgOp op) {
     // simt matmul case
     SmallVector<TileWorkgroupSizePair> tileSizeConfig;
     // Query the best configuration.
-    getMatmulConfig(tileSizeConfig);
+    // getMatmulConfig(tileSizeConfig);
+    getConfigFromFile(tileSizeConfig);
     // Pick the best configuration where the original shape is aligned on the
     // tile size.
-    int bestConfigMetric = 0;
-    TileWorkgroupSizePair bestConfig;
-    bool foundConfig = false;
     for (TileWorkgroupSizePair &config : tileSizeConfig) {
       if (sizeN % config.tileSize[1] == 0 && sizeM % config.tileSize[0] == 0 && sizeK % config.tileSize[2] == 0) {
-        int currentConfigMetric = config.tileSize[0]*config.tileSize[1]*config.tileSize[2];
-        if(bestConfigMetric < currentConfigMetric) {
-          bestConfigMetric = currentConfigMetric;
-          bestConfig = config;
-          foundConfig = true;
-        }
-      }
-    }
-    if(foundConfig) {
       llvm::outs()<<sizeM<<","<<sizeN<<","<<sizeK<<" Getting MatmulConfig!\n";
-      llvm::outs()<<bestConfig.tileSize[0]<<","<<bestConfig.tileSize[1]<<","<<" Chosen MatmulConfig!\n";
+      llvm::outs()<<config.tileSize[0]<<","<<config.tileSize[1]<<","<<config.tileSize[2]<<" Chosen MatmulConfig!\n";
         return setMatmulConfig(
-            bestConfig.tileSize[0], bestConfig.tileSize[1], bestConfig.tileSize[2],
-            bestConfig.workgroupSize,
+            config.tileSize[0], config.tileSize[1], config.tileSize[2],
+            config.workgroupSize,
             IREE::Codegen::DispatchLoweringPassPipeline::LLVMGPUMatmulSimt);
+      }
     }
   }
   // If we haven't found any config, fall back to default config.

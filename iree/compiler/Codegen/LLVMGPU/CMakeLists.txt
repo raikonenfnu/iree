@@ -17,6 +17,7 @@ iree_cc_library(
     "ConvertToLLVM.h"
     "KernelConfig.h"
     "LLVMGPUUtils.h"
+    "json.hpp"
   SRCS
     "ConvertToLLVM.cpp"
     "ConvertToNVVM.cpp"

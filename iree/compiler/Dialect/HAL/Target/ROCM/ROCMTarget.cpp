@@ -187,11 +187,6 @@ class ROCMTargetBackend final : public TargetBackend {
                            options_.ROCMBitcodeDir);
     }
 
-    //  Set amdgpu_hostcall if host calls have been linked, as needed by newer LLVM
-  if (llvmModule->getFunction("__ockl_hostcall_internal"))
-    if (!llvmModule->getModuleFlag("amdgpu_hostcall"))
-      llvmModule->addModuleFlag(llvm::Module::Override, "amdgpu_hostcall", 1);
-
     // Serialize hsaco kernel into the binary that we will embed in the
     // final flatbuffer.
     std::string targetISA = translateModuleToISA(*llvmModule, *targetMachine);
