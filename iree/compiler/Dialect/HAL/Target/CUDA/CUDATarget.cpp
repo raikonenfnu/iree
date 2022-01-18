@@ -6,6 +6,11 @@
 
 #include "iree/compiler/Dialect/HAL/Target/CUDA/CUDATarget.h"
 
+#include <string>       // std::string
+#include <iostream>     // std::cout
+#include <sstream>      // std::stringstream
+#include <fstream>      // std::ofstream
+
 #include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/Passes.h"
 #include "iree/compiler/Dialect/HAL/Target/CUDA/LLVMPasses.h"
@@ -268,6 +273,15 @@ class CUDATargetBackend final : public TargetBackend {
 
     // Serialize cuda kernel into the binary that we will embed in the
     // final flatbuffer.
+    if(libraryName == "__inference_learn_28700_dispatch_18" || libraryName == "__inference_learn_28700_dispatch_45") {
+      std::string fileName = std::string("/tmp/llvmir_sample_") + libraryName + ".mlir";
+      std::ofstream outFile(fileName);
+      std::string moduleStr;
+      llvm::raw_string_ostream ss(moduleStr);
+      ss << *llvmModule;
+      outFile << moduleStr;
+      outFile.close();
+    }
     std::string targetISA = translateModuleToISA(*llvmModule, *targetMachine);
     if (dumpPtx) {
       llvm::dbgs() << targetISA;
