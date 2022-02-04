@@ -247,8 +247,9 @@ static LogicalResult setReductionConfig(FuncOp entryPoint,
   if (inputShape.back() % cudaWarpSize != 0) return failure();
 
   std::array<int64_t, 3> workgroupSize = {2 * cudaWarpSize, 1, 1};
-  SmallVector<unsigned> partitionedLoops = getPartitionedLoops(op);
-  size_t numLoops = partitionedLoops.back() + 1;
+  auto interfaceOp = cast<IREE::Flow::PartitionableLoopsInterface>(*op);
+  auto partitionedLoops =
+      interfaceOp.getPartitionableLoops(kNumMaxParallelDims);  size_t numLoops = partitionedLoops.back() + 1;
   SmallVector<int64_t, 4> workgroupTileSizes(numLoops, 1);
   llvm::DenseSet<unsigned> partitionedLoopsSet(partitionedLoops.begin(),
                                                partitionedLoops.end());

@@ -122,6 +122,8 @@ struct FusionOfTensorOpsPass
     // to the consumer linalg op.
     linalg::ControlElementwiseOpsFusionFn foldReshapeBetweenLinalgFn =
         [](const OpResult &producer, const OpOperand &consumer) {
+        // Uncomment this line to enable more fuse, but is slower.
+          // return true;
           auto collapseOp = producer.getDefiningOp<tensor::CollapseShapeOp>();
           if (collapseOp) {
             return collapseOp.src().getDefiningOp<LinalgOp>() != nullptr;
