@@ -124,6 +124,7 @@ struct FusionOfTensorOpsPass
         [](const OpResult &producer, const OpOperand &consumer) {
         // Uncomment this line to enable more fuse, but is slower.
           // return true;
+        // End of enable more fuse.
           auto collapseOp = producer.getDefiningOp<tensor::CollapseShapeOp>();
           if (collapseOp) {
             return collapseOp.src().getDefiningOp<LinalgOp>() != nullptr;
