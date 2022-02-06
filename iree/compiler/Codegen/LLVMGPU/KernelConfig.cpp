@@ -16,6 +16,8 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
+#include <fstream>
+#include "json.hpp"
 
 using namespace mlir;
 using namespace mlir::iree_compiler;
@@ -29,6 +31,17 @@ struct TileWorkgroupSizePair {
   std::array<int64_t, 3> workgroupSize;
 };
 }  // namespace
+
+static void getTCConfigFromFile(SmallVectorImpl<TileWorkgroupSizePair> &tileSizes) {
+  std::ifstream i("/home/stanley/nod/iree/iree/compiler/Codegen/LLVMGPU/TCWgSizes.json");
+  nlohmann::json tileSizesJsonList;
+  i >> tileSizesJsonList;
+  for (auto it = tileSizesJsonList.begin(); it != tileSizesJsonList.end(); ++it) {
+    std::array<int64_t, 3> curTileSize = (*it)["tileSize"].get<std::array<int64_t, 3>>();
+    std::array<int64_t, 3> curWgSize = (*it)["wgSize"].get<std::array<int64_t, 3>>();
+    tileSizes.push_back(TileWorkgroupSizePair({curTileSize, curWgSize}));
+  }
+}
 
 /// Return the best combination of tile size and wg size. It will then used to
 /// pick the best size aligned with the shape dimension.
@@ -73,6 +86,8 @@ static bool supportsTensorCore(FuncOp entryPoint, linalg::LinalgOp op) {
   // are supported upstream.
   // TODO(thomasraoux): Enable batchMatmul and generic contraction.
   if (getTargetArch(entryPoint) != "sm_80" || !isa<linalg::MatmulOp>(op)) {
+    if(!isa<linalg::MatmulOp>(op)) printf("not matmul!\n");
+    if(getTargetArch(entryPoint) != "sm_80") printf("not sm80!\n");
     return false;
   }
   // Check that we support converting any fused operation. When using the
@@ -83,6 +98,7 @@ static bool supportsTensorCore(FuncOp entryPoint, linalg::LinalgOp op) {
     for (Operation &fusedOp : linalgOp.getOps()) {
       if (!isa<arith::AddFOp, arith::MulFOp, arith::MaxFOp, arith::MinFOp,
                linalg::YieldOp, arith::DivFOp>(fusedOp)) {
+        printf("fused op not supported!\n");
         fusedOpSupported = false;
         break;
       }
@@ -181,13 +197,14 @@ static LogicalResult setContractConfig(FuncOp entryPoint, linalg::LinalgOp op) {
     /// Try tensorcore config first.
     if (supportsTensorCore(entryPoint, op)) {
       SmallVector<TileWorkgroupSizePair> TCtileSizeConfig;
-      getTensorCoreConfig(TCtileSizeConfig);
+      getTCConfigFromFile(TCtileSizeConfig);
       // Pick the best configuration where the original shape is aligned on the
       // tile size.
       for (TileWorkgroupSizePair &config : TCtileSizeConfig) {
         if (sizeK % config.tileSize[2] == 0 &&
             sizeN % config.tileSize[1] == 0 &&
             sizeM % config.tileSize[0] == 0) {
+          printf("using TCZ matmul config for %ld, %ld, %ld\n", sizeM, sizeN, sizeK);
           return setMatmulConfig(config.tileSize[0], config.tileSize[1],
                                  config.tileSize[2], config.workgroupSize,
                                  IREE::Codegen::DispatchLoweringPassPipeline::
@@ -204,6 +221,7 @@ static LogicalResult setContractConfig(FuncOp entryPoint, linalg::LinalgOp op) {
     // simt matmul case
     SmallVector<TileWorkgroupSizePair> tileSizeConfig;
     // Query the best configuration.
+    printf("using matmul config for %ld, %ld, %ld\n", sizeM, sizeN, sizeK);
     getMatmulConfig(tileSizeConfig);
     // Pick the best configuration where the original shape is aligned on the
     // tile size.
