@@ -7,6 +7,8 @@
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LLVMAOTTarget.h"
 
 #include <cstdlib>
+#include <fstream>
+#include <iostream>
 
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
 #include "iree-dialects/Dialect/LinalgTransform/LinalgTransformOps.h"
@@ -212,8 +214,186 @@ class LLVMAOTTargetBackend final : public TargetBackend {
         [](mlir::ModuleOp moduleOp) { return moduleOp; }, builder);
   }
 
+  LogicalResult generateObjectFile(IREE::HAL::ExecutableVariantOp variantOp,
+                                   OpBuilder &executableBuilder) {
+    // Perform the translation in a separate context to avoid any
+    // multi-threading issues.
+    llvm::LLVMContext context;
+
+    // We name our files after the executable name so that they are easy to
+    // track both during compilation (logs/artifacts/etc), as outputs (final
+    // intermediate code/binary files), and at runtime (loaded
+    // libraries/symbols/etc).
+    auto libraryName =
+        variantOp->getParentOfType<IREE::HAL::ExecutableOp>().getName().str();
+
+    // Specialize the module to the target triple.
+    // The executable will have been cloned into other ExecutableVariantOps for
+    // other triples so it's fine to mutate in-place.
+    llvm::Triple targetTriple(options_.targetTriple);
+    variantOp.getInnerModule()->setAttr(
+        LLVM::LLVMDialect::getTargetTripleAttrName(),
+        executableBuilder.getStringAttr(targetTriple.str()));
+
+    // At this moment we are leaving MLIR LLVM dialect land translating module
+    // into target independent LLVMIR.
+    auto llvmModule = mlir::translateModuleToLLVMIR(variantOp.getInnerModule(),
+                                                    context, libraryName);
+    if (!llvmModule) {
+      return variantOp.emitError() << "failed to translate the MLIR LLVM "
+                                      "dialect to the native llvm::Module";
+    }
+
+    // Configure the functions in the module. This may override defaults set
+    // during the MLIR->LLVM conversion.
+    for (auto &func : *llvmModule) {
+      // Enable frame pointers to ensure that stack unwinding works, e.g. in
+      // Tracy. In principle this could also be achieved by enabling unwind
+      // tables, but we tried that and that didn't work in Tracy (which uses
+      // libbacktrace), while enabling frame pointers worked.
+      // https://github.com/google/iree/issues/3957
+      func.addFnAttr("frame-pointer", "all");
+
+      // -ffreestanding-like behavior.
+      func.addFnAttr("no-builtins");
+
+      // Our dispatches are all hot - that's kind of the point.
+      // This may favor more aggressive optimizations.
+      func.addFnAttr("hot");
+    }
+
+    auto align16 = llvm::Attribute::getWithAlignment(context, llvm::Align(16));
+    for (auto entryPointOp :
+         variantOp.getBlock().getOps<ExecutableEntryPointOp>()) {
+      // Find the matching function in the LLVM module.
+      auto *llvmFunc = llvmModule->getFunction(entryPointOp.getName());
+      llvmFunc->setName("mlir_add_fp32");
+      llvmFunc->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalLinkage);
+      llvmFunc->setDSOLocal(true);
+
+      // Tag the function parameters in case they got removed during conversion.
+      // (%arg0: environment, %arg1: dispatch_state, %arg2: workgroup_state)
+      for (unsigned i = 0; i <= 2; ++i) {
+        llvmFunc->addParamAttr(
+            i, llvm::Attribute::getWithByRefType(
+                   context, llvmFunc->getArg(i)
+                                ->getType()
+                                ->getNonOpaquePointerElementType()));
+        llvmFunc->addParamAttr(i, llvm::Attribute::NonNull);
+        llvmFunc->addParamAttr(i, llvm::Attribute::NoAlias);
+        llvmFunc->addParamAttr(i, align16);
+      }
+    }
+
+    // Specialize the module to our target machine.
+    auto targetMachine = createTargetMachine(options_);
+    if (!targetMachine) {
+      return mlir::emitError(variantOp.getLoc())
+             << "failed to create target machine for target triple '"
+             << options_.targetTriple << "'";
+    }
+    llvmModule->setDataLayout(targetMachine->createDataLayout());
+    llvmModule->setTargetTriple(targetMachine->getTargetTriple().str());
+
+    // Statically link libraries into our module.
+    // Note that if producing a static library then the symbols we add must be
+    // weak such that we don't trigger ODR issues.
+    llvm::Linker moduleLinker(*llvmModule);
+
+    llvm::Linker::Flags linkerFlag = llvm::Linker::OverrideFromSrc;
+    if (options_.linkStatic) linkerFlag = llvm::Linker::LinkOnlyNeeded;
+
+    // Strip any compiler identifiers that may have snuck in. We let the linker
+    // tag the module.
+    auto *llvmIdent = llvmModule->getNamedMetadata("llvm.ident");
+    if (llvmIdent) llvmIdent->clearOperands();
+
+    // LLVM opt passes that perform code generation optimizations/transformation
+    // similar to what a frontend would do.
+    if (failed(
+            runLLVMIRPasses(options_, targetMachine.get(), llvmModule.get()))) {
+      return variantOp.emitError()
+             << "failed to run LLVM-IR opt passes for IREE::HAL::ExecutableOp "
+                "targeting '"
+             << options_.targetTriple << "'";
+    }
+
+    // Fixup visibility from any symbols we may link in - we want to hide all
+    // but the query entry point.
+    for (auto &global : llvmModule->getGlobalList()) {
+      global.setDSOLocal(true);
+      global.setLinkage(llvm::GlobalValue::LinkageTypes::InternalLinkage);
+    }
+
+    SmallVector<Artifact> objectFiles;
+
+    std::string moduleStr;
+    llvm::raw_string_ostream ss(moduleStr);
+    ss << *llvmModule;
+    std::string name = libraryName + ".ll";
+    std::cout << "Writing to ... " << name << std::endl;
+    std::ofstream output(name);
+    output << moduleStr;
+    output.close();
+
+    // Emit the base object file containing the bulk of our code.
+    // This must come first such that we have the proper library linking order.
+    {
+      // NOTE: today we just use a single object file, however if we wanted to
+      // scale code generation and linking we'd want to generate one per
+      // function (or something like that). A single object file is also
+      // instrumental to static library generation (which only supports one
+      // object file per library).
+      std::string objectData;
+      if (failed(runEmitObjFilePasses(targetMachine.get(), llvmModule.get(),
+                                      llvm::CGFT_ObjectFile, &objectData))) {
+        return variantOp.emitError()
+               << "failed to compile LLVM-IR module to an object file";
+      }
+      auto objectFile = Artifact::createObjectFile(libraryName, "o");
+      auto &os = objectFile.outputFile->os();
+      os << objectData;
+      os.flush();
+      os.close();
+      objectFile.outputFile->keep();
+      objectFiles.push_back(std::move(objectFile));
+    }
+
+    // If we are keeping artifacts then let's also add the bitcode and
+    // assembly listing for easier debugging (vs just the binary object file).
+    std::string asmData;
+    if (failed(runEmitObjFilePasses(targetMachine.get(), llvmModule.get(),
+                                    llvm::CGFT_AssemblyFile, &asmData))) {
+      return variantOp.emitError()
+             << "failed to compile LLVM-IR module to an assembly file";
+    }
+    {
+      auto asmFile = Artifact::createVariant(objectFiles.front().path, "s");
+      auto &os = asmFile.outputFile->os();
+      os << asmData;
+      os.flush();
+      os.close();
+      asmFile.outputFile->keep();
+    }
+    {
+      auto bitcodeFile =
+          Artifact::createVariant(objectFiles.front().path, "bc");
+      auto &os = bitcodeFile.outputFile->os();
+      llvm::WriteBitcodeToFile(*llvmModule, os);
+      os.flush();
+      os.close();
+      bitcodeFile.outputFile->keep();
+    }
+    return success();
+  }
+
   LogicalResult serializeExecutable(IREE::HAL::ExecutableVariantOp variantOp,
                                     OpBuilder &executableBuilder) override {
+
+    // Generate an object file of just the dispatch region
+    if (failed(generateObjectFile(variantOp, executableBuilder)))
+	return failure();
+
     // Perform the translation in a separate context to avoid any
     // multi-threading issues.
     llvm::LLVMContext context;
@@ -226,10 +406,10 @@ class LLVMAOTTargetBackend final : public TargetBackend {
         variantOp->getParentOfType<IREE::HAL::ExecutableOp>().getName().str();
 
     // Validate flags for output mode.
-    if (options_.linkEmbedded && options_.linkStatic) {
-      return variantOp.emitError()
-             << "cannot embed ELF and produce static library simultaneously";
-    }
+    //if (options_.linkEmbedded && options_.linkStatic) {
+    //  return variantOp.emitError()
+    //         << "cannot embed ELF and produce static library simultaneously";
+    //}
 
     // Specialize the module to the target triple.
     // The executable will have been cloned into other ExecutableVariantOps for

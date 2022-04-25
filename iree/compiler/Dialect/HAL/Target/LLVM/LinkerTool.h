@@ -32,6 +32,7 @@ struct Artifact {
 
   // Creates an output file derived from the given file's path with a new
   // suffix.
+  static Artifact createObjectFile(StringRef basePath, StringRef suffix);
   static Artifact createVariant(StringRef basePath, StringRef suffix);
 
   Artifact() = default;
