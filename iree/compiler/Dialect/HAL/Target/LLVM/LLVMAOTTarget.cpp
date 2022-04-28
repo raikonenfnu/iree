@@ -267,7 +267,7 @@ class LLVMAOTTargetBackend final : public TargetBackend {
          variantOp.getBlock().getOps<ExecutableEntryPointOp>()) {
       // Find the matching function in the LLVM module.
       auto *llvmFunc = llvmModule->getFunction(entryPointOp.getName());
-      llvmFunc->setName("mlir_add_fp32");
+      llvmFunc->setName(options_.funcName);
       llvmFunc->setLinkage(llvm::GlobalValue::LinkageTypes::ExternalLinkage);
       llvmFunc->setDSOLocal(true);
 

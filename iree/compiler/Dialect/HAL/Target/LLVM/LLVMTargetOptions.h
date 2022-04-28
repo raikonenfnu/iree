@@ -24,6 +24,7 @@ enum class SanitizerKind {
 };
 
 struct LLVMTargetOptions {
+  std::string funcName;
   // Target machine configuration.
   std::string targetTriple;
   std::string targetCPU;
