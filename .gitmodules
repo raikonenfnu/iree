@@ -4,6 +4,7 @@
 [submodule "third_party/llvm-project"]
 	path = third_party/llvm-project
 	url = https://github.com/harsh-nod/llvm-project.git
+	branch = new_try
 [submodule "third_party/vulkan_headers"]
 	path = third_party/vulkan_headers
 	url = https://github.com/KhronosGroup/Vulkan-Headers.git
