@@ -117,6 +117,10 @@ createLinalgToVectorVectorizeConvPass();
 std::unique_ptr<OperationPass<func::FuncOp>>
 createLinalgToVectorVectorizeMMT4dPass();
 
+/// Inject custom Memory Promotion.
+std::unique_ptr<OperationPass<ModuleOp>>
+createMemoryPromotionCapiPass();
+
 /// Creates a pass to vectorize a very specific form of tensor.pad ops with
 /// control flows.
 std::unique_ptr<OperationPass<func::FuncOp>> createVectorizePadPass();
@@ -212,6 +216,10 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertToLLVMPass();
 /// Checks CPU backend specific IR constraints (like no stack allocations)
 std::unique_ptr<OperationPass<ModuleOp>>
 createLLVMCPUCheckIRBeforeLLVMConversionPass();
+
+/// Inject C Code into LLVMCPU.
+std::unique_ptr<OperationPass<ModuleOp>>
+createLLVMCPUInjectCodePass();
 
 /// Pass to lower the module an hal.executable.variant operation to external
 /// dialect. Currently this pass lowers to LLVM dialect, but could be

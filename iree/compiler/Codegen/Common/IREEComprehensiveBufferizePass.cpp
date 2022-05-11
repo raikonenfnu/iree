@@ -62,6 +62,18 @@ namespace iree_compiler {
 
 namespace {
 
+static llvm::cl::opt<bool> clInjectCapiCode(
+    "iree-codegen-inject-code",
+    llvm::cl::desc(
+        "experimental path to inject capi call during bufferizaition"),
+    llvm::cl::init(false));
+
+static llvm::cl::opt<bool> clMemoryPromotionCapi(
+    "iree-memory-promotion-capi",
+    llvm::cl::desc(
+        "experimental path to inject memory promotion capi call during bufferizaition"),
+    llvm::cl::init(false));
+
 /// Pass to convert from tensor based ops to memref based ops.
 class IREEComprehensiveBufferizePass
     : public IREEComprehensiveBufferizeBase<IREEComprehensiveBufferizePass> {
@@ -156,6 +168,12 @@ void addIREEComprehensiveBufferizePasses(
     Optional<BufferizationOptions::MemCpyFn> memCpyFn) {
   passManager.addPass(createIREEComprehensiveBufferizePass(
       allocationFn, deallocationFn, memCpyFn));
+  if(clInjectCapiCode) {
+    passManager.addPass(createLLVMCPUInjectCodePass());
+  }
+  if(clMemoryPromotionCapi) {
+    passManager.addPass(createMemoryPromotionCapiPass());
+  }
   passManager.addPass(memref::createResolveShapedTypeResultDimsPass());
   passManager.addNestedPass<func::FuncOp>(createCanonicalizerPass());
   passManager.addNestedPass<func::FuncOp>(createCSEPass());

@@ -41,6 +41,8 @@ iree_cc_library(
     "IREEComprehensiveBufferizePass.cpp"
     "InsertDistributionInfoPass.cpp"
     "LinalgBufferizePass.cpp"
+    "LLVMCPUInjectCode.cpp"
+    "MemoryPromotionCapi.cpp"
     "MemrefCopyToLinalg.cpp"
     "OptimizeVectorTransferPass.cpp"
     "PolynomialApproximationPass.cpp"

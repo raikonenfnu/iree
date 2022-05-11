@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Dialect/HAL/Transforms/Passes.h"
+#include <iostream>
 
 #include <memory>
 

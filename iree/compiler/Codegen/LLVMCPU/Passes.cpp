@@ -435,6 +435,8 @@ void addLinalgTransformInterpPasses(OpPassManager &passManager) {
 }
 
 static void addLowerToLLVMPasses(OpPassManager &passManager) {
+  // Inject some C code
+  // passManager.addPass(createLLVMCPUInjectCodePass());
   // LinalgExt -> SCF
   passManager.addNestedPass<func::FuncOp>(
       IREE::LinalgExt::createLinalgExtToLoopsPass());

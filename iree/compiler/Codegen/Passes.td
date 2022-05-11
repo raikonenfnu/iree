@@ -66,6 +66,12 @@ def LinalgBufferize :
   let constructor = "mlir::iree_compiler::createLinalgBufferizePass(nullptr)";
 }
 
+def MemoryPromotionCapi :
+    Pass<"iree-memory-promotion-capi", "ModuleOp"> {
+  let summary = "Inject Memory Promotion from custom C-API Code";
+  let constructor = "mlir::iree_compiler::createMemoryPromotionCapiPass()";
+}
+
 def IREEComprehensiveBufferize :
     Pass<"iree-codegen-iree-comprehensive-bufferize", "ModuleOp"> {
   let summary = "Convert from to Linalg ops on tensors to buffers";
@@ -206,6 +212,12 @@ def LLVMCPUCheckIRBeforeLLVMConversion :
     Pass<"iree-llvmcpu-check-ir-before-llvm-conversion", "ModuleOp"> {
   let summary = "Checks CPU backend specific IR constraints (like no allocas)";
   let constructor = "mlir::iree_compiler::createLLVMCPUCheckIRBeforeLLVMConversionPass()";
+}
+
+def LLVMCPUInjectCode :
+    Pass<"iree-llvmcpu-inject-code", "ModuleOp"> {
+  let summary = "Toy Example to Inject C-Code";
+  let constructor = "mlir::iree_compiler::createLLVMCPUInjectCodePass()";
 }
 
 def LLVMCPULowerExecutableTarget :

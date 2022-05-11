@@ -11,6 +11,7 @@
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/raw_ostream.h"
@@ -656,7 +657,7 @@ class ConvertHALEntryPointFuncOp : public ConvertToLLVMPattern {
       Operation *op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
     auto stdFuncOp = cast<func::FuncOp>(op);
-    if (!stdFuncOp.isPublic()) return failure();
+    // if (!stdFuncOp.isPublic()) return failure();
     FunctionType fnType = stdFuncOp.getFunctionType();
     if (fnType.getNumInputs() != 0 || fnType.getNumResults() != 0) {
       op->emitWarning() << "public functions on executables must be () -> ()";
@@ -682,11 +683,17 @@ class ConvertHALEntryPointFuncOp : public ConvertToLLVMPattern {
     }
 
     // Clone the function as an LLVMFuncOp and convert all interior types.
+    LLVM::Linkage linkage = LLVM::Linkage::Internal;
+    llvm::StringSet<> customOpSet{
+      {"OpName", "mem_promote", "mem_demote", "mem_reorder"}};
+    if(customOpSet.contains(stdFuncOp.getName())) {
+      return failure();
+    }
     auto llvmFuncType = LLVM::LLVMFunctionType::get(
         IntegerType::get(rewriter.getContext(), 32), abiInputTypes);
     auto llvmFuncOp = rewriter.create<LLVM::LLVMFuncOp>(
         stdFuncOp.getLoc(), stdFuncOp.getName(), llvmFuncType,
-        LLVM::Linkage::Internal, /*dso_local=*/false, funcAttrs);
+        linkage, /*dso_local=*/false, funcAttrs);
     rewriter.inlineRegionBefore(stdFuncOp.getBody(), llvmFuncOp.getBody(),
                                 llvmFuncOp.end());
     if (failed(rewriter.convertRegionTypes(
@@ -991,22 +998,6 @@ void ConvertToLLVMPass::runOnOperation() {
                            IREE::Util::UtilDialect, IREE::HAL::HALDialect,
                            math::MathDialect, tosa::TosaDialect>();
   target.addIllegalOp<UnrealizedConversionCastOp>();
-
-  // Don't apply patterns to private function (e.g num_workgroups func).
-  target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp funcOp) {
-    if (isEntryPoint(funcOp)) return false;
-    return true;
-  });
-  target.addDynamicallyLegalDialect<func::FuncDialect, mlir::math::MathDialect,
-                                    mlir::arith::ArithmeticDialect,
-                                    IREE::Util::UtilDialect,
-                                    IREE::HAL::HALDialect, math::MathDialect>(
-      [&](Operation *op) {
-        auto funcParent = op->getParentOfType<func::FuncOp>();
-        if (!funcParent) return false;
-        if (isEntryPoint(funcParent)) return false;
-        return true;
-      });
 
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     signalPassFailure();

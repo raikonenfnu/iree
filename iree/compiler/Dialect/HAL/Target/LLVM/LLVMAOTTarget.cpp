@@ -345,8 +345,8 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     // weak such that we don't trigger ODR issues.
     llvm::Linker moduleLinker(*llvmModule);
 
-    llvm::Linker::Flags linkerFlag = llvm::Linker::OverrideFromSrc;
-    if (options_.linkStatic) linkerFlag = llvm::Linker::LinkOnlyNeeded;
+    // llvm::Linker::Flags linkerFlag = llvm::Linker::OverrideFromSrc;
+    // if (options_.linkStatic) linkerFlag = llvm::Linker::LinkOnlyNeeded;
 
     // Strip any compiler identifiers that may have snuck in. We let the linker
     // tag the module.
