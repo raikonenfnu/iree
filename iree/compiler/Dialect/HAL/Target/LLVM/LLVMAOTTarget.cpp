@@ -9,6 +9,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <string>
+#include <sstream>
+#include <regex>
 
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
 #include "iree-dialects/Dialect/LinalgTransform/LinalgTransformOps.h"
@@ -214,6 +217,47 @@ class LLVMAOTTargetBackend final : public TargetBackend {
         [](mlir::ModuleOp moduleOp) { return moduleOp; }, builder);
   }
 
+  std::string addCustomInstructions(std::string &asmData) {
+    std::stringstream ss(asmData); 
+    std::string line;
+    std::string newAsmData = "";
+    std::regex load_store_re("\t(.*)\t(.*),(.*)");
+    int count = 0;
+    bool initialized = false;
+    int offset = 0;
+    std::string preamble = "\tli\tt0, 1\n\tli\tt1, 2\n\tli\tt2, 0\n";
+    while (std::getline(ss, line)) {
+      std::cout << line << std::endl;
+      std::smatch matches;
+      if (std::regex_search(line, matches, load_store_re)) {
+	if (matches[1].str() == "vle16.v") {
+	  if (count % 2 == 0)
+	    line = std::regex_replace(line, load_store_re, "\tcustom_read\tt2, $2, zero, opcode");
+	  else
+	    line = std::regex_replace(line, load_store_re, "\tcustom_read\tt2, $2, t0, opcode");
+      	  if (!initialized) {
+      	    line = preamble + line;
+      	    initialized = true;
+      	  }
+      	  count++;
+	}
+	if (matches[1].str() == "vse16.v") {
+	  line = std::regex_replace(line, load_store_re, "\tcustom_write\tt2, $2, t1, opcode");
+	}
+	if (matches[1].str() == "ori") {
+	  offset += 512;
+	  line = std::regex_replace(line, load_store_re, "\tli\tt2, " + std::to_string(offset));
+	}
+	if ((matches[1].str() == "slli") || (matches[1].str() == "add")) continue;
+	if (matches[1].str() == "lwu") continue;
+	if ((matches[1].str() == "ld") && (matches[3].str().find("sp") == std::string::npos)) continue;
+      }
+      if (line.find("attribute") != std::string::npos) continue;
+      newAsmData += line + "\n";
+    }
+    return newAsmData;
+  }
+
   LogicalResult generateObjectFile(IREE::HAL::ExecutableVariantOp variantOp,
                                    OpBuilder &executableBuilder) {
     // Perform the translation in a separate context to avoid any
@@ -367,6 +411,9 @@ class LLVMAOTTargetBackend final : public TargetBackend {
       return variantOp.emitError()
              << "failed to compile LLVM-IR module to an assembly file";
     }
+
+    asmData = addCustomInstructions(asmData);
+
     {
       auto asmFile = Artifact::createVariant(objectFiles.front().path, "s");
       auto &os = asmFile.outputFile->os();
@@ -911,9 +958,11 @@ class LLVMAOTTargetBackend final : public TargetBackend {
         llvm::GlobalValue::ExternalLinkage, "dummy_func", *llvmModule);
     llvm::TargetTransformInfo tti =
         targetMachine->getTargetTransformInfo(*dummyFunc);
-    config_.vectorSize = tti.getRegisterBitWidth(
-                             llvm::TargetTransformInfo::RGK_FixedWidthVector) /
-                         8;
+    config_.vectorSize = 512;
+    //config_.vectorSize = tti.getRegisterBitWidth(
+    //                         llvm::TargetTransformInfo::RGK_FixedWidthVector) /
+    //                     8;
+    printf("Modified vector size = %ld\n", config_.vectorSize);
     LLVM_DEBUG({
       llvm::dbgs() << "CPU : " << targetMachine->getTargetCPU() << "\n";
       llvm::dbgs() << "Target Triple : "
