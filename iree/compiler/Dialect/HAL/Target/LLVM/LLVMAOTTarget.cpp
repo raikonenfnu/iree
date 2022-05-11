@@ -227,7 +227,6 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     int offset = 0;
     std::string preamble = "\tli\tt0, 1\n\tli\tt1, 2\n\tli\tt2, 0\n";
     while (std::getline(ss, line)) {
-      std::cout << line << std::endl;
       std::smatch matches;
       if (std::regex_search(line, matches, load_store_re)) {
 	if (matches[1].str() == "vle16.v") {
