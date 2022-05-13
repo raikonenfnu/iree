@@ -243,12 +243,14 @@ class LLVMAOTTargetBackend final : public TargetBackend {
 	if (matches[1].str() == "vse16.v") {
 	  line = std::regex_replace(line, load_store_re, "\tcustom_write\tt2, $2, t1, opcode");
 	}
-	if (matches[1].str() == "ori") {
+	if ((matches[1].str() == "ori") || (matches[1].str() == "addiw")) {
 	  offset += 512;
 	  line = std::regex_replace(line, load_store_re, "\tli\tt2, " + std::to_string(offset));
 	}
 	if ((matches[1].str() == "slli") || (matches[1].str() == "add")) continue;
 	if (matches[1].str() == "lwu") continue;
+	if (matches[1].str() == "or") continue;
+	if (matches[1].str() == "lui") continue;
 	if ((matches[1].str() == "ld") && (matches[3].str().find("sp") == std::string::npos)) continue;
       }
       if (line.find("attribute") != std::string::npos) continue;
