@@ -74,7 +74,7 @@ Artifact Artifact::createVariant(StringRef basePath, StringRef suffix) {
   llvm::sys::path::replace_extension(filePath, suffix);
   std::error_code error;
   auto file = std::make_unique<llvm::ToolOutputFile>(filePath, error,
-                                                     llvm::sys::fs::OF_Append);
+                                                     llvm::sys::fs::OF_None);
   if (error) {
     llvm::errs() << "failed to open temporary file '" << filePath
                  << "': " << error.message();
