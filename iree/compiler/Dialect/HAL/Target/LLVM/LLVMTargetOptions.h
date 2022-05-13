@@ -25,6 +25,7 @@ enum class SanitizerKind {
 
 struct LLVMTargetOptions {
   std::string funcName;
+  bool emitAdditionalArtifacts = false;
   // Target machine configuration.
   std::string targetTriple;
   std::string targetCPU;
@@ -73,6 +74,7 @@ struct LLVMTargetOptions {
   //
   // This option is incompatible with the linkEmbedded option.
   std::string staticLibraryOutput;
+
 };
 
 // Returns LLVMTargetOptions struct intialized with the iree-llvm-* flags.

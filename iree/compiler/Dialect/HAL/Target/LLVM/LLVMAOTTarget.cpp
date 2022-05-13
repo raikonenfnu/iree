@@ -372,15 +372,18 @@ class LLVMAOTTargetBackend final : public TargetBackend {
 
     SmallVector<Artifact> objectFiles;
 
-    std::string moduleStr;
-    llvm::raw_string_ostream ss(moduleStr);
-    ss << *llvmModule;
-    std::string name = libraryName + ".ll";
-    std::cout << "Writing to ... " << name << std::endl;
-    std::ofstream output(name);
-    output << moduleStr;
-    output.close();
+    if (options_.emitAdditionalArtifacts) {
+      std::string moduleStr;
+      llvm::raw_string_ostream ss(moduleStr);
+      ss << *llvmModule;
+      std::string name = libraryName + ".ll";
+      std::cout << "Writing to ... " << name << std::endl;
+      std::ofstream output(name);
+      output << moduleStr;
+      output.close();
+    }
 
+    if (options_.emitAdditionalArtifacts) {
     // Emit the base object file containing the bulk of our code.
     // This must come first such that we have the proper library linking order.
     {
@@ -403,6 +406,7 @@ class LLVMAOTTargetBackend final : public TargetBackend {
       objectFile.outputFile->keep();
       objectFiles.push_back(std::move(objectFile));
     }
+    }
 
     // If we are keeping artifacts then let's also add the bitcode and
     // assembly listing for easier debugging (vs just the binary object file).
@@ -416,13 +420,15 @@ class LLVMAOTTargetBackend final : public TargetBackend {
     asmData = addCustomInstructions(asmData);
 
     {
-      auto asmFile = Artifact::createVariant(objectFiles.front().path, "s");
+      auto asmFile = Artifact::createVariant(options_.funcName, "s");
       auto &os = asmFile.outputFile->os();
       os << asmData;
       os.flush();
       os.close();
       asmFile.outputFile->keep();
     }
+
+    if (options_.emitAdditionalArtifacts) {
     {
       auto bitcodeFile =
           Artifact::createVariant(objectFiles.front().path, "bc");
@@ -432,6 +438,8 @@ class LLVMAOTTargetBackend final : public TargetBackend {
       os.close();
       bitcodeFile.outputFile->keep();
     }
+    }
+
     return success();
   }
 

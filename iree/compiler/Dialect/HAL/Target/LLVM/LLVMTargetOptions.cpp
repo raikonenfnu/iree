@@ -66,6 +66,8 @@ LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
   static llvm::cl::opt<std::string> clFuncName(
       "iree-llvm-func-name", llvm::cl::desc("Name of dispatch function"),
       llvm::cl::init("forward_dispatch_0"));
+  static llvm::cl::opt<bool> clEmitAdditionalArtifacts(
+      "iree-llvm-emit-additional-artifacts", llvm::cl::init(false));
   static llvm::cl::opt<std::string> clTargetTriple(
       "iree-llvm-target-triple", llvm::cl::desc("LLVM target machine triple"),
       llvm::cl::init(targetOptions.targetTriple));
@@ -94,6 +96,7 @@ LLVMTargetOptions getLLVMTargetOptionsFromFlags() {
       llvm::cl::desc("Enable LLVM SLP Vectorization opt"));
 
   targetOptions.funcName = clFuncName;
+  targetOptions.emitAdditionalArtifacts = clEmitAdditionalArtifacts;
   targetOptions.targetTriple = clTargetTriple;
   llvm::Triple targetTriple(targetOptions.targetTriple);
   if (clTargetCPU != "host") {
