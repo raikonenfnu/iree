@@ -93,6 +93,9 @@ std::unique_ptr<Pass> createConvertLinalgMatmulToMmt4DPass(StringRef options);
 // Creates a pass to fuse Linalg operations on tensors.
 std::unique_ptr<Pass> createFusionOfTensorOpsPass();
 
+// Create a pass for Demotion Out of Range.
+std::unique_ptr<OperationPass<func::FuncOp>> createConvertOutOfRangeDemotionPass();
+
 // Infers and inserts util.numeric.optional_narrow ops at points that may be
 // beneficial.
 std::unique_ptr<Pass> createInferNumericNarrowingPass();

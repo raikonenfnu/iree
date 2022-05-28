@@ -153,6 +153,7 @@ void buildFlowTransformPassPipeline(OpPassManager &passManager,
   // as these kind of blanket conversions have corner cases and potential
   // accuracy/precision losses beyond what the user may expect.
   if (clDemoteF64ToF32) {
+    passManager.addPass(IREE::Flow::createConvertOutOfRangeDemotionPass());
     passManager.addPass(IREE::Util::createDemoteF64ToF32Pass());
   }
   if (clDemoteF32ToF16) {

@@ -138,6 +138,12 @@ def ConvertLinalgMatmulToMmt4D :
   ];
 }
 
+def ConvertOutOfRangeDemotionPass :
+    Pass<"iree-convert-out-of-range-demotion", "func::FuncOp"> {
+  let summary = "Preconvert operands that is out of ranged based on the Operation.";
+  let constructor = "mlir::iree_compiler::IREE::Flow::createConvertOutOfRangeDemotionPass()";
+}
+
 def PadTensorToSubTensorInsert :
     Pass<"iree-flow-pad-tensor-to-subtensor-insert", ""> {
   let summary = "Convert linalg.pad_tensor into linalg.fill + subtensor_insert";
