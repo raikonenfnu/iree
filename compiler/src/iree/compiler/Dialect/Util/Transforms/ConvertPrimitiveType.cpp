@@ -210,11 +210,107 @@ struct ConvertTypeSensitiveArithCastOp : public OpConversionPattern<OpTy> {
   }
 };
 
+// Truncates input operand if it is a constant and is out of range of target
+// type.
+Value truncateOutOfRangeValue(Value operand,
+                              ConversionPatternRewriter &rewriter,
+                              TypeConverter *typeConverter) {
+  if (!operand.getDefiningOp()) {
+    return operand;
+  }
+  auto oldType = operand.getType();
+  auto newType = typeConverter->convertType(oldType);
+  if (oldType == newType) {
+    return operand;
+  }
+  auto constOp = dyn_cast<arith::ConstantOp>(operand.getDefiningOp());
+  if (!constOp) {
+    return operand;
+  }
+  auto intAttr = constOp->getAttr("value").dyn_cast<IntegerAttr>();
+  APInt value = intAttr.getValue();
+  APInt newValue = value.truncSSat(newType.getIntOrFloatBitWidth());
+  if (newValue == value) {
+    return operand;
+  }
+  Value truncatedConst = rewriter.create<arith::ConstantOp>(
+      constOp->getLoc(), IntegerAttr::get(oldType, newValue));
+  return truncatedConst;
+}
+
+bool isSignedOp(Operation *op) {
+  if (isa<arith::CeilDivSIOp>(op) || isa<arith::DivSIOp>(op) ||
+      isa<arith::ExtSIOp>(op) || isa<arith::FloorDivSIOp>(op) ||
+      isa<arith::MaxSIOp>(op) || isa<arith::RemSIOp>(op) ||
+      isa<arith::SIToFPOp>(op) || isa<arith::ShRSIOp>(op)) {
+    return true;
+  }
+  if (isa<arith::CmpIOp>(op)) {
+    bool isSigned = op->getAttr("predicate")
+                                .dyn_cast<mlir::arith::CmpIPredicateAttr>()
+                                .getValue() < mlir::arith::CmpIPredicate::ult
+                        ? true
+                        : false;
+    return isSigned;
+  }
+  if (isa<arith::SelectOp>(op)) {
+    for (auto childOp : op->getUsers()) {
+      bool childOpSign = isSignedOp(childOp);
+      if (childOpSign) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+struct ConvertTypeSensitiveArithCmpIOp
+    : public OpConversionPattern<arith::CmpIOp> {
+  using OpConversionPattern<arith::CmpIOp>::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      arith::CmpIOp op, typename arith::CmpIOp::Adaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto cmpPredicate = op->getAttr("predicate")
+                            .dyn_cast<mlir::arith::CmpIPredicateAttr>()
+                            .getValue();
+    bool isSigned = isSignedOp(op);
+    if (!isSigned) return failure();
+    Value lhs = truncateOutOfRangeValue(op.getOperand(0), rewriter,
+                                        this->getTypeConverter());
+    Value rhs = truncateOutOfRangeValue(op.getOperand(1), rewriter,
+                                        this->getTypeConverter());
+    if (lhs == op.getOperand(0) && rhs == op.getOperand(1)) return failure();
+    rewriter.replaceOpWithNewOp<arith::CmpIOp>(op, cmpPredicate, lhs, rhs);
+    return success();
+  }
+};
+
+struct ConvertTypeSensitiveArithSelectOp
+    : public OpConversionPattern<arith::SelectOp> {
+  using OpConversionPattern<arith::SelectOp>::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      arith::SelectOp op, typename arith::SelectOp::Adaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    Value selectPredicate = op->getOperand(0);
+    bool isSigned = isSignedOp(op);
+    if (!isSigned) return failure();
+    Value lhs = truncateOutOfRangeValue(op.getOperand(0), rewriter,
+                                        this->getTypeConverter());
+    Value rhs = truncateOutOfRangeValue(op.getOperand(1), rewriter,
+                                        this->getTypeConverter());
+    if (lhs == op.getOperand(0) && rhs == op.getOperand(1)) return failure();
+    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, selectPredicate, lhs, rhs);
+    return success();
+  }
+};
+
 template <typename T, typename Converter>
 struct ConvertTypesPass : public PassWrapper<T, OperationPass<mlir::ModuleOp>> {
   void runOnOperation() override {
     MLIRContext *context = &this->getContext();
     RewritePatternSet patterns(context);
+    patterns.insert<ConvertTypeSensitiveArithCmpIOp>(typeConverter, context);
+    patterns.insert<ConvertTypeSensitiveArithSelectOp>(typeConverter, context);
     patterns.insert<GenericTypeConversionPattern>(context, typeConverter);
     patterns.insert<ConvertTypeSensitiveArithCastOp<arith::TruncFOp, FloatType,
                                                     std::greater<unsigned>>>(
@@ -290,31 +386,30 @@ struct DemoteI64ToI32Pass
     return "Demotes i64 types to i32 types.";
   }
 };
-}  // namespace
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> createDemoteI64ToI32Pass() {
   return std::make_unique<DemoteI64ToI32Pass>();
 }
 static PassRegistration<DemoteI64ToI32Pass> demoteI64ToI32Pass;
 
-namespace {
-struct DemoteF32ToF16Converter
-    : public PrimitiveTypeConverter<Float32Type, Float16Type> {
-  Type getTargetType(Float32Type type) override {
-    return Float16Type::get(type.getContext());
-  }
-};
-struct DemoteF32ToF16Pass
-    : public ConvertTypesPass<DemoteF32ToF16Pass, DemoteF32ToF16Converter> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DemoteF32ToF16Pass)
+std::unique_ptr<OperationPass<mlir::ModuleOp>> namespace {
+  struct DemoteF32ToF16Converter
+      : public PrimitiveTypeConverter<Float32Type, Float16Type> {
+    Type getTargetType(Float32Type type) override {
+      return Float16Type::get(type.getContext());
+    }
+  };
+  struct DemoteF32ToF16Pass
+      : public ConvertTypesPass<DemoteF32ToF16Pass, DemoteF32ToF16Converter> {
+    MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DemoteF32ToF16Pass)
 
-  StringRef getArgument() const override {
-    return "iree-util-demote-f32-to-f16";
-  }
-  StringRef getDescription() const override {
-    return "Demotes f32 types to f16 types.";
-  }
-};
+    StringRef getArgument() const override {
+      return "iree-util-demote-f32-to-f16";
+    }
+    StringRef getDescription() const override {
+      return "Demotes f32 types to f16 types.";
+    }
+  };
 }  // namespace
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> createDemoteF32ToF16Pass() {
