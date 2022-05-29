@@ -269,6 +269,69 @@ struct ConvertTypesPass : public PassWrapper<T, OperationPass<mlir::ModuleOp>> {
   Converter typeConverter;
 };
 
+
+template <typename T, typename Converter>
+struct SignAwareDemotePass : public PassWrapper<T, OperationPass<mlir::ModuleOp>> {
+  void runOnOperation() override {
+    // MLIRContext *context = &this->getContext();
+    auto moduleOp =  this->getOperation();
+    // OpBuilder builder(context);
+    // OpBuilder builder(moduleOp.getBodyRegion());
+    for (const auto &op : moduleOp.getOps()) {
+        if(!isa<func::FuncOp>(op)) continue;
+        auto funcOp = dyn_cast<func::FuncOp>(op);
+        // if(!op) continue;
+        funcOp.walk([&](Operation* nestedOp) {
+          // llvm::outs()<<"op:"<<nestedOp->getName()<<"\n";
+          //if(something) return WalkResult::skip();
+          if(checkSignedness(nestedOp)){
+            OpBuilder builder(nestedOp->getParentRegion());
+            demoteSignedOp(nestedOp, builder);
+          }
+        });
+    }
+  }
+
+  bool checkSignedness(Operation *op) {
+    if(isa<arith::CmpIOp>(op)) {
+      bool isSigned = op->getAttr("predicate").dyn_cast<mlir::arith::CmpIPredicateAttr>().getValue() < mlir::arith::CmpIPredicate::ult ? true : false;
+      return isSigned;
+    }
+    if(isa<arith::SelectOp>(op)) {
+      for (auto childOp : op->getUsers()) {
+        bool childOpSign = checkSignedness(childOp);
+        if(childOpSign) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  void demoteSignedOp(Operation* op, OpBuilder& builder) {
+      // llvm::SmallVector<Value, 4> opOperands;
+      // llvm::SmallVector<NamedAttribute, 1> opAttrs;
+      // auto resultTypes = op.getResultTypes();
+      for (uint operandIdx = 0; operandIdx < op->getNumOperands(); operandIdx++) {
+        Value operand = op->getOperand(operandIdx);
+        if(!operand.getDefiningOp()) continue;
+        auto oldType = operand.getType();
+        auto newType = typeConverter.convertType(oldType);
+        if(oldType == newType) continue;
+        auto constOp = dyn_cast<arith::ConstantOp>(operand.getDefiningOp());
+        if(!constOp) continue;
+        auto intAttr = constOp->getAttr("value").dyn_cast<IntegerAttr>();
+        APInt value = intAttr.getValue();
+        APInt newValue = value.truncSSat(newType.getIntOrFloatBitWidth());
+        if(newValue == value) continue;
+        auto newConstantOp =  builder.create<arith::ConstantOp>(constOp->getLoc(), IntegerAttr::get(oldType, newValue));
+        op->setOperand(operandIdx, newConstantOp.getResult());
+      }
+    }
+
+  Converter typeConverter;
+};
+
 }  // namespace
 
 namespace {
@@ -290,12 +353,29 @@ struct DemoteI64ToI32Pass
     return "Demotes i64 types to i32 types.";
   }
 };
+
+struct SignednessPrepI64ToI32Pass
+    : public SignAwareDemotePass<DemoteI64ToI32Pass, DemoteI64ToI32Converter> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DemoteI64ToI32Pass)
+
+  StringRef getArgument() const override {
+    return "iree-util-prep-demote-i64-to-i32";
+  }
+  StringRef getDescription() const override {
+    return "Preprocess Demotion i64 types to i32 types.";
+  }
+};
 }  // namespace
 
 std::unique_ptr<OperationPass<mlir::ModuleOp>> createDemoteI64ToI32Pass() {
   return std::make_unique<DemoteI64ToI32Pass>();
 }
 static PassRegistration<DemoteI64ToI32Pass> demoteI64ToI32Pass;
+
+std::unique_ptr<OperationPass<mlir::ModuleOp>> createSignednessPrepI64ToI32Pass() {
+  return std::make_unique<SignednessPrepI64ToI32Pass>();
+}
+static PassRegistration<SignednessPrepI64ToI32Pass> signedPrepDemoteI64ToI32Pass;
 
 namespace {
 struct DemoteF32ToF16Converter
