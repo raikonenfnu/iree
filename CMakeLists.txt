@@ -181,6 +181,15 @@ set(IREE_EXTERNAL_ROCM_HAL_DRIVER_TARGET "iree::experimental::rocm::registration
 set(IREE_EXTERNAL_ROCM_HAL_DRIVER_REGISTER "iree_hal_rocm_driver_module_register")
 
 #-------------------------------------------------------------------------------
+# Experimental Intel Level Zero HAL driver
+#-------------------------------------------------------------------------------
+
+set(IREE_EXTERNAL_LEVEL_ZERO_HAL_DRIVER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/experimental/level_zero")
+set(IREE_EXTERNAL_LEVEL_ZERO_HAL_DRIVER_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/experimental/level_zero")
+set(IREE_EXTERNAL_LEVEL_ZERO_HAL_DRIVER_TARGET "iree::experimental::level_zero::registration")
+set(IREE_EXTERNAL_LEVEL_ZERO_HAL_DRIVER_REGISTER "iree_hal_level_zero_driver_module_register")
+
+#-------------------------------------------------------------------------------
 # Compiler Target Options
 # By default, all compiler targets supported by the current platform which do
 # not require external deps are enabled by default. This can be changed with:
