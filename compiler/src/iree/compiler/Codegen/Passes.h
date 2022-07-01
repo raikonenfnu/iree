@@ -506,7 +506,7 @@ createSPIRVCreateFastSlowPathPass();
 /// Populates passes needed to lower linalg/arith/math ops to SPIR-V ops via the
 /// structured ops path. The pass manager `pm` here operate on the module
 /// within the IREE::HAL::ExecutableOp.
-void buildSPIRVCodegenPassPipeline(OpPassManager &pm, bool enableFastMath);
+void buildSPIRVCodegenPassPipeline(OpPassManager &pm, bool enableFastMath, bool useKernelCapability = false);
 
 //------------------------------------------------------------------------------
 // VMVX passes
