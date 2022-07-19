@@ -200,7 +200,7 @@ static iree_status_t iree_hal_level_zero_device_query_i64(
   if (iree_string_view_equal(category,
                              iree_make_cstring_view("hal.executable.format"))) {
     *out_value =
-        iree_string_view_equal(key, iree_make_cstring_view("vulkan-spirv-fb"))
+        iree_string_view_equal(key, iree_make_cstring_view("opencl-spirv-fb"))
             ? 1
             : 0;
     return iree_ok_status();
