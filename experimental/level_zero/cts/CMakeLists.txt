@@ -12,7 +12,7 @@ iree_hal_cts_test_suite(
   DRIVER_REGISTRATION_FN
     "iree_hal_level_zero_driver_module_register"
   COMPILER_TARGET_BACKEND
-    "vulkan-spirv"
+    "opencl-spirv"
   EXECUTABLE_FORMAT
     "\"SPVE\""
   DEPS
