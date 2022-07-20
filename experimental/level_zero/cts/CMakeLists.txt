@@ -14,7 +14,7 @@ iree_hal_cts_test_suite(
   COMPILER_TARGET_BACKEND
     "opencl-spirv"
   EXECUTABLE_FORMAT
-    "\"SPVE\""
+    "\"ZERO\""
   DEPS
     iree::experimental::level_zero::registration
   EXCLUDED_TESTS

@@ -90,6 +90,10 @@ iree_status_t iree_hal_level_zero_executable_layout_create(
     executable_layout->push_constant_base_index = binding_number;
     executable_layout->push_constant_count = push_constant_count;
     *out_executable_layout = (iree_hal_executable_layout_t*)executable_layout;
+    IREE_HAL_ASSERT_TYPE(*out_executable_layout,
+                         &iree_hal_level_zero_executable_layout_vtable);
+    IREE_HAL_ASSERT_TYPE(executable_layout,
+                         &iree_hal_level_zero_executable_layout_vtable);
   }
   IREE_TRACE_ZONE_END(z0);
   return status;

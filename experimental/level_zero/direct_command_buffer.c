@@ -363,12 +363,11 @@ static iree_status_t iree_hal_level_zero_direct_command_buffer_dispatch(
   }
   iree_host_size_t num_kernel_args = constant_base_index + num_constants;
   for (iree_host_size_t i = 0; i < num_kernel_args; i++) {
-    //  TODO(levelzero): Verify num_constants represent number of args.
     LEVEL_ZERO_RETURN_IF_ERROR(
         command_buffer->context->syms,
         zeKernelSetArgumentValue(func, i,
                                  sizeof(command_buffer->current_descriptor[i]),
-                                 &command_buffer->current_descriptor[i]),
+                                 command_buffer->current_descriptor[i]),
         "zeKernelSetArgumentValue");
   }
 

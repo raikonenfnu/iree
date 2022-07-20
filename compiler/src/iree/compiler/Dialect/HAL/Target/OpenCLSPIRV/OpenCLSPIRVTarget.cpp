@@ -55,8 +55,9 @@ static spirv::TargetEnvAttr getSPIRVTargetEnv(
   //       Vulkan::getTargetEnvForTriple(context, openCLTargetTriple));
   // }
   auto triple = spirv::VerCapExtAttr::get(
-      spirv::Version::V_1_0, {spirv::Capability::Kernel},
-      {spirv::Extension::SPV_KHR_storage_buffer_storage_class, spirv::Extension::SPV_INTEL_subgroups}, context);
+      spirv::Version::V_1_0,
+      {spirv::Capability::Kernel, spirv::Capability::Addresses},
+      {spirv::Extension::SPV_INTEL_subgroups}, context);
   return spirv::TargetEnvAttr::get(triple, spirv::Vendor::Unknown,
                                    spirv::DeviceType::Unknown,
                                    spirv::TargetEnvAttr::kUnknownDeviceID,
@@ -113,6 +114,7 @@ class OpenCLSPIRVTargetBackend : public TargetBackend {
     if (failed(spirv::serialize(spvModuleOp, spvBinary)) || spvBinary.empty()) {
       return variantOp.emitError() << "failed to serialize spv.module";
     }
+
     if (!options.dumpBinariesPath.empty()) {
       dumpDataToPath<uint32_t>(options.dumpBinariesPath, options.dumpBaseName,
                                variantOp.getName(), ".spv", spvBinary);
@@ -123,19 +125,26 @@ class OpenCLSPIRVTargetBackend : public TargetBackend {
 
     // The sequencer and runtime use ordinals instead of names. We provide the
     // list of entry point names here that are then passed in
-    // VkShaderModuleCreateInfo.
+    // zeModuleCreate.
     SmallVector<StringRef, 8> entryPointNames;
-    spvModuleOp.walk([&](spirv::EntryPointOp exportOp) {
-      entryPointNames.push_back(exportOp.fn());
+    std::vector<SmallVector<int32_t, 3>> workgroupSizes;
+    spvModuleOp.walk([&](spirv::ExecutionModeOp executionModelOp) {
+      entryPointNames.push_back(executionModelOp.fn());
+      ArrayAttr workGroupSizeAttr = executionModelOp.values();
+      assert(workGroupSizeAttr.size() == 3 &&
+             "workgroup size is expected to be 3");
+      workgroupSizes.push_back(
+          {int(workGroupSizeAttr[0].dyn_cast<IntegerAttr>().getInt()),
+           int(workGroupSizeAttr[1].dyn_cast<IntegerAttr>().getInt()),
+           int(workGroupSizeAttr[2].dyn_cast<IntegerAttr>().getInt())});
     });
     auto entryPointsRef = builder.createStringVec(entryPointNames);
     iree_LEVEL_ZEROBlockSizeDef_vec_start(builder);
-    // auto blockSizes = workgroupSizes.begin();
+    auto blockSizes = workgroupSizes.begin();
     for (int i = 0, e = entryPointNames.size(); i < e; ++i) {
-      // iree_LEVEL_ZEROBlockSizeDef_vec_push_create(builder, (*blockSizes)[0],
-      //                                       (*blockSizes)[1], (*blockSizes)[2]);
-      iree_LEVEL_ZEROBlockSizeDef_vec_push_create(builder, 1, 1, 1);
-      // ++blockSizes;
+      iree_LEVEL_ZEROBlockSizeDef_vec_push_create(
+          builder, (*blockSizes)[0], (*blockSizes)[1], (*blockSizes)[2]);
+      ++blockSizes;
     }
     auto blockSizesRef = iree_LEVEL_ZEROBlockSizeDef_vec_end(builder);
 
