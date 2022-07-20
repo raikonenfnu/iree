@@ -208,6 +208,37 @@ struct HALInterfaceWorkgroupIdAndCountConverter final
   }
 };
 
+using SetBinding = std::pair<APInt, APInt>;
+
+/// Convention with the HAL side to pass kernel arguments.
+/// The bindings are ordered based on binding set and binding index then
+/// compressed and mapped to dense set of arguments.
+/// This function looks at the symbols and return the mapping between
+/// InterfaceBindingOp and kernel argument index.
+/// For instance if the kernel has (set, bindings) A(0, 1), B(1, 5), C(0, 6) it
+/// will return the mapping [A, 0], [C, 1], [B, 2]
+static llvm::SmallDenseMap<SetBinding, size_t> getKernelArgMapping(
+    Operation *funcOp) {
+  llvm::SetVector<SetBinding> usedBindingSet;
+  funcOp->walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
+    usedBindingSet.insert(SetBinding(subspanOp.set(), subspanOp.binding()));
+  });
+  auto sparseBindings = usedBindingSet.takeVector();
+  std::sort(sparseBindings.begin(), sparseBindings.end(),
+            [](SetBinding lhs, SetBinding rhs) {
+              if (lhs.first == rhs.first) return lhs.second.ult(rhs.second);
+              return lhs.first.ult(rhs.first);
+            });
+  llvm::SmallDenseMap<SetBinding, size_t> mapBindingArgIndex;
+  for (auto binding : llvm::enumerate(sparseBindings)) {
+    mapBindingArgIndex[binding.value()] = binding.index();
+  }
+  return mapBindingArgIndex;
+}
+
+// TODO(raikonenfnu): Modify subspan conversion to replace subspanOp, by the
+// function argument.
+
 /// A pattern to convert hal.interface.binding.subspan into a sequence of SPIR-V
 /// ops to get the address to a global variable representing the resource
 /// buffer.
@@ -215,10 +246,11 @@ struct HALInterfaceBindingSubspanConverter final
     : public OpConversionPattern<IREE::HAL::InterfaceBindingSubspanOp> {
   HALInterfaceBindingSubspanConverter(
       TypeConverter &typeConverter, MLIRContext *context,
-      const InterfaceResourceMap &interfaceToResourceVars,
+      const InterfaceResourceMap &interfaceToResourceVars, const bool hasKernelCapabilty,
       PatternBenefit benefit = 1)
       : OpConversionPattern(typeConverter, context, benefit),
-        interfaceToResourceVars(interfaceToResourceVars) {}
+        interfaceToResourceVars(interfaceToResourceVars),
+        hasKernelCapabilty(hasKernelCapabilty) {}
 
   LogicalResult matchAndRewrite(
       IREE::HAL::InterfaceBindingSubspanOp subspanOp, OpAdaptor adaptor,
@@ -235,17 +267,152 @@ struct HALInterfaceBindingSubspanConverter final
              << "failed to convert SPIR-V type: " << resultType;
     }
 
+    if(hasKernelCapabilty) {
+      // Bail until nested under an SPV::FuncOp.
+      auto spirvFuncOp = subspanOp.getOperation()->getParentOfType<spirv::FuncOp>();
+      auto argMapping = getKernelArgMapping(spirvFuncOp);
+      size_t argIndex = argMapping.lookup(SetBinding(subspanOp.set(),
+                                           subspanOp.binding()));
+      if(argIndex >= argMapping.size()) return failure();
+      if(argIndex >= spirvFuncOp.getNumArguments()) return failure();
+      auto argValue = spirvFuncOp.getArgument(argIndex);
+      rewriter.replaceOp(subspanOp, argValue);
+      llvm::outs()<<"ocl print:"<<"\n"<<spirvFuncOp<<"\n";
+      return success();
+    }
     auto varOp = interfaceToResourceVars.lookup(subspanOp);
     // Fix up the variable's type.
     varOp.typeAttr(TypeAttr::get(convertedType));
-
+    auto newspirvFuncOp = subspanOp.getOperation()->getParentOfType<spirv::FuncOp>();
     rewriter.replaceOpWithNewOp<spirv::AddressOfOp>(subspanOp, varOp);
-
+    llvm::outs()<<"vulkanpritn:"<<"\n"<<newspirvFuncOp<<"\n";
     return success();
   }
 
  private:
   const InterfaceResourceMap &interfaceToResourceVars;
+  const bool hasKernelCapabilty;
+};
+
+// TODO(raikonenfnu): Add ConvertFunc op to chang spv.Func to have the correct
+// function signature with the subspans.
+// Used for kernel style spirv. Moves subspan to function arguments. 
+// struct FuncOpToSPVConverter final
+//     : public OpConversionPattern<func::FuncOp> {
+//   FuncOpToSPVConverter(
+//       TypeConverter &typeConverter, MLIRContext *context,
+//       PatternBenefit benefit = 1)
+//       : OpConversionPattern(typeConverter, context, benefit) {}
+
+//   LogicalResult matchAndRewrite(
+//       func::FuncOp funcOp, OpAdaptor adaptor,
+//       ConversionPatternRewriter &rewriter) const override {
+//     llvm::outs()<<"Trying to get spirv funcop!\n";
+//     FunctionType fnType = funcOp.getFunctionType();
+//     (void)fnType;
+//     if (!funcOp.isPublic()) return failure();
+
+//     // illegal FuncOp must have 0 inputs.
+//     assert(fnType.getNumInputs() == 0 && fnType.getNumResults() == 0);
+
+//     TypeConverter::SignatureConversion signatureConverter(/*numOrigInputs=*/0);
+//     auto argMapping = getKernelArgMapping(funcOp);
+//     // There may be dead symbols, we pick i32 pointer as default argument type.
+//     SmallVector<Type, 8> newInputTypes(argMapping.size(), rewriter.getI32Type());
+//     funcOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
+//       Type subspanType = subspanOp.getOperation()->getResult(0).getType();
+//       newInputTypes[argMapping[SetBinding(subspanOp.set(),
+//                                            subspanOp.binding())]] = subspanType;
+//     });
+//     // As a convention with HAL, push constants are appended as kernel arguments
+//     // after all the binding inputs.
+//     uint64_t numConstants = 0;
+//     funcOp.walk([&](IREE::HAL::InterfaceConstantLoadOp constantOp) {
+//       numConstants =
+//           std::max(constantOp.index().getZExtValue() + 1, numConstants);
+//     });
+//     newInputTypes.resize(argMapping.size() + numConstants,
+//                           rewriter.getI32Type());
+//     if (!newInputTypes.empty()) signatureConverter.addInputs(newInputTypes);
+
+//     auto newFuncType = FunctionType::get(rewriter.getContext(), newInputTypes,
+//                             /*resultTypes=*/{});
+//     auto newFuncOp = rewriter.create<func::FuncOp>(
+//         funcOp.getLoc(), funcOp.getName(), newFuncType);
+
+//     // Copy all of funcOp's operations into newFuncOp's body and perform region
+//     // type conversion.
+//     rewriter.inlineRegionBefore(funcOp.getBody(), newFuncOp.getBody(),
+//                                 newFuncOp.end());
+//     if (failed(rewriter.convertRegionTypes(&newFuncOp.getBody(), *typeConverter,
+//                                            &signatureConverter))) {
+//       return failure();
+//     }
+//     llvm::outs()<<"new FuncOp:"<<newFuncOp<<"\n";
+//     rewriter.eraseOp(funcOp);
+//     return success();
+//   }
+// };
+struct FuncOpToSPVConverter final
+    : public OpConversionPattern<func::FuncOp> {
+  FuncOpToSPVConverter(
+      TypeConverter &typeConverter, MLIRContext *context,
+      PatternBenefit benefit = 1)
+      : OpConversionPattern(typeConverter, context, benefit) {}
+
+  LogicalResult matchAndRewrite(
+      func::FuncOp funcOp, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    llvm::outs()<<"Trying to get spirv funcop!\n";
+    FunctionType fnType = funcOp.getFunctionType();
+    (void)fnType;
+    if (!funcOp.isPublic()) return failure();
+
+    // illegal FuncOp must have 0 inputs.
+    assert(fnType.getNumInputs() == 0 && fnType.getNumResults() == 0);
+
+    TypeConverter::SignatureConversion signatureConverter(/*numOrigInputs=*/0);
+    auto argMapping = getKernelArgMapping(funcOp);
+    // There may be dead symbols, we pick i32 pointer as default argument type.
+    SmallVector<Type, 8> spirvInputTypes(
+        argMapping.size(), spirv::PointerType::get(rewriter.getI32Type(), spirv::StorageClass::CrossWorkgroup));
+    funcOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
+      Type subspanType = subspanOp.getOperation()->getResult(0).getType();
+      Type convertedSpirvType = this->getTypeConverter()->convertType(subspanType);
+      Type inputConvertedSpirvType = spirv::PointerType::get(convertedSpirvType.dyn_cast<spirv::PointerType>().getPointeeType(), spirv::StorageClass::CrossWorkgroup);
+      spirvInputTypes[argMapping[SetBinding(subspanOp.set(),
+                                           subspanOp.binding())]] = inputConvertedSpirvType;
+    });
+    // As a convention with HAL, push constants are appended as kernel arguments
+    // after all the binding inputs.
+    uint64_t numConstants = 0;
+    funcOp.walk([&](IREE::HAL::InterfaceConstantLoadOp constantOp) {
+      numConstants =
+          std::max(constantOp.index().getZExtValue() + 1, numConstants);
+    });
+    spirvInputTypes.resize(argMapping.size() + numConstants,
+                          rewriter.getI32Type());
+    if (!spirvInputTypes.empty()) signatureConverter.addInputs(spirvInputTypes);
+
+    auto spirvFuncType = FunctionType::get(rewriter.getContext(), spirvInputTypes,
+                            /*resultTypes=*/{});
+    auto spirvFuncOp = rewriter.create<spirv::FuncOp>(
+        funcOp.getLoc(), funcOp.getName(), spirvFuncType, spirv::FunctionControl::None);
+
+    // Copy all of funcOp's operations into spirvFuncOp's body and perform region
+    // type conversion.
+    rewriter.inlineRegionBefore(funcOp.getBody(), spirvFuncOp.getBody(),
+                                spirvFuncOp.end());
+    if (failed(rewriter.convertRegionTypes(&spirvFuncOp.getBody(), *typeConverter,
+                                           &signatureConverter))) {
+      return failure();
+    }
+    llvm::outs()<<"Original FuncOp"<<funcOp<<"\n";
+    llvm::outs()<<"new FuncOp"<<spirvFuncOp<<"\n";
+    llvm::outs()<<"OG num of arg"<<spirvFuncOp.getNumArguments()<<"\n";
+    rewriter.eraseOp(funcOp);
+    return success();
+  }
 };
 
 /// Pattern to lower operations that become a no-ops at this level.
@@ -331,6 +498,13 @@ void ConvertToSPIRVPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   ScfToSPIRVContext scfToSPIRVContext;
 
+  bool hasKernelCapabilty = false;
+  for (auto capabiltiy : targetAttr.getCapabilities()) {
+    if(capabiltiy == spirv::Capability::Kernel) {
+      hasKernelCapabilty = true;
+    }
+  }
+
   // Pull in GPU patterns to convert processor ID ops and loop ops.
   populateGPUToSPIRVPatterns(typeConverter, patterns);
 
@@ -378,12 +552,15 @@ void ConvertToSPIRVPass::runOnOperation() {
           IREE::HAL::InterfaceWorkgroupCountOp, spirv::BuiltIn::NumWorkgroups>>(
       typeConverter, context);
 
+  if(hasKernelCapabilty) {
+    patterns.insert<FuncOpToSPVConverter>(typeConverter, context);
+  }
   // Performs a prelimiary step to analyze all hal.interface.binding.subspan ops
   // and create spv.GlobalVariables.
   auto interfaceToResourceVars = createResourceVariables(moduleOp);
   // For using use them in conversion.
   patterns.insert<HALInterfaceBindingSubspanConverter>(typeConverter, context,
-                                                       interfaceToResourceVars);
+                                                       interfaceToResourceVars, hasKernelCapabilty);
 
   /// Fold certain operations as no-ops:
   /// - linalg.reshape becomes a no-op since all memrefs are linearized in
@@ -415,10 +592,15 @@ void ConvertToSPIRVPass::runOnOperation() {
   }
 
   // Collect all SPIR-V ops into a spv.module.
+  spirv::AddressingModel addressingModel = spirv::AddressingModel::Logical;
+  spirv::MemoryModel memoryModel = spirv::MemoryModel::GLSL450;
+  if(hasKernelCapabilty) {
+    addressingModel = spirv::AddressingModel::Physical32;
+    memoryModel = spirv::MemoryModel::OpenCL;
+  }
   auto builder = OpBuilder::atBlockBegin(moduleOp.getBody());
   auto spvModule = builder.create<spirv::ModuleOp>(
-      moduleOp.getLoc(), spirv::AddressingModel::Logical,
-      spirv::MemoryModel::GLSL450);
+      moduleOp.getLoc(), addressingModel, memoryModel);
   Block *body = spvModule.getBody();
   Dialect *spvDialect = spvModule->getDialect();
   for (Operation &op : llvm::make_early_inc_range(*moduleOp.getBody())) {
