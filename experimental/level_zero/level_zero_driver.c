@@ -155,12 +155,8 @@ static iree_status_t iree_hal_level_zero_driver_query_available_devices(
   if (iree_status_is_ok(status)) {
     uint8_t* buffer_ptr =
         (uint8_t*)device_infos + device_count * sizeof(iree_hal_device_info_t);
-    // TODO(levelzero): Validate using malloc is OK, other wise, define max
-    // device count and use ze_device_handle_t
-    // device_list[IREE_MAX_DEVICE_COUNT];
     ze_device_handle_t* device_list =
         (ze_device_handle_t*)malloc(device_count * sizeof(ze_device_handle_t));
-    // TODO(levelzero): Check that array can replace vector.
     status = LEVEL_ZERO_RESULT_TO_STATUS(
         &driver->syms,
         zeDeviceGet(driver->driver_handle, &device_count, device_list),
@@ -209,7 +205,6 @@ static iree_status_t iree_hal_level_zero_driver_select_default_device(
   } else {
     ze_device_handle_t* device_list =
         (ze_device_handle_t*)malloc(device_count * sizeof(ze_device_handle_t));
-    // TODO(levelzero): Check that array can replace vector.
     status = LEVEL_ZERO_RESULT_TO_STATUS(
         syms, zeDeviceGet(driver_handle, &device_count, device_list),
         "zeDeviceGet");

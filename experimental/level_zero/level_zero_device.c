@@ -129,8 +129,6 @@ iree_status_t iree_hal_level_zero_device_create(
   if (num_queue_groups == 0) {
     return iree_make_status(IREE_STATUS_NOT_FOUND, "No queue groups found");
   }
-  // TODO(levelzero): Validate that malloc works to replace vector otherwise use
-  // stack array with max count.
   ze_command_queue_group_properties_t* queue_properties =
       (ze_command_queue_group_properties_t*)malloc(
           num_queue_groups * sizeof(ze_command_queue_group_properties_t));

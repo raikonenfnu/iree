@@ -67,3 +67,5 @@ ZE_PFN_DECL(zeKernelSetGroupSize, ze_kernel_handle_t, uint32_t, uint32_t,
 ZE_PFN_DECL(zeKernelSetArgumentValue, ze_kernel_handle_t, uint32_t, size_t,
             const void *)
 ZE_PFN_DECL(zeModuleBuildLogDestroy, ze_module_build_log_handle_t)
+ZE_PFN_DECL(zeModuleBuildLogGetString, ze_module_build_log_handle_t, size_t *,
+            char *)
