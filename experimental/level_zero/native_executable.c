@@ -58,13 +58,12 @@ iree_status_t iree_hal_level_zero_native_executable_create(
 
   iree_hal_level_zero_native_executable_t* executable = NULL;
 
-  // TODO: Verify the flat buffer.
   iree_LEVEL_ZEROExecutableDef_table_t executable_def =
       iree_LEVEL_ZEROExecutableDef_as_root(
           executable_params->executable_data.data);
 
   // Create the kernel module.
-  flatbuffers_string_t level_zero_image =
+  flatbuffers_uint32_vec_t level_zero_image =
       iree_LEVEL_ZEROExecutableDef_level_zero_image_get(executable_def);
   flatbuffers_string_vec_t entry_points_vec =
       iree_LEVEL_ZEROExecutableDef_entry_points_get(executable_def);
@@ -81,34 +80,31 @@ iree_status_t iree_hal_level_zero_native_executable_create(
       (void*)((char*)executable + sizeof(*executable) +
               entry_count *
                   sizeof(iree_hal_level_zero_native_executable_function_t));
-  // TODO(levelzero): Verify flatbuffer_string_len can be used for
-  // module_desc.inputSize.
-  size_t image_length = flatbuffers_string_len(level_zero_image);
   ze_module_handle_t module = NULL;
+  ze_module_build_log_handle_t build_log;
   if (iree_status_is_ok(status)) {
     ze_module_desc_t module_desc = {};
-    ze_module_build_log_handle_t build_log;
     module_desc.format = ZE_MODULE_FORMAT_IL_SPIRV;
-    module_desc.pInputModule = (const uint8_t*)(level_zero_image);
-    module_desc.inputSize = image_length;
+    iree_const_byte_span_t code = iree_make_const_byte_span(
+        level_zero_image,
+        flatbuffers_uint32_vec_len(level_zero_image) * sizeof(uint32_t));
+    module_desc.pInputModule = (const uint8_t*)(code.data);
+    module_desc.inputSize = code.data_length;
     module_desc.pBuildFlags = "";
     status = LEVEL_ZERO_RESULT_TO_STATUS(
         context->syms,
         zeModuleCreate(context->level_zero_context, level_zero_device,
                        &module_desc, &module, &build_log),
         "zeModuleCreate");
-    status = LEVEL_ZERO_RESULT_TO_STATUS(context->syms,
-                                         zeModuleBuildLogDestroy(build_log),
-                                         "zeModuleBuildLogDestroy");
   }
-
   for (iree_host_size_t i = 0; i < entry_count; i++) {
     if (iree_status_is_ok(status)) {
       const char* entry_name = flatbuffers_string_vec_at(entry_points_vec, i);
       ze_kernel_handle_t function = NULL;
       ze_kernel_desc_t kernel_desc = {};
+      // kernel_desc.pKernelName = "simple_mul_dispatch_0";
       kernel_desc.pKernelName = entry_name;
-      status = LEVEL_ZERO_RESULT_TO_STATUS(
+      LEVEL_ZERO_RETURN_IF_ERROR(
           context->syms, zeKernelCreate(module, &kernel_desc, &function),
           "zeKernelCreate");
       executable->entry_functions[i].level_zero_function = function;
@@ -121,7 +117,6 @@ iree_status_t iree_hal_level_zero_native_executable_create(
           executable_params->executable_layouts[i]);
     }
   }
-
   if (iree_status_is_ok(status)) {
     iree_hal_resource_initialize(&iree_hal_level_zero_native_executable_vtable,
                                  &executable->resource);
@@ -129,9 +124,20 @@ iree_status_t iree_hal_level_zero_native_executable_create(
     executable->context = context;
     *out_executable = (iree_hal_executable_t*)executable;
   } else {
+    // print log
+    size_t szLog = 0;
+    status = LEVEL_ZERO_RESULT_TO_STATUS(
+        context->syms, zeModuleBuildLogGetString(build_log, &szLog, NULL),
+        "zeModuleBuildLogGetString");
+    char* stringLog = (char*)malloc(szLog);
+    status = LEVEL_ZERO_RESULT_TO_STATUS(
+        context->syms, zeModuleBuildLogGetString(build_log, &szLog, stringLog),
+        "zeModuleBuildLogGetString");
+    status = LEVEL_ZERO_RESULT_TO_STATUS(context->syms,
+                                         zeModuleBuildLogDestroy(build_log),
+                                         "zeModuleBuildLogDestroy");
     iree_hal_executable_destroy((iree_hal_executable_t*)executable);
   }
-
   IREE_TRACE_ZONE_END(z0);
   return status;
 }

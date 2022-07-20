@@ -27,7 +27,7 @@ table LEVEL_ZEROExecutableDef {
   block_sizes:[LEVEL_ZEROBlockSizeDef];
 
   // HSACO string of the module.
-  level_zero_image:string;
+  level_zero_image:[uint32];
 }
 
 root_type LEVEL_ZEROExecutableDef;
