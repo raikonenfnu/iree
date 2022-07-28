@@ -333,7 +333,41 @@ struct HALInterfaceBindingSubspanToArgPointerConverter final
     if (argIndex >= argMapping.size()) return failure();
     if (argIndex >= spirvFuncOp.getNumArguments()) return failure();
     auto argValue = spirvFuncOp.getArgument(argIndex);
-    rewriter.replaceOp(subspanOp, argValue);
+    
+    // Same set-binding pair can contain different data with different types.
+    // In this case, we need to apply bitcasting.
+    spirv::PointerType argPtrType = argValue.getType().dyn_cast<spirv::PointerType>();
+    if(!argPtrType) {
+      return subspanOp.emitError() << "Got something other than spv.ptr to replace subspan in capability::Kernel, but got: "<<argValue.getType()<<" instead.";
+    }
+    auto memrefType = subspanOp.getType().cast<MemRefType>();
+    Type subspanElType = memrefType.getElementType();
+    auto argElType = argPtrType.getPointeeType();
+    Value dataPtr = argValue;
+    // Bitcast to the different data type if necessary.
+    if(argElType != subspanElType) {
+      auto dataPtrType = spirv::PointerType::get(subspanElType, spirv::StorageClass::CrossWorkgroup);
+      dataPtr = rewriter.create<spirv::BitcastOp>(
+          subspanOp.getLoc(),dataPtrType, dataPtr);    
+    }
+
+    // Add the byte offset.
+    if (adaptor.byte_offset()) {
+      auto offsetOp = dyn_cast<spirv::ConstantOp>(adaptor.byte_offset().getDefiningOp());
+      if(!offsetOp) {
+        return subspanOp.emitError() << "Found offset, but offset defining Op is expected to be spv.constant, but is not.";
+      }
+      auto offsetVal = offsetOp.value().dyn_cast<IntegerAttr>().getInt(); 
+      if(offsetVal) {
+        return subspanOp.emitError() << "Found offset, offset expected as int, but found: "<<offsetOp.value().getType()<<" instead.";
+      }
+      // Check that there is non-zero offset and add the byte offset if necessary.
+      if(offsetVal != 0) {
+      SmallVector<Value, 2> emptyIndices;
+        dataPtr = rewriter.create<spirv::PtrAccessChainOp>(subspanOp.getLoc(), dataPtr, adaptor.byte_offset(), emptyIndices);
+      }
+    }
+    rewriter.replaceOp(subspanOp, dataPtr);
     return success();
   }
 };
@@ -594,7 +628,7 @@ void ConvertToSPIRVPass::runOnOperation() {
   spirv::AddressingModel addressingModel = spirv::AddressingModel::Logical;
   spirv::MemoryModel memoryModel = spirv::MemoryModel::GLSL450;
   if (hasKernelCapabilty) {
-    addressingModel = spirv::AddressingModel::Physical32;
+    addressingModel = spirv::AddressingModel::Physical64;
     memoryModel = spirv::MemoryModel::OpenCL;
   }
   auto builder = OpBuilder::atBlockBegin(moduleOp.getBody());
