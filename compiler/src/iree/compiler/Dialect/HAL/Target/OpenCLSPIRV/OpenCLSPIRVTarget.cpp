@@ -125,13 +125,12 @@ class OpenCLSPIRVTargetBackend : public TargetBackend {
   }
 
   void buildTranslationPassPipeline(OpPassManager &passManager) override {
-    buildSPIRVCodegenPassPipeline(passManager);
+    buildSPIRVCodegenPassPipeline(passManager, /*useKernelCapability*/ true);
   }
 
   LogicalResult serializeExecutable(const SerializationOptions &options,
                                     IREE::HAL::ExecutableVariantOp variantOp,
                                     OpBuilder &executableBuilder) override {
-    llvm::outs()<<"Serializing!\n";
     ModuleOp innerModuleOp = variantOp.getInnerModule();
     auto spirvModuleOps = innerModuleOp.getOps<spirv::ModuleOp>();
     if (!llvm::hasSingleElement(spirvModuleOps)) {
@@ -174,8 +173,8 @@ class OpenCLSPIRVTargetBackend : public TargetBackend {
            int(workGroupSizeAttr[2].dyn_cast<IntegerAttr>().getInt())});
     });
         // if (!options.dumpBinariesPath.empty()) {
-      dumpDataToPath<uint32_t>("/tmp", entryPointNames[0],
-                               variantOp.getName(), ".spv", spvBinary);
+      // dumpDataToPath<uint32_t>("/tmp", entryPointNames[0],
+      //                          variantOp.getName(), ".spv", spvBinary);
     // }
 
     auto entryPointsRef = builder.createStringVec(entryPointNames);
@@ -195,10 +194,10 @@ class OpenCLSPIRVTargetBackend : public TargetBackend {
 
     // Add the binary data to the target executable.
     auto binaryOp = executableBuilder.create<IREE::HAL::ExecutableBinaryOp>(
-        variantOp.getLoc(), variantOp.sym_name(),
-        variantOp.target().getFormat(),
+        variantOp.getLoc(), variantOp.getSymName(),
+        variantOp.getTarget().getFormat(),
         builder.getBufferAttr(executableBuilder.getContext()));
-    binaryOp.mime_typeAttr(
+    binaryOp.setMimeTypeAttr(
         executableBuilder.getStringAttr("application/x-flatbuffers"));
 
     return success();

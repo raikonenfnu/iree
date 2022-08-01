@@ -464,7 +464,7 @@ createSPIRVCreateFastSlowPathPass();
 /// testing purposes only. The pass pipeline will set an appropriate workgroup
 /// size.
 /// TODO: Are both of these needed and does this one still work on HLO?
-void buildSPIRVCodegenPassPipeline(OpPassManager &pm);
+void buildSPIRVCodegenPassPipeline(OpPassManager &pm, bool useKernelCapability = false);
 
 //------------------------------------------------------------------------------
 // VMVX passes
