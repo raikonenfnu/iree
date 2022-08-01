@@ -167,7 +167,7 @@ static iree_status_t iree_hal_level_zero_allocator_allocate_buffer(
           zeMemAllocShared(allocator->context->level_zero_context,
                            &memAllocDesc, &hostDesc, allocation_size,
                            alloc_alignment, allocator->level_zero_device,
-                           &device_ptr));
+                           (void**)&device_ptr));
       host_ptr = (void*)device_ptr;
     } else {
       // Device only.
@@ -175,7 +175,7 @@ static iree_status_t iree_hal_level_zero_allocator_allocate_buffer(
           allocator->context->syms,
           zeMemAllocDevice(allocator->context->level_zero_context,
                            &memAllocDesc, allocation_size, alloc_alignment,
-                           allocator->level_zero_device, &device_ptr));
+                           allocator->level_zero_device, (void**)&device_ptr));
     }
   } else {
     // Since in Level Zero host memory is visible to device, we can simply
