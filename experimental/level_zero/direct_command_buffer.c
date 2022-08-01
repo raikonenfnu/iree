@@ -158,7 +158,12 @@ iree_hal_level_zero_direct_command_buffer_execution_barrier(
     const iree_hal_memory_barrier_t* memory_barriers,
     iree_host_size_t buffer_barrier_count,
     const iree_hal_buffer_barrier_t* buffer_barriers) {
-  // TODO: Implement barrier
+  iree_hal_level_zero_direct_command_buffer_t* command_buffer =
+      iree_hal_level_zero_direct_command_buffer_cast(base_command_buffer);
+  LEVEL_ZERO_RETURN_IF_ERROR(
+      command_buffer->context->syms,
+      zeCommandListAppendBarrier(command_buffer->command_list, NULL, 0, NULL),
+      "zeCommandListAppendMemoryFill");
   return iree_ok_status();
 }
 
