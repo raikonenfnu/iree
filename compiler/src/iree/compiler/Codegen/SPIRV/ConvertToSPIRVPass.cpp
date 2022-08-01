@@ -171,7 +171,7 @@ static llvm::SmallDenseMap<SetBinding, size_t> getKernelArgMapping(
     Operation *funcOp) {
   llvm::SetVector<SetBinding> usedBindingSet;
   funcOp->walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
-    usedBindingSet.insert(SetBinding(subspanOp.set(), subspanOp.binding()));
+    usedBindingSet.insert(SetBinding(subspanOp.getSet(), subspanOp.getBinding()));
   });
   auto sparseBindings = usedBindingSet.takeVector();
   std::sort(sparseBindings.begin(), sparseBindings.end(),
@@ -233,7 +233,7 @@ struct HALInterfaceLoadConstantToArgPointerConverter final
 
     auto argMapping = getKernelArgMapping(spirvFuncOp);
     auto spirvBufferArg = spirvFuncOp.getArgument(
-        argMapping.size() + loadOp.index().getZExtValue());
+        argMapping.size() + loadOp.getIndex().getZExtValue());
     assert(spirvBufferArg.getType().isInteger(32));
     rewriter.replaceOp(loadOp, spirvBufferArg);
     return success();
@@ -329,7 +329,7 @@ struct HALInterfaceBindingSubspanToArgPointerConverter final
         subspanOp.getOperation()->getParentOfType<spirv::FuncOp>();
     auto argMapping = getKernelArgMapping(spirvFuncOp);
     size_t argIndex =
-        argMapping.lookup(SetBinding(subspanOp.set(), subspanOp.binding()));
+        argMapping.lookup(SetBinding(subspanOp.getSet(), subspanOp.getBinding()));
     if (argIndex >= argMapping.size()) return failure();
     if (argIndex >= spirvFuncOp.getNumArguments()) return failure();
     auto argValue = spirvFuncOp.getArgument(argIndex);
@@ -352,8 +352,8 @@ struct HALInterfaceBindingSubspanToArgPointerConverter final
     }
 
     // Add the byte offset.
-    if (adaptor.byte_offset()) {
-      auto offsetOp = dyn_cast<spirv::ConstantOp>(adaptor.byte_offset().getDefiningOp());
+    if (adaptor.getByteOffset()) {
+      auto offsetOp = dyn_cast<spirv::ConstantOp>(adaptor.getByteOffset().getDefiningOp());
       if(!offsetOp) {
         return subspanOp.emitError() << "Found offset, but offset defining Op is expected to be spv.constant, but is not.";
       }
@@ -364,7 +364,7 @@ struct HALInterfaceBindingSubspanToArgPointerConverter final
       // Check that there is non-zero offset and add the byte offset if necessary.
       if(offsetVal != 0) {
       SmallVector<Value, 2> emptyIndices;
-        dataPtr = rewriter.create<spirv::PtrAccessChainOp>(subspanOp.getLoc(), dataPtr, adaptor.byte_offset(), emptyIndices);
+        dataPtr = rewriter.create<spirv::PtrAccessChainOp>(subspanOp.getLoc(), dataPtr, adaptor.getByteOffset(), emptyIndices);
       }
     }
     rewriter.replaceOp(subspanOp, dataPtr);
@@ -400,14 +400,14 @@ struct FuncOpToSPVConverter final : public OpConversionPattern<func::FuncOp> {
       Type inputConvertedSpirvType =
           spirv::PointerType::get(elType, spirv::StorageClass::CrossWorkgroup);
       spirvInputTypes[argMapping[SetBinding(
-          subspanOp.set(), subspanOp.binding())]] = inputConvertedSpirvType;
+          subspanOp.getSet(), subspanOp.getBinding())]] = inputConvertedSpirvType;
     });
     // As a convention with HAL, push constants are appended as kernel arguments
     // after all the binding inputs.
     uint64_t numConstants = 0;
     funcOp.walk([&](IREE::HAL::InterfaceConstantLoadOp constantOp) {
       numConstants =
-          std::max(constantOp.index().getZExtValue() + 1, numConstants);
+          std::max(constantOp.getIndex().getZExtValue() + 1, numConstants);
     });
     spirvInputTypes.resize(argMapping.size() + numConstants,
                            rewriter.getI32Type());
@@ -546,6 +546,7 @@ void ConvertToSPIRVPass::runOnOperation() {
   tosa::populateTosaRescaleToArithConversionPatterns(&patterns);
 
   // Pull in MemRef patterns to convert load/store ops.
+  
   populateMemRefToSPIRVPatterns(typeConverter, patterns);
 
   // Pull in standard/math patterns to convert arithmetic ops and others.
@@ -628,7 +629,7 @@ void ConvertToSPIRVPass::runOnOperation() {
   spirv::AddressingModel addressingModel = spirv::AddressingModel::Logical;
   spirv::MemoryModel memoryModel = spirv::MemoryModel::GLSL450;
   if (hasKernelCapabilty) {
-    addressingModel = spirv::AddressingModel::Physical64;
+    addressingModel = spirv::AddressingModel::Physical32;
     memoryModel = spirv::MemoryModel::OpenCL;
   }
   auto builder = OpBuilder::atBlockBegin(moduleOp.getBody());

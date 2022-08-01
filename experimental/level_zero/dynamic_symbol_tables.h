@@ -53,6 +53,8 @@ ZE_PFN_DECL(zeMemAllocShared, ze_context_handle_t,
 ZE_PFN_DECL(zeMemAllocHost, ze_context_handle_t,
             const ze_host_mem_alloc_desc_t *, size_t, size_t, void **)
 ZE_PFN_DECL(zeMemFree, ze_context_handle_t, void *)
+ZE_PFN_DECL(zeCommandListAppendBarrier, ze_command_list_handle_t,
+            ze_event_handle_t, uint32_t, ze_event_handle_t *)
 
 /* Kernel generation related APIs*/
 ZE_PFN_DECL(zeModuleCreate, ze_context_handle_t, ze_device_handle_t,
