@@ -186,6 +186,8 @@ static void addSPIRVLoweringPasses(OpPassManager &pm, bool useKernelCapability =
 
   if(useKernelCapability)
     pm.addPass(createMapMemRefStorageClassPass(spirv::getDefaultOpenCLStorageClassMap()));
+  else
+    pm.addPass(createMapMemRefStorageClassPass(spirv::getDefaultVulkanStorageClassMap()));
   pm.addPass(createConvertToSPIRVPass());
 
   OpPassManager &spirvPM = pm.nest<spirv::ModuleOp>();
