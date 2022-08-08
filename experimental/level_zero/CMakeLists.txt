@@ -7,7 +7,8 @@
 iree_add_all_subdirs()
 
 if(NOT LEVEL_ZERO_HEADERS_API_ROOT)
-  set(LEVEL_ZERO_HEADERS_API_ROOT "/usr/local/include/level_zero")
+  set(LEVEL_ZERO_HEADERS_API_ROOT "${IREE_ROOT_DIR}/third_party/level-zero/")
+  message(STATUS "Using default level-zero directory at ${LEVEL_ZERO_HEADERS_API_ROOT}")
 endif()
 
 if(EXISTS ${LEVEL_ZERO_HEADERS_API_ROOT})
@@ -51,8 +52,6 @@ iree_cc_library(
     "${CMAKE_CURRENT_LIST_DIR}/../.."
     "${PROJECT_BINARY_DIR}"
     "${LEVEL_ZERO_HEADERS_API_ROOT}"
-  COPTS
-    "-L{LEVEL_ZERO_HEADERS_API_ROOT}/build/lib"
   DEPS
     ::dynamic_symbols
     iree::base
@@ -88,7 +87,6 @@ iree_cc_library(
     iree::base::tracing
   PUBLIC
 )
-target_link_directories(iree_experimental_level_zero_dynamic_symbols PUBLIC "{LEVEL_ZERO_HEADERS_API_ROOT}/build/lib")
 
 iree_cc_test(
   NAME
@@ -102,6 +100,4 @@ iree_cc_test(
     iree::testing::gtest_main
   LABELS
     "driver=level_zero"
-  COPTS
-    "-L{LEVEL_ZERO_HEADERS_API_ROOT}/build/lib"
 )
