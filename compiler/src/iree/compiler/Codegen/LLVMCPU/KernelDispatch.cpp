@@ -1132,7 +1132,7 @@ static LogicalResult setConvRootConfig(
     func::FuncOp entryPointFn, linalg::LinalgOp convOp,
     ArrayRef<LoopTilingAndDistributionInfo> tiledLoops,
     ArrayRef<int64_t> targetTileSizes, int64_t vectorSize) {
-  if (!isa<linalg::Conv2DNhwcHwcfOp, linalg::DepthwiseConv2DNhwcHwcOp>(
+  if (!isa<linalg::Conv2DNhwcHwcfOp, linalg::Conv2DNchwFchwOp, linalg::DepthwiseConv2DNhwcHwcOp>(
           convOp.getOperation())) {
     return failure();
   }
@@ -1183,6 +1183,18 @@ static LogicalResult setRootConfig(
   int64_t vectorSize =
       getVectorSize(entryPointFn, convOp.getResult(0).getType());
   SmallVector<int64_t> targetTileSizes = {1, 1, 8, vectorSize * 2, 1, 1, 8};
+  return setConvRootConfig(entryPointFn, convOp, tiledLoops, targetTileSizes,
+                           vectorSize);
+}
+
+static LogicalResult setRootConfig(
+    func::FuncOp entryPointFn, linalg::Conv2DNchwFchwOp convOp,
+    ArrayRef<LoopTilingAndDistributionInfo> tiledLoops) {
+  int64_t vectorSize =
+      getVectorSize(entryPointFn, convOp.getResult(0).getType());
+      // OG: domain(D.n, D.oh, D.ow, D.f, D.kh, D.kw, D.c)
+      //   domain(D.n:1, D.f:vectorSize * 2, D.oh:1, D.ow:8, D.c:8, D.kh:1, D.kw:1)
+  SmallVector<int64_t> targetTileSizes = {1, vectorSize * 2, 1, 8, 8, 1, 1};
   return setConvRootConfig(entryPointFn, convOp, tiledLoops, targetTileSizes,
                            vectorSize);
 }
@@ -1260,7 +1272,7 @@ static LogicalResult setRootConfigImpl(
   auto setRootConfigFn = [&](Operation *op) -> LogicalResult {
     return TypeSwitch<Operation *, LogicalResult>(op)
         .Case<IREE::LinalgExt::FftOp, linalg::GenericOp, linalg::Mmt4DOp,
-              linalg::Conv2DNhwcHwcfOp, linalg::DepthwiseConv2DNhwcHwcOp>(
+              linalg::Conv2DNhwcHwcfOp, linalg::Conv2DNchwFchwOp, linalg::DepthwiseConv2DNhwcHwcOp>(
             [&](auto op) {
               return setRootConfig(entryPointFn, op, tiledLoops);
             })
