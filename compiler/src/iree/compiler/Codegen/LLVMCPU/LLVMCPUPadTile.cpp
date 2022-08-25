@@ -13,6 +13,8 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#define DEBUG_TYPE "iree-cpu-pad-tile"
+
 namespace mlir {
 namespace iree_compiler {
 
