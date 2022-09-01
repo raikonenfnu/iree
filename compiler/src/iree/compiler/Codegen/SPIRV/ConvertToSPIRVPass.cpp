@@ -385,10 +385,22 @@ struct HALInterfaceBindingSubspanToArgPointerConverter final
   }
 };
 
+int64_t numel(ArrayRef<int64_t> shape) {
+  int64_t numel =  1.0;
+  for (auto elem : shape) {
+    numel *= elem;
+  }
+  return numel;
+}
+
+static bool isScalarMemrefType(MemRefType type) {
+  return numel(type.getShape()) == 1;
+}
+
 struct FuncOpToSPVConverter final : public OpConversionPattern<func::FuncOp> {
-  FuncOpToSPVConverter(TypeConverter &typeConverter, MLIRContext *context,
+  FuncOpToSPVConverter(TypeConverter &typeConverter, MLIRContext *context, bool &usePhy64,
                        PatternBenefit benefit = 1)
-      : OpConversionPattern(typeConverter, context, benefit) {}
+      : OpConversionPattern(typeConverter, context, benefit), usePhy64(usePhy64) {}
 
   LogicalResult matchAndRewrite(
       func::FuncOp funcOp, OpAdaptor adaptor,
@@ -410,6 +422,9 @@ struct FuncOpToSPVConverter final : public OpConversionPattern<func::FuncOp> {
     funcOp.walk([&](IREE::HAL::InterfaceBindingSubspanOp subspanOp) {
       auto memrefType = subspanOp.getType().cast<MemRefType>();
       Type elType = memrefType.getElementType();
+      if(isScalarMemrefType(memrefType)) {
+        usePhy64 = true;
+      }
       Type inputConvertedSpirvType =
           spirv::PointerType::get(elType, spirv::StorageClass::CrossWorkgroup);
       spirvInputTypes[argMapping[SetBinding(subspanOp.getSet(),
@@ -452,6 +467,8 @@ struct FuncOpToSPVConverter final : public OpConversionPattern<func::FuncOp> {
     rewriter.eraseOp(funcOp);
     return success();
   }
+private:
+  bool &usePhy64;
 };
 
 /// Pattern to lower operations that become a no-ops at this level.
@@ -594,9 +611,10 @@ void ConvertToSPIRVPass::runOnOperation() {
   // Interface-Resource Map needs to be initialized in main region to prevent
   // segfault.
   InterfaceResourceMap interfaceToResourceVars;
+  bool usePhy64 = false;
   if (hasKernelCapabilty) {
-    patterns.insert<FuncOpToSPVConverter,
-                    HALInterfaceLoadConstantToArgPointerConverter,
+    patterns.insert<FuncOpToSPVConverter>(typeConverter, context, usePhy64);
+    patterns.insert<HALInterfaceLoadConstantToArgPointerConverter,
                     HALInterfaceBindingSubspanToArgPointerConverter>(
         typeConverter, context);
   } else {
@@ -644,6 +662,7 @@ void ConvertToSPIRVPass::runOnOperation() {
   spirv::MemoryModel memoryModel = spirv::MemoryModel::GLSL450;
   if (hasKernelCapabilty) {
     addressingModel = spirv::AddressingModel::Physical32;
+    if(usePhy64) addressingModel = spirv::AddressingModel::Physical64; 
     memoryModel = spirv::MemoryModel::OpenCL;
   }
   auto builder = OpBuilder::atBlockBegin(moduleOp.getBody());

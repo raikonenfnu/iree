@@ -72,6 +72,25 @@ static bool isRankOneMemRef(Type type) {
   return false;
 }
 
+int64_t numel(ArrayRef<int64_t> shape) {
+  int64_t numel =  1.0;
+  for (auto elem : shape) {
+    numel *= elem;
+  }
+  return numel;
+}
+
+static bool isScalarMemref(Type type) {
+  if (auto memrefType = type.dyn_cast<MemRefType>()) {
+    return numel(memrefType.getShape()) == 1;
+  }
+  return false;
+}
+
+static bool isScalarMemrefType(MemRefType type) {
+  return numel(type.getShape()) == 1;
+}
+
 /// Flattens n-D MemRef to 1-D MemRef and allows other types.
 struct FlattenMemRefTypeConverter final : public TypeConverter {
   FlattenMemRefTypeConverter() {
@@ -211,6 +230,7 @@ struct FlattenBindingSubspan final
       IREE::HAL::InterfaceBindingSubspanOp subspanOp, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     auto oldType = subspanOp.getType().dyn_cast<MemRefType>();
+    if(isScalarMemref(oldType)) return failure();
     // IREE subspan ops only use memref types with the default identity
     // layout maps.
     if (!oldType || !oldType.getLayout().isIdentity()) return failure();
@@ -646,17 +666,17 @@ struct FlattenMemRefSubspanPass
             });
     target.addDynamicallyLegalOp<IREE::HAL::InterfaceBindingSubspanOp>(
         [](IREE::HAL::InterfaceBindingSubspanOp op) {
-          return isRankOneMemRef(op.getType()) &&
+          return (isRankOneMemRef(op.getType()) &&
                  // Additionally require dynamic sized dimension.
-                 op.getType().cast<MemRefType>().isDynamicDim(0);
+                 op.getType().cast<MemRefType>().isDynamicDim(0)) || isScalarMemref(op.getType());
         });
     target.addDynamicallyLegalOp<memref::GlobalOp>(
         [](memref::GlobalOp op) { return isRankOneMemRef(op.getType()); });
     target.addDynamicallyLegalOp<memref::LoadOp>([](memref::LoadOp loadOp) {
-      return isRankOneMemRef(loadOp.getMemRefType());
+      return isRankOneMemRef(loadOp.getMemRefType()) || isScalarMemref(loadOp.getMemRefType());
     });
     target.addDynamicallyLegalOp<memref::StoreOp>([](memref::StoreOp storeOp) {
-      return isRankOneMemRef(storeOp.getMemRefType());
+      return isRankOneMemRef(storeOp.getMemRefType()) || isScalarMemref(storeOp.getMemRefType());
     });
     target.addDynamicallyLegalOp<vector::TransferReadOp>(
         [](vector::TransferReadOp readOp) {
