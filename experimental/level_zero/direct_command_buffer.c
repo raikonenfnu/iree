@@ -12,10 +12,12 @@
 
 #include "experimental/level_zero/dynamic_symbols.h"
 #include "experimental/level_zero/level_zero_buffer.h"
+#include "experimental/level_zero/level_zero_event.h"
 #include "experimental/level_zero/native_executable.h"
 #include "experimental/level_zero/pipeline_layout.h"
 #include "experimental/level_zero/status_util.h"
 #include "iree/base/api.h"
+#include "iree/base/internal/inline_array.h"
 #include "iree/base/tracing.h"
 
 // Command buffer implementation that directly maps to level_zero direct.
@@ -178,13 +180,24 @@ static iree_status_t iree_hal_level_zero_direct_command_buffer_signal_event(
     iree_hal_command_buffer_t* base_command_buffer, iree_hal_event_t* event,
     iree_hal_execution_stage_t source_stage_mask) {
   // TODO: Implement barrier
+  iree_hal_level_zero_direct_command_buffer_t* command_buffer =
+      iree_hal_level_zero_direct_command_buffer_cast(base_command_buffer);
+  LEVEL_ZERO_RETURN_IF_ERROR(
+      command_buffer->context->syms,
+      zeCommandListAppendSignalEvent(command_buffer->command_list, iree_hal_level_zero_event_handle(event)),
+      "zeCommandListAppendSignalEvent");
   return iree_ok_status();
 }
 
 static iree_status_t iree_hal_level_zero_direct_command_buffer_reset_event(
     iree_hal_command_buffer_t* base_command_buffer, iree_hal_event_t* event,
     iree_hal_execution_stage_t source_stage_mask) {
-  // TODO: Implement barrier
+  iree_hal_level_zero_direct_command_buffer_t* command_buffer =
+      iree_hal_level_zero_direct_command_buffer_cast(base_command_buffer);
+  LEVEL_ZERO_RETURN_IF_ERROR(
+      command_buffer->context->syms,
+      zeCommandListAppendEventReset(command_buffer->command_list, iree_hal_level_zero_event_handle(event)),
+      "zeCommandListAppendEventReset");
   return iree_ok_status();
 }
 
@@ -197,7 +210,17 @@ static iree_status_t iree_hal_level_zero_direct_command_buffer_wait_events(
     const iree_hal_memory_barrier_t* memory_barriers,
     iree_host_size_t buffer_barrier_count,
     const iree_hal_buffer_barrier_t* buffer_barriers) {
-  // TODO: Implement barrier
+  iree_hal_level_zero_direct_command_buffer_t* command_buffer =
+      iree_hal_level_zero_direct_command_buffer_cast(base_command_buffer);
+  iree_inline_array(ze_event_handle_t, event_handles, event_count, command_buffer->context->host_allocator);
+  for (int i = 0; i < event_count; ++i) {
+    *iree_inline_array_at(event_handles, i) =
+        iree_hal_level_zero_event_handle(events[i]);
+  }
+  LEVEL_ZERO_RETURN_IF_ERROR(
+      command_buffer->context->syms,
+      zeCommandListAppendWaitOnEvents(command_buffer->command_list, event_count, iree_inline_array_data(event_handles)),
+      "zeCommandListAppendWaitOnEvents");
   return iree_ok_status();
 }
 

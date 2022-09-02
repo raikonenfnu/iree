@@ -13,6 +13,8 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#define DEBUG_TYPE "iree-codegen-pad-tile"
+
 namespace mlir {
 namespace iree_compiler {
 
@@ -85,7 +87,7 @@ struct ConcretizePadResultShape final : public OpRewritePattern<tensor::PadOp> {
       //   affine_map<(d0, s0) -> (d0 - s0 + 4)>(%v, %v).
       // Due to the restrictions over dimensions and symbols, the above won't
       // simplify. Try to change dimensions for symbols for such cases.
-      if (!cstExpr && llvm::is_splat(valueSizes)) {
+      if (!cstExpr && llvm::all_equal(valueSizes)) {
         int numDims = map.getNumDims();
         int numSyms = map.getNumSymbols();
         DenseMap<AffineExpr, AffineExpr> dimToSymMap;

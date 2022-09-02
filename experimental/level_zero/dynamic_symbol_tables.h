@@ -55,6 +55,13 @@ ZE_PFN_DECL(zeMemAllocHost, ze_context_handle_t,
 ZE_PFN_DECL(zeMemFree, ze_context_handle_t, void *)
 ZE_PFN_DECL(zeCommandListAppendBarrier, ze_command_list_handle_t,
             ze_event_handle_t, uint32_t, ze_event_handle_t *)
+ZE_PFN_DECL(zeEventPoolCreate, ze_context_handle_t, const ze_event_pool_desc_t *, uint32_t, ze_device_handle_t *, ze_event_pool_handle_t *)
+ZE_PFN_DECL(zeEventCreate, ze_event_pool_handle_t, const ze_event_desc_t *, ze_event_handle_t *)
+ZE_PFN_DECL(zeEventDestroy, ze_event_handle_t)
+ZE_PFN_DECL(zeEventPoolDestroy, ze_event_pool_handle_t)
+ZE_PFN_DECL(zeCommandListAppendSignalEvent, ze_command_list_handle_t, ze_event_handle_t)
+ZE_PFN_DECL(zeCommandListAppendWaitOnEvents, ze_command_list_handle_t, uint32_t, ze_event_handle_t*)
+ZE_PFN_DECL(zeCommandListAppendEventReset, ze_command_list_handle_t, ze_event_handle_t)
 
 /* Kernel generation related APIs*/
 ZE_PFN_DECL(zeModuleCreate, ze_context_handle_t, ze_device_handle_t,
