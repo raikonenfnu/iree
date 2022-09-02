@@ -43,6 +43,7 @@ typedef struct iree_hal_level_zero_device_t {
   ze_device_handle_t device;
   uint32_t command_queue_ordinal;
   ze_command_queue_handle_t command_queue;
+  ze_event_pool_handle_t event_pool;
 
   iree_hal_level_zero_context_wrapper_t context_wrapper;
   iree_hal_allocator_t* device_allocator;
@@ -79,6 +80,7 @@ static iree_status_t iree_hal_level_zero_device_create_internal(
     iree_hal_driver_t* driver, iree_string_view_t identifier,
     ze_device_handle_t level_zero_device, uint32_t command_queue_ordinal,
     ze_command_queue_handle_t command_queue,
+    ze_event_pool_handle_t event_pool,
     ze_context_handle_t level_zero_context,
     iree_hal_level_zero_dynamic_symbols_t* syms,
     iree_allocator_t host_allocator, iree_hal_device_t** out_device) {
@@ -97,6 +99,7 @@ static iree_status_t iree_hal_level_zero_device_create_internal(
   device->device = level_zero_device;
   device->command_queue_ordinal = command_queue_ordinal;
   device->command_queue = command_queue;
+  device->event_pool = event_pool;
   device->context_wrapper.level_zero_context = level_zero_context;
   device->context_wrapper.host_allocator = host_allocator;
   device->context_wrapper.syms = syms;
@@ -153,13 +156,26 @@ iree_status_t iree_hal_level_zero_device_create(
                            &command_queue_desc, &command_queue),
       "zeCommandQueueCreate");
 
+  // Create a event pool.
+  ze_event_pool_desc_t event_pool_desc = {};
+  event_pool_desc.stype = ZE_STRUCTURE_TYPE_EVENT_POOL_DESC;
+  event_pool_desc.count = 1;
+  event_pool_desc.flags = ZE_EVENT_POOL_FLAG_HOST_VISIBLE;
+  ze_event_pool_handle_t event_pool;
+  status = LEVEL_ZERO_RESULT_TO_STATUS(
+      syms,
+      zeEventPoolCreate(level_zero_context, &event_pool_desc, 0, NULL, &event_pool),
+      "zeEventPoolCreate");
+
+  // Create HAL-LevelZero device.
   if (iree_status_is_ok(status)) {
     status = iree_hal_level_zero_device_create_internal(
         driver, identifier, level_zero_device, command_queue_desc.ordinal,
-        command_queue, level_zero_context, syms, host_allocator, out_device);
+        command_queue, event_pool, level_zero_context, syms, host_allocator, out_device);
   }
   if (!iree_status_is_ok(status)) {
     syms->zeCommandQueueDestroy(command_queue);
+    syms->zeEventPoolDestroy(event_pool);
     syms->zeContextDestroy(level_zero_context);
   }
   IREE_TRACE_ZONE_END(z0);
@@ -247,7 +263,7 @@ static iree_status_t iree_hal_level_zero_device_create_event(
     iree_hal_device_t* base_device, iree_hal_event_t** out_event) {
   iree_hal_level_zero_device_t* device =
       iree_hal_level_zero_device_cast(base_device);
-  return iree_hal_level_zero_event_create(&device->context_wrapper, out_event);
+  return iree_hal_level_zero_event_create(&device->context_wrapper, device->event_pool, out_event);
 }
 
 static iree_status_t iree_hal_level_zero_device_create_executable_cache(
