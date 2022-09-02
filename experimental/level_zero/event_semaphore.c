@@ -77,6 +77,8 @@ static iree_status_t iree_hal_level_zero_semaphore_signal(
       iree_hal_level_zero_semaphore_cast(base_semaphore);
   // TODO: Support semaphores completely. Return OK currently as everything is
   // synchronized for each submit to allow things to run.
+  iree_atomic_store_int64(&semaphore->value, new_value,
+                          iree_memory_order_release);
   iree_hal_semaphore_poll(&semaphore->base);
   return iree_ok_status();
 }
