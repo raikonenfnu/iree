@@ -20,21 +20,48 @@ namespace Flow {
 namespace {
 
 // Converts linalg.conv_2d_input_nhwc_filter_nhwc op to linalg.matmul
+template <typename Conv2DOpType>
 class Convert1x1ConvolutionMatmulOp
-    : public OpRewritePattern<linalg::Conv2DNhwcHwcfOp> {
+    : public OpRewritePattern<Conv2DOpType> {
  public:
-  using OpRewritePattern<linalg::Conv2DNhwcHwcfOp>::OpRewritePattern;
+  using OpRewritePattern<Conv2DOpType>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(linalg::Conv2DNhwcHwcfOp convOp,
+  LogicalResult matchAndRewrite(Conv2DOpType convOp,
                                 PatternRewriter &rewriter) const override {
     RankedTensorType inputShapeType =
-        convOp.getInputOperand(0)->get().getType().dyn_cast<RankedTensorType>();
+        convOp.getInputOperand(0)->get().getType().template dyn_cast<RankedTensorType>();
     RankedTensorType filterShapeType =
-        convOp.getInputOperand(1)->get().getType().dyn_cast<RankedTensorType>();
+        convOp.getInputOperand(1)->get().getType().template dyn_cast<RankedTensorType>();
     RankedTensorType outputShapeType = convOp.getOutputOperand(0)
                                            ->get()
                                            .getType()
-                                           .dyn_cast<RankedTensorType>();
+                                           .template dyn_cast<RankedTensorType>();
+
+    int kcIndex, kfIndex, khIndex, kwIndex, ohIndex, owIndex, ocIndex;
+    SmallVector<ReassociationIndices, 4> reassociationInputOutputIndices;
+    SmallVector<ReassociationIndices, 4> reassociationFilterIndices;
+    if (std::is_same<Conv2DOpType, linalg::Conv2DNhwcHwcfOp>::value) {
+      kcIndex = 2;
+      kfIndex = 3;
+      khIndex = 0;
+      kwIndex = 1;
+      ohIndex = 1;
+      owIndex = 2;
+      ocIndex = 3;
+      reassociationInputOutputIndices = {{0, 1, 2}, {3}};
+      reassociationFilterIndices = {{0, 1, 2}, {3}};
+    } else if (std::is_same<Conv2DOpType, linalg::Conv2DNchwFchwOp>::value) {
+      kcIndex = 1;
+      kfIndex = 0;
+      khIndex = 2;
+      kwIndex = 3;
+      ohIndex = 2;
+      owIndex = 3;
+      ocIndex = 1;
+      reassociationInputOutputIndices = {{0, 1}, {2, 3}};
+      reassociationFilterIndices = {{0}, {1, 2, 3}};
+      // reassociationFilterIndices = {{0, 2, 3}, {1}};
+    }
 
     if (!inputShapeType || !filterShapeType || !outputShapeType)
       return failure();
@@ -43,14 +70,14 @@ class Convert1x1ConvolutionMatmulOp
     auto filterShape = filterShapeType.getShape();
     auto outputShape = outputShapeType.getShape();
 
-    bool inputDynWidthHeight = inputShape[1] == ShapedType::kDynamicSize &&
-                               inputShape[2] == ShapedType::kDynamicSize;
+    bool inputDynWidthHeight = inputShape[ohIndex] == ShapedType::kDynamicSize &&
+                               inputShape[owIndex] == ShapedType::kDynamicSize;
 
     // We cannot merge the width and height if they are both dynamic as we
     // cannot expand them back to their dynamic values.
     if (inputDynWidthHeight) return failure();
 
-    if (filterShape[0] != 1 || filterShape[1] != 1) return failure();
+    if (filterShape[khIndex] != 1 || filterShape[kwIndex] != 1) return failure();
 
     // TODO(ataei): Support conversion to linalg.batch_matmul.
     if (inputShape[0] != 1) return failure();
@@ -64,24 +91,30 @@ class Convert1x1ConvolutionMatmulOp
         }))
       return failure();
 
-    SmallVector<ReassociationIndices, 4> reassociationIndices = {{0, 1, 2},
-                                                                 {3}};
-
     auto combineDims = [](int64_t a, int64_t b) {
       if (a == ShapedType::kDynamicSize || b == ShapedType::kDynamicSize)
         return ShapedType::kDynamicSize;
       return a * b;
     };
 
+    SmallVector<int64_t, 2> reshapedInputShape = {combineDims(inputShape[ohIndex], inputShape[owIndex]), inputShape[ocIndex]};
+    SmallVector<int64_t, 2> reshapedFilterShape = {filterShape[kcIndex], filterShape[kfIndex]};
+    SmallVector<int64_t, 2> reshapedOutputShape = {combineDims(outputShape[ohIndex], outputShape[owIndex]), outputShape[ocIndex]};
+    if (std::is_same<Conv2DOpType, linalg::Conv2DNchwFchwOp>::value) {
+      std::swap(reshapedInputShape[0], reshapedInputShape[1]);
+      std::swap(reshapedFilterShape[0], reshapedFilterShape[1]);
+      std::swap(reshapedOutputShape[0], reshapedOutputShape[1]);
+    }
+
     auto reshapedInputType = RankedTensorType::get(
-        {combineDims(inputShape[1], inputShape[2]), inputShape[3]},
+        reshapedInputShape,
         inputShapeType.getElementType());
 
     auto reshapedFilterType = RankedTensorType::get(
-        {filterShape[2], filterShape[3]}, filterShapeType.getElementType());
+        reshapedFilterShape, filterShapeType.getElementType());
 
     auto reshapedOutputType = RankedTensorType::get(
-        {combineDims(outputShape[1], outputShape[2]), outputShape[3]},
+        reshapedOutputShape,
         outputShapeType.getElementType());
 
     Value input = convOp.getInputOperand(0)->get();
@@ -90,19 +123,23 @@ class Convert1x1ConvolutionMatmulOp
     auto loc = convOp.getLoc();
 
     Value reshapedInput = rewriter.create<tensor::CollapseShapeOp>(
-        loc, reshapedInputType, input, reassociationIndices);
+        loc, reshapedInputType, input, reassociationInputOutputIndices);
     Value reshapedFilter = rewriter.create<tensor::CollapseShapeOp>(
-        loc, reshapedFilterType, filter, reassociationIndices);
+        loc, reshapedFilterType, filter, reassociationFilterIndices);
     Value reshapedOutput = rewriter.create<tensor::CollapseShapeOp>(
-        loc, reshapedOutputType, output, reassociationIndices);
+        loc, reshapedOutputType, output, reassociationInputOutputIndices);
 
+    SmallVector<Value, 2> matmulInput = {reshapedInput, reshapedFilter};
+    if (std::is_same<Conv2DOpType, linalg::Conv2DNchwFchwOp>::value) {
+      std::swap(matmulInput[0], matmulInput[1]);
+    }
     auto matmulResult = rewriter.create<linalg::MatmulOp>(
-        loc, reshapedOutputType, ArrayRef<Value>{reshapedInput, reshapedFilter},
+        loc, reshapedOutputType, matmulInput,
         ArrayRef<Value>{reshapedOutput});
 
     auto reshapedResult = rewriter.create<tensor::ExpandShapeOp>(
         loc, outputShapeType, matmulResult.getResults()[0],
-        reassociationIndices);
+        reassociationInputOutputIndices);
 
     rewriter.replaceOp(convOp, ArrayRef<Value>{reshapedResult});
 
@@ -120,7 +157,8 @@ struct ConvertConv2D1x1ConvToMatmulPass
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(&getContext());
-    patterns.insert<Convert1x1ConvolutionMatmulOp>(context);
+    patterns.insert<Convert1x1ConvolutionMatmulOp<linalg::Conv2DNhwcHwcfOp>, 
+                    Convert1x1ConvolutionMatmulOp<linalg::Conv2DNchwFchwOp>>(context);
     if (failed(applyPatternsAndFoldGreedily(getOperation(),
                                             std::move(patterns)))) {
       return signalPassFailure();
