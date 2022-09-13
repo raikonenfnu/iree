@@ -51,7 +51,7 @@ static void populateTilingReductionPatterns(RewritePatternSet &patterns) {
   auto marker = StringAttr::get(context, getTileReductionMarker());
   auto filter = linalg::LinalgTransformationFilter({marker}, llvm::None);
 
-  linalg::TilingPatterns<linalg::BatchMatmulOp, linalg::Conv2DNhwcHwcfOp,
+  linalg::TilingPatterns<linalg::BatchMatmulOp, linalg::Conv2DNhwcHwcfOp, linalg::Conv2DNchwFchwOp,
                          linalg::DepthwiseConv2DNhwcHwcOp, linalg::GenericOp,
                          linalg::MatmulOp>::insert(patterns, tilingOptions,
                                                    filter);
@@ -339,6 +339,22 @@ class SPIRVTilePass final : public SPIRVTileBase<SPIRVTilePass> {
 
       LLVM_DEBUG({
         llvm::dbgs() << "--- After tiling canonicalization  ---\n";
+        funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+        llvm::dbgs() << "\n\n";
+      });
+    }
+    {  // Decompose High level N-D to 1-D for later vectorization.
+      RewritePatternSet decompositionPattern(&getContext());
+      linalg::LinalgTransformationFilter filter;
+      linalg::populateDecomposeConvolutionPatterns(decompositionPattern,
+                                                   filter);
+      if (failed(applyPatternsAndFoldGreedily(
+              funcOp, std::move(decompositionPattern)))) {
+        return signalPassFailure();
+      }
+
+      LLVM_DEBUG({
+        llvm::dbgs() << "--- After Decomposing High N-D to 1-D  ---\n";
         funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
         llvm::dbgs() << "\n\n";
       });

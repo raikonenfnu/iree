@@ -45,6 +45,23 @@ LogicalResult setConvOpConfig(linalg::LinalgOp linalgOp,
   Type outputType = linalgOp.getOutputOperand(0)->get().getType();
   ArrayRef<int64_t> outputShape = outputType.cast<ShapedType>().getShape();
 
+  int64_t icIndex, ohIndex, owIndex, ocIndex;
+    if (isa<linalg::Conv2DNhwcHwcfOp, linalg::DepthwiseConv2DNhwcHwcOp>(*linalgOp)) {
+    // n, h,w ,c, h, w,f
+    icIndex = 3;
+    ohIndex = 1;
+    owIndex = 2;
+    ocIndex = 3;
+  } else if (isa<linalg::Conv2DNchwFchwOp>(*linalgOp)) {
+    // n, c, h, w, f, h, w
+    icIndex = 1;
+    ohIndex = 2;
+    owIndex = 3;
+    ocIndex = 1;
+  } else {
+    return success();
+  }
+
   if (isa<linalg::Conv2DNhwcHwcfOp>(*linalgOp) &&
       ShapedType::isDynamic(inputShape[3])) {
     return success();
@@ -53,8 +70,8 @@ LogicalResult setConvOpConfig(linalg::LinalgOp linalgOp,
     return success();
   }
 
-  int64_t ic = inputShape[3];
-  int64_t oh = outputShape[1], ow = outputShape[2], oc = outputShape[3];
+  int64_t ic = inputShape[icIndex];
+  int64_t oh = outputShape[ohIndex], ow = outputShape[owIndex], oc = outputShape[ocIndex];
 
   // The conversion pipeline requires the input channel dimension to be some
   // multipler of four, or less than four.
@@ -148,9 +165,13 @@ LogicalResult setConvOpConfig(linalg::LinalgOp linalgOp,
   tileSizes.push_back(invocationTileSizes);
   // Tiling along reduction dimensions
   if (isa<linalg::Conv2DNhwcHwcfOp>(linalgOp)) {
-    tileSizes.push_back({0, 0, 0, 0, 1, 1, 4});
+    // n, h,w ,c, h, w,f
+    tileSizes.push_back({0, 1, 1, 0, 1, 1, 4});
   } else if (isa<linalg::DepthwiseConv2DNhwcHwcOp>(linalgOp)) {
-    tileSizes.push_back({0, 0, 0, 0, 1, 1});
+    tileSizes.push_back({0, 1, 1, 0, 1, 1});
+  } else if (isa<linalg::Conv2DNchwFchwOp>(linalgOp)) {
+    // n, c, h, w, f, h, w
+    tileSizes.push_back({0, 0, 1, 1, 4, 1, 1});
   } else {
     return success();
   }
@@ -601,7 +622,7 @@ static LogicalResult setSPIRVOpConfig(const spirv::TargetEnv &targetEnv,
         // If unsuccessful, try to tile and distribute.
         return setDefaultOpConfig(limits, op);
       })
-      .Case<linalg::Conv2DNhwcHwcfOp, linalg::DepthwiseConv2DNhwcHwcOp>(
+      .Case<linalg::Conv2DNhwcHwcfOp, linalg::Conv2DNchwFchwOp, linalg::DepthwiseConv2DNhwcHwcOp>(
           [limits](auto op) {
             // Try to tile and vectorize first. It's common to see 32 threads
             // per subgroup for GPUs.

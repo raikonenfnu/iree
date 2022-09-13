@@ -264,6 +264,15 @@ LogicalResult verifyConvTileAndDecomposeExpertConfig(
                 owSize = shape[2];
                 return success();
               })
+          .Case<linalg::Conv2DNchwFchwOp>(
+              [&](auto) {
+                // Shape: N, OC, OH, OW, (IC), KH, KW
+                khSize = shape[5];
+                kwSize = shape[6];
+                ohSize = shape[2];
+                owSize = shape[3];
+                return success();
+              })
           .Default([&](auto) { return failure(); });
   if (failed(isSizeExtracted)) {
     return op->emitOpError("unsupported conv types");
@@ -521,11 +530,11 @@ void addConvTileAndDecomposeExpertPassPipeline(OpPassManager &passManager) {
   }
 
 
-  addBufferizePasses(nestedModulePM);
   nestedModulePM.addNestedPass<func::FuncOp>(createCSEPass());
   nestedModulePM.addNestedPass<func::FuncOp>(createCanonicalizerPass());
   nestedModulePM.addNestedPass<func::FuncOp>(
       createOptimizeVectorTransferPass(/*flatten=*/true));
+  addBufferizePasses(nestedModulePM);
 
   // Run IREE specific passes before vector lowering expert.
   nestedModulePM.addNestedPass<func::FuncOp>(
