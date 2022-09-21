@@ -128,7 +128,7 @@ class OpenCLSPIRVTargetBackend : public TargetBackend {
   }
 
   void buildTranslationPassPipeline(OpPassManager &passManager) override {
-    buildSPIRVCodegenPassPipeline(passManager, /*enableFastMath=*/false, /*useKernelCapability*/ true);
+    buildSPIRVCodegenPassPipeline(passManager, /*enableFastMath=*/false);
   }
 
   LogicalResult serializeExecutable(const SerializationOptions &options,

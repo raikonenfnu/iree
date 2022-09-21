@@ -177,7 +177,7 @@ static void addMemRefLoweringPasses(OpPassManager &pm) {
 }
 
 /// Adds passes to perform the final SPIR-V conversion.
-static void addSPIRVLoweringPasses(OpPassManager &pm, bool enableFastMath, bool useKernelCapability) {
+static void addSPIRVLoweringPasses(OpPassManager &pm, bool enableFastMath) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
@@ -185,13 +185,9 @@ static void addSPIRVLoweringPasses(OpPassManager &pm, bool enableFastMath, bool 
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
-  if (useKernelCapability)
-    pm.addPass(createMapMemRefStorageClassPass(
-        spirv::mapMemorySpaceToOpenCLStorageClass));
-  else
-    pm.addPass(createMapMemRefStorageClassPass());
+  pm.addPass(createSPIRVMapMemRefStorageClassPass());
   pm.addPass(createConvertToSPIRVPass(enableFastMath));
-
+  
   OpPassManager &spirvPM = pm.nest<spirv::ModuleOp>();
   spirvPM.addPass(spirv::createUnifyAliasedResourcePass());
   spirvPM.addPass(spirv::createLowerABIAttributesPass());
@@ -362,13 +358,13 @@ void addSPIRVSubgroupReducePassPipeline(OpPassManager &pm) {
 // Entry Point
 //===----------------------------------------------------------------------===//
 
-void buildSPIRVCodegenPassPipeline(OpPassManager &pm, bool enableFastMath, bool useKernelCapability) {
+void buildSPIRVCodegenPassPipeline(OpPassManager &pm, bool enableFastMath) {
   pm.nest<ModuleOp>().nest<func::FuncOp>().addPass(createTypePropagationPass());
   pm.nest<ModuleOp>().addPass(createBufferizeCopyOnlyDispatchesPass());
   pm.addPass(createSPIRVLowerExecutableTargetPass());
 
   addMemRefLoweringPasses(pm.nest<ModuleOp>());
-  addSPIRVLoweringPasses(pm.nest<ModuleOp>(), enableFastMath, useKernelCapability);
+  addSPIRVLoweringPasses(pm.nest<ModuleOp>(), enableFastMath);
 
   LLVM_DEBUG({
     llvm::dbgs() << "Using SPIR-V pass pipeline:\n";
