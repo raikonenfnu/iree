@@ -177,25 +177,19 @@ static void addMemRefLoweringPasses(OpPassManager &pm) {
 }
 
 /// Adds passes to perform the final SPIR-V conversion.
-static void addSPIRVLoweringPasses(OpPassManager &pm,
-                                   bool useKernelCapability = false) {
+static void addSPIRVLoweringPasses(OpPassManager &pm) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
   pm.addPass(createLowerAffinePass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
-
-  if (useKernelCapability)
-    pm.addPass(createMapMemRefStorageClassPass(
-        spirv::mapMemorySpaceToOpenCLStorageClass));
-  else
-    pm.addPass(createMapMemRefStorageClassPass());
+  pm.addPass(createSPIRVMapMemRefStorageClassPass());
   pm.addPass(createConvertToSPIRVPass());
-
+  
   OpPassManager &spirvPM = pm.nest<spirv::ModuleOp>();
-  spirvPM.addPass(spirv::createUnifyAliasedResourcePass());
   spirvPM.addPass(spirv::createLowerABIAttributesPass());
+  spirvPM.addPass(spirv::createUnifyAliasedResourcePass());
   spirvPM.addPass(createCanonicalizerPass());
   spirvPM.addPass(createCSEPass());
   spirvPM.addPass(spirv::createRewriteInsertsPass());
@@ -363,14 +357,13 @@ void addSPIRVSubgroupReducePassPipeline(OpPassManager &pm) {
 // Entry Point
 //===----------------------------------------------------------------------===//
 
-void buildSPIRVCodegenPassPipeline(OpPassManager &pm,
-                                   bool useKernelCapability) {
+void buildSPIRVCodegenPassPipeline(OpPassManager &pm) {
   pm.nest<ModuleOp>().nest<func::FuncOp>().addPass(createTypePropagationPass());
   pm.nest<ModuleOp>().addPass(createBufferizeCopyOnlyDispatchesPass());
   pm.addPass(createSPIRVLowerExecutableTargetPass());
 
   addMemRefLoweringPasses(pm.nest<ModuleOp>());
-  addSPIRVLoweringPasses(pm.nest<ModuleOp>(), useKernelCapability);
+  addSPIRVLoweringPasses(pm.nest<ModuleOp>());
 
   LLVM_DEBUG({
     llvm::dbgs() << "Using SPIR-V pass pipeline:\n";
