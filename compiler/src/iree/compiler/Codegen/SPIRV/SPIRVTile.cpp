@@ -56,7 +56,7 @@ static void populateTilingReductionPatterns(RewritePatternSet &patterns) {
   auto marker = StringAttr::get(context, getTileReductionMarker());
   auto filter = linalg::LinalgTransformationFilter({marker}, llvm::None);
 
-  TilingPatterns<linalg::BatchMatmulOp, linalg::Conv2DNhwcHwcfOp,
+  TilingPatterns<linalg::BatchMatmulOp, linalg::Conv2DNhwcHwcfOp, linalg::Conv2DNchwFchwOp,
                  linalg::DepthwiseConv2DNhwcHwcOp, linalg::GenericOp,
                  linalg::MatmulOp>::insert(patterns, tilingOptions, filter);
 }
