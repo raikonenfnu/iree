@@ -6,8 +6,10 @@
 
 #include "iree/compiler/Dialect/Flow/Transforms/PassDetail.h"
 #include "iree/compiler/Dialect/Flow/Transforms/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -18,6 +20,18 @@ namespace IREE {
 namespace Flow {
 
 namespace {
+
+static Value createAdd(Location loc, Value x, Value y, bool isInt,
+                       OpBuilder &builder) {
+  if (isInt) return builder.create<arith::AddIOp>(loc, x, y);
+  return builder.create<arith::AddFOp>(loc, x, y);
+}
+
+static Value createMul(Location loc, Value x, Value y, bool isInt,
+                       OpBuilder &builder) {
+  if (isInt) return builder.create<arith::MulIOp>(loc, x, y);
+  return builder.create<arith::MulFOp>(loc, x, y);
+}
 
 // Converts linalg.conv_2d_input_nhwc_filter_nhwc op to linalg.matmul
 template <typename Conv2DOpType>
@@ -51,6 +65,8 @@ class Convert1x1FilterConvToMatmul : public OpRewritePattern<Conv2DOpType> {
     auto filterShape = filterShapeType.getShape();
     auto outputShape = outputShapeType.getShape();
 
+    const bool isBatched = inputShape[0] >= 1;
+
     // Adjusting dimension indices based on Conv2DOpType.
     const int nIndex = 0;
     const int kcIndex = isNHWC ? 2 : 1;
@@ -72,7 +88,7 @@ class Convert1x1FilterConvToMatmul : public OpRewritePattern<Conv2DOpType> {
       return failure();
 
     // TODO(ataei): Support conversion to linalg.batch_matmul.
-    if (inputShape[0] != 1) return failure();
+    if (isBatched & isNHWC) return failure();
 
     if (!llvm::all_of(convOp.getStrides(), [](APInt element) {
           return element.getSExtValue() == 1;
@@ -108,6 +124,22 @@ class Convert1x1FilterConvToMatmul : public OpRewritePattern<Conv2DOpType> {
           combineDims(outputShape[ohIndex], outputShape[owIndex]),
           outputShape[ocIndex]};
     } else if (isNCHW) {
+      if(isBatched) {
+        // Generate reassociation indices.
+        reassociationInputOutputIndices = {{nIndex}, {ocIndex}, {ohIndex, owIndex}};
+        reassociationFilterIndices = {{kfIndex}, {kcIndex, khIndex, kwIndex}};
+
+        // Generate matmul shapes from 1x1 conv.
+        reshapedInputShape = {
+            inputShape[0],
+            inputShape[ocIndex],
+            combineDims(inputShape[ohIndex], inputShape[owIndex])};
+        reshapedFilterShape = {filterShape[kfIndex], filterShape[kcIndex]};
+        reshapedOutputShape = {
+            outputShape[0],
+            outputShape[ocIndex],
+            combineDims(outputShape[ohIndex], outputShape[owIndex])};
+      } else {
       // Generate reassociation indices.
       reassociationInputOutputIndices = {{nIndex, ocIndex}, {ohIndex, owIndex}};
       reassociationFilterIndices = {{kfIndex}, {kcIndex, khIndex, kwIndex}};
@@ -120,6 +152,7 @@ class Convert1x1FilterConvToMatmul : public OpRewritePattern<Conv2DOpType> {
       reshapedOutputShape = {
           outputShape[ocIndex],
           combineDims(outputShape[ohIndex], outputShape[owIndex])};
+      }
     }
 
     auto reshapedInputType = RankedTensorType::get(
@@ -149,11 +182,36 @@ class Convert1x1FilterConvToMatmul : public OpRewritePattern<Conv2DOpType> {
     } else if (isNCHW) {
       matmulInput = {reshapedFilter, reshapedInput};
     }
-    auto matmulResult = rewriter.create<linalg::MatmulOp>(
-        loc, reshapedOutputType, matmulInput, ArrayRef<Value>{reshapedOutput});
+    Value matmulResult;
+    if(isBatched) {
+      MLIRContext* ctx = rewriter.getContext();
+      AffineExpr bDim, mDim, nDim, kDim;
+      bindDims(ctx, bDim, mDim, nDim, kDim);
+      auto lhsMap = AffineMap::get(4, 0, {mDim, kDim}, ctx);
+      auto rhsMap = AffineMap::get(4, 0, {bDim, kDim, nDim}, ctx);
+      auto resultMap = AffineMap::get(4, 0, {bDim, mDim, nDim}, ctx);
+      StringRef parallel = getParallelIteratorTypeName();
+      StringRef reduction = getReductionIteratorTypeName();
+      SmallVector<StringRef> genericIterators = {parallel, parallel, parallel,
+                                                 reduction};
+      bool isInt = outputShapeType.getElementType().template isa<IntegerType>();
+      matmulResult = rewriter.create<linalg::GenericOp>(
+          loc, reshapedOutputType,
+          /*inputs=*/matmulInput,
+          /*outputs=*/ValueRange{reshapedOutput},
+          ArrayRef<AffineMap>{lhsMap, rhsMap, resultMap}, genericIterators,
+          [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange args) {
+            Value mul = createMul(loc, args[0], args[1], isInt, nestedBuilder);
+            Value add = createAdd(loc, mul, args[2], isInt, nestedBuilder);
+            nestedBuilder.create<linalg::YieldOp>(nestedLoc, add);
+          }).getResults().front();
+    } else {
+    matmulResult = rewriter.create<linalg::MatmulOp>(
+        loc, reshapedOutputType, matmulInput, ArrayRef<Value>{reshapedOutput}).getResults().front();
+    }
 
     auto reshapedResult = rewriter.create<tensor::ExpandShapeOp>(
-        loc, outputShapeType, matmulResult.getResults()[0],
+        loc, outputShapeType, matmulResult,
         reassociationInputOutputIndices);
 
     rewriter.replaceOp(convOp, ArrayRef<Value>{reshapedResult});

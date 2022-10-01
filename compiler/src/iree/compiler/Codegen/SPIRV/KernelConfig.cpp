@@ -824,6 +824,12 @@ static LogicalResult setSPIRVOpConfig(const spirv::TargetEnv &targetEnv,
         LLVM_DEBUG(llvm::dbgs() << "figuring configuration for generic op\n");
         if (succeeded(setReductionConfig(targetEnv, op))) return success();
 
+        if (isMatmulOrBatchMatmul(op)) {
+          std::array<int64_t, 2> workgroupXY = {32, 2};
+          std::array<int64_t, 3> threadMNK = {8, 8, 4};
+          if(succeeded(detail::setMatmulOpConfig(op, /*subgroupSize=*/32, workgroupXY, threadMNK)))
+                return success();
+        }
         // If a generic op has reduction iterator types, it can be treated as a
         // root op for configuration as well. Use the default configuration,
         // which will mark it as a root.
