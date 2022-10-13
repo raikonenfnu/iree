@@ -122,7 +122,7 @@ static LogicalResult setNVIDIAMatmulConfig(linalg::LinalgOp op,
     threadMNK = {4, 4, 32};
   }
   return setMatmulOpConfig(limits, op, workgroupXY, threadMNK,
-                           /*enablePromotion=*/true);
+                           /*enablePromotion=*/false);
 }
 
 // Volta architecture:

@@ -114,7 +114,7 @@ class VulkanSPIRVTargetBackend : public TargetBackend {
 
   void buildTranslationPassPipeline(OpPassManager &passManager) override {
     buildSPIRVCodegenPassPipeline(passManager, /*enableFastMath=*/false,
-                                  /*use64bitIndex=*/false);
+                                  /*use64bitIndex=*/true);
   }
 
   LogicalResult serializeExecutable(const SerializationOptions &options,
