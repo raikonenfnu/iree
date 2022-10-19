@@ -1319,6 +1319,7 @@ LogicalResult initSPIRVLaunchConfig(ModuleOp module) {
             "unhandled multiple roots in dispatch region");
       }
       rootOperation = computeOp;
+      break;
     }
 
     if (!rootOperation) {
