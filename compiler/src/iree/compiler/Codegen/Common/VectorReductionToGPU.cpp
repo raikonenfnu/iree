@@ -40,17 +40,40 @@ static Value allocateGlobalSharedMemory(Location loc, OpBuilder &builder,
   return builder.create<memref::AllocOp>(loc, memrefType);
 }
 
+/// Packs vector of lower precision into a single F32 element. (i.e <2xf16> -> f32)
+static Value packVectorToSingleF32(Location loc, OpBuilder &builder, Value input) {
+    VectorType packedF32Type = VectorType::get({1}, FloatType::getF32(builder.getContext()));
+    Value packedInputVec = builder.create<vector::BitCastOp>(loc, packedF32Type, input);
+    Value packedInput = builder.create<vector::ExtractOp>(loc, packedInputVec, 0);
+    return packedInput;
+}
+
+static Value promoteElementToVector(Location loc, OpBuilder &builder, Value input) {
+    VectorType vectorTypeBroadcast = VectorType::get({1}, input.getType());
+    Value vectorInput = builder.create<vector::BroadcastOp>(loc, vectorTypeBroadcast, input);
+    return vectorInput;
+}
+
 /// Emit warp reduction code sequence for a given input.
 static Value warpReduction(Location loc, OpBuilder &builder, Value input,
                            vector::CombiningKind kind, uint32_t size) {
   Value laneVal = input;
+  VectorType unpackedType = input.getType().dyn_cast<VectorType>();
   // Parallel reduction using butterfly shuffles.
   for (uint64_t i = 1; i < size; i <<= 1) {
+    Value shuffleInput = laneVal;
+    if(unpackedType) {
+      shuffleInput = packVectorToSingleF32(loc, builder, laneVal);
+    }
     Value shuffled = builder
-                         .create<gpu::ShuffleOp>(loc, laneVal, i,
+                         .create<gpu::ShuffleOp>(loc, shuffleInput, i,
                                                  /*width=*/size,
                                                  /*mode=*/gpu::ShuffleMode::XOR)
                          .getShuffleResult();
+    if(unpackedType) {
+      Value vectorShuffled = promoteElementToVector(loc, builder, shuffled);
+      shuffled = builder.create<vector::BitCastOp>(loc, unpackedType, vectorShuffled);
+    }
     laneVal = makeArithReduction(builder, loc, kind, laneVal, shuffled);
   }
   return laneVal;
@@ -97,6 +120,10 @@ static Attribute getCombiningKindIdentity(OpBuilder &builder,
   return Attribute();
 }
 
+// static Value unpackSingleF32ToVector(Location loc, OpBuilder &builder, Value input, VectorType unpackedType) {
+//     Value unpackedInputVec = builder.create<vector::BitCastOp>(loc, unpackedType, input);
+// }
+
 /// Emit reduction across a group for a given input.
 static Value groupReduction(Location loc, OpBuilder &builder, Value input,
                             vector::CombiningKind kind, uint32_t size,
@@ -104,11 +131,7 @@ static Value groupReduction(Location loc, OpBuilder &builder, Value input,
   assert(
       size % warpSize == 0 &&
       "Group reduction only support for sizes aligned on warp size for now.");
-  // auto inputType = input.getType();
-  // assert((reductionOp.getType().isF32() &&
-  //     reductionOp.getType().isSignlessInteger(32)) &&
-  //     !reductionOp.getType().isF16() && "Group reduction only supported for
-  //     F16, I32, and F32.");
+
   Value laneVal = warpReduction(loc, builder, input, kind, warpSize);
   // if we have more than one warp, reduce across warps.
   if (size > warpSize) {
@@ -118,7 +141,7 @@ static Value groupReduction(Location loc, OpBuilder &builder, Value input,
            "Only support 1 level, need to implement recursive/loop for this "
            "case.");
     MemRefType memrefType =
-        MemRefType::get(numWarp, input.getType(), {},
+        MemRefType::get(numWarp, laneVal.getType(), {},
                         gpu::GPUDialect::getWorkgroupAddressSpace());
     Value alloc = builder.create<memref::AllocOp>(loc, memrefType);
     Value threadX = builder.create<gpu::ThreadIdOp>(loc, builder.getIndexType(),
@@ -140,13 +163,24 @@ static Value groupReduction(Location loc, OpBuilder &builder, Value input,
     Value cstNumWarp = builder.create<arith::ConstantIndexOp>(loc, numWarp);
     Value useIdentityElement = builder.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::sge, laneId, cstNumWarp);
+    Type identityType = loadVal.getType();
+    auto laneVectorType = input.getType().dyn_cast<VectorType>();
+    if(laneVectorType) {
+      identityType = laneVectorType.getElementType();
+    }
     Attribute identityAttr =
-        getCombiningKindIdentity(builder, kind, loadVal.getType());
+        getCombiningKindIdentity(builder, kind, identityType);
+    if(laneVectorType) {
+      identityAttr = DenseElementsAttr::get(laneVectorType, identityAttr);
+    }
     assert(identityAttr && "Unknown identity value for the reduction");
-    Value identity = builder.create<arith::ConstantOp>(loc, identityAttr);
+    Value identity = builder.create<arith::ConstantOp>(loc, identityAttr, input.getType());
     Value selectedInput = builder.create<arith::SelectOp>(
         loc, useIdentityElement, identity, loadVal);
     laneVal = warpReduction(loc, builder, selectedInput, kind, warpSize);
+    if(laneVectorType) {
+      laneVal = builder.create<vector::ReductionOp>(loc, kind, laneVal);
+    }
   }
   return laneVal;
 }
