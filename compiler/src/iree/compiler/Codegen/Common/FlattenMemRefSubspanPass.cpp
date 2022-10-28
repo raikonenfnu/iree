@@ -373,7 +373,6 @@ struct LinearizeLoadIndices final : public OpConversionPattern<memref::LoadOp> {
   }
 };
 
-
 /// Linearizes indices in gpu.subgroup_mma_load_matrix ops.
 struct LinearizeMMALoadIndices final
     : public OpConversionPattern<gpu::SubgroupMmaLoadMatrixOp> {
@@ -741,7 +740,7 @@ struct FlattenMemRefSubspanPass
     flattenPatterns
         .add<FlattenAlloc<memref::AllocaOp>, FlattenAlloc<memref::AllocOp>,
              FlattenGlobal, FlattenGetGlobal, LinearizeLoadIndices,
-             LinearizeMMALoadIndices, LinearizeStoreIndices, 
+             LinearizeMMALoadIndices, LinearizeStoreIndices,
              LinearizeMMAStoreIndices, LinearizeTransferReadIndices,
              LinearizeTransferWriteIndices, AdjustConversionCast,
              FlattenSubView, FoldMemRefReshape<memref::CollapseShapeOp>,

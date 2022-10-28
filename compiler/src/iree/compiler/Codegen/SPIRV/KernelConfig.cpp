@@ -560,7 +560,7 @@ LogicalResult setMatmulOpConfig(spirv::ResourceLimitsAttr limits,
           ? CodeGenPipeline::SPIRVMatmulPromoteVectorize
           : CodeGenPipeline::SPIRVBaseVectorize;
 
-  if(allowCooperative)
+  if (allowCooperative)
     pipeline = CodeGenPipeline::SPIRVCooperativeMatrixVectorize;
 
   SmallVector<int64_t> threadTileSizes(numLoops, 0);

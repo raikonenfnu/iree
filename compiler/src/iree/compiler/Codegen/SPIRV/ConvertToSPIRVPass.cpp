@@ -346,8 +346,8 @@ void ConvertToSPIRVPass::runOnOperation() {
   options.enableFastMathMode = this->enableFastMath;
   SPIRVTypeConverter typeConverter(targetAttr, options);
   typeConverter.addConversion([&](gpu::MMAMatrixType type) -> Type {
-      return convertMMAToSPIRVType(type);
-    });
+    return convertMMAToSPIRVType(type);
+  });
   RewritePatternSet patterns(&getContext());
   ScfToSPIRVContext scfToSPIRVContext;
 
@@ -413,10 +413,10 @@ void ConvertToSPIRVPass::runOnOperation() {
   /// - tensor_to_memref can become a no-op since tensors are lowered to
   ///   !spirv.array.
   /// - unrealized_conversion_cast with the same source and target type.
-  patterns.insert<
-      FoldAsNoOp<memref::CollapseShapeOp>,FoldAsNoOp<memref::CastOp> ,FoldAsNoOp<memref::ExpandShapeOp>,
-      FoldAsNoOp<bufferization::ToMemrefOp>, RemoveIdentityConversionCast>(
-      typeConverter, context);
+  patterns.insert<FoldAsNoOp<memref::CollapseShapeOp>,
+                  FoldAsNoOp<memref::CastOp>, FoldAsNoOp<memref::ExpandShapeOp>,
+                  FoldAsNoOp<bufferization::ToMemrefOp>,
+                  RemoveIdentityConversionCast>(typeConverter, context);
 
   std::unique_ptr<ConversionTarget> target =
       SPIRVConversionTarget::get(targetAttr);

@@ -492,8 +492,7 @@ std::unique_ptr<OperationPass<func::FuncOp>>
 createSPIRVVectorToCooperativeOpsPass();
 
 /// Converts vector ops to gpu dialect.
-std::unique_ptr<OperationPass<func::FuncOp>> 
-createSPIRVVectorToGPUPass();
+std::unique_ptr<OperationPass<func::FuncOp>> createSPIRVVectorToGPUPass();
 
 /// Pass to tile Linalg ops with tensor semantics to invocations.
 std::unique_ptr<OperationPass<func::FuncOp>> createSPIRVTilePass();

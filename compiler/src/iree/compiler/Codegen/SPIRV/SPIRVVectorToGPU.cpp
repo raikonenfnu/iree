@@ -18,105 +18,6 @@
 namespace mlir {
 namespace iree_compiler {
 
-/// Helper to convert copy to shared memory to async copy. This creates groups
-/// of consecutive copies and emit wait operation right after.
-static void createAsyncGroups(func::FuncOp funcOp) {
-  llvm::SmallSetVector<vector::TransferWriteOp, 16> copyToSharedMem;
-  // Look for all the copy that can be converted to async copy ops.
-  funcOp.walk([&](vector::TransferWriteOp writeOp) {
-    if (!writeOp.getPermutationMap().isMinorIdentity() ||
-        writeOp.getVectorType().getRank() != 1 || !writeOp.isDimInBounds(0) ||
-        writeOp.getShapedType().cast<MemRefType>().getMemorySpaceAsInt() !=
-            gpu::GPUDialect::getWorkgroupAddressSpace())
-      return WalkResult::advance();
-    auto read = writeOp.getVector().getDefiningOp<vector::TransferReadOp>();
-    if (!read || read.getVectorType() != writeOp.getVectorType() ||
-        !read.isDimInBounds(0) || !read.getPermutationMap().isMinorIdentity())
-      return WalkResult::advance();
-    if (!((read.getVectorType().getElementType().isF32() &&
-           read.getVectorType().getNumElements() <= 4) ||
-          (read.getVectorType().getElementType().isF16() &&
-           read.getVectorType().getNumElements() <= 8)))
-      return WalkResult::advance();
-    copyToSharedMem.insert(writeOp);
-    return WalkResult::advance();
-  });
-
-  while (!copyToSharedMem.empty()) {
-    SmallVector<vector::TransferWriteOp> group;
-    vector::TransferWriteOp writeOp = *copyToSharedMem.begin();
-    // Start a group with the first write.
-    copyToSharedMem.remove(writeOp);
-    group.push_back(writeOp);
-    Operation* nextNode = writeOp.getOperation();
-    // Look in the next nodes for more copies to add to the same group.
-    while ((nextNode = nextNode->getNextNode())) {
-      // Ignore ops without side effects
-      auto memInterface = dyn_cast<MemoryEffectOpInterface>(nextNode);
-      if (memInterface && memInterface.hasNoEffect() &&
-          !nextNode->hasTrait<OpTrait::HasRecursiveMemoryEffects>())
-        continue;
-      auto readOp = dyn_cast<vector::TransferReadOp>(nextNode);
-      // ignore read from a different address space.
-      if (readOp &&
-          readOp.getShapedType().cast<MemRefType>().getMemorySpaceAsInt() !=
-              gpu::GPUDialect::getWorkgroupAddressSpace()) {
-        continue;
-      }
-      auto nextWriteOp = dyn_cast<vector::TransferWriteOp>(nextNode);
-      if (nextWriteOp && copyToSharedMem.count(nextWriteOp)) {
-        // found another copy, add it to the group.
-        copyToSharedMem.remove(nextWriteOp);
-        group.push_back(nextWriteOp);
-        continue;
-      }
-      // If the op is something else stop the accumulating op in the group.
-      break;
-    }
-    // emit the group.
-    SmallVector<Value> tokens;
-    OpBuilder builder(funcOp.getContext());
-    for (vector::TransferWriteOp writeOp : group) {
-      builder.setInsertionPoint(writeOp);
-      auto readOp = writeOp.getVector().getDefiningOp<vector::TransferReadOp>();
-      Value token = builder.create<nvgpu::DeviceAsyncCopyOp>(
-          writeOp.getLoc(),
-          nvgpu::DeviceAsyncTokenType::get(funcOp.getContext()),
-          writeOp.getSource(), writeOp.getIndices(), readOp.getSource(),
-          readOp.getIndices(),
-          builder.getIndexAttr(readOp.getVectorType().getNumElements()),
-          Value(),
-          UnitAttr());
-      tokens.push_back(token);
-    }
-    // Create the group and wait for it right after.
-    Value groupToken = builder.create<nvgpu::DeviceAsyncCreateGroupOp>(
-        funcOp.getLoc(), nvgpu::DeviceAsyncTokenType::get(funcOp.getContext()),
-        tokens);
-    builder.create<nvgpu::DeviceAsyncWaitOp>(funcOp.getLoc(), groupToken,
-                                             nullptr);
-    // Clean up old stores.
-    for (vector::TransferWriteOp writeOp : group) writeOp.erase();
-  }
-}
-
-static void swizzleSharedMemory(func::FuncOp funcOp) {
-  SmallVector<memref::AllocOp> shmAllocOps;
-  funcOp->walk([&](memref::AllocOp allocOp) {
-    auto memrefType = allocOp.getMemref().getType().cast<MemRefType>();
-    // Only apply it to shared memory of input operands.
-    if (memrefType.getMemorySpaceAsInt() !=
-            gpu::GPUDialect::getWorkgroupAddressSpace() ||
-        memrefType.getRank() < 3)
-      return;
-    shmAllocOps.push_back(allocOp);
-  });
-  for (auto allocOp : shmAllocOps) {
-    (void)nvgpu::optimizeSharedMemoryReadsAndWrites(funcOp,
-                                                    allocOp.getMemref());
-  }
-}
-
 namespace {
 /// Apply tranformation to drop unit dims in destination of vector.transfer_read
 /// Ops such that the resulting vector is 2D
@@ -261,8 +162,7 @@ struct SPIRVVectorToGPUPass
       return signalPassFailure();
     }
 
-    convertVectorToMMAOps(funcOp); 
-
+    convertVectorToMMAOps(funcOp);
   }
 };
 }  // namespace
