@@ -392,9 +392,10 @@ struct LinearizeMMALoadIndices final
       return loadOp.emitOpError() << "failed to linearize index";
     }
 
+    bool transposeLoad = loadOp.getTranspose() ? loadOp.getTranspose().value() : false;
     rewriter.replaceOpWithNewOp<gpu::SubgroupMmaLoadMatrixOp>(
         loadOp, loadOp.getType(), adaptor.getSrcMemref(), linearIndex,
-        loadOp.getLeadDimension());
+        loadOp.getLeadDimension(), rewriter.getBoolAttr(transposeLoad));
     return success();
   }
 };
@@ -660,8 +661,9 @@ struct FoldSubspanOffsetIntoLoadStore final : public OpRewritePattern<OpType> {
     Value newIndex = rewriter.create<AffineApplyOp>(
         op.getLoc(), addMap, ValueRange{op.getIndices().front(), offset});
     if constexpr (std::is_same<OpType, gpu::SubgroupMmaLoadMatrixOp>::value) {
+      bool transposeLoad = op.getTranspose() ? op.getTranspose().value() : false;
       rewriter.replaceOpWithNewOp<gpu::SubgroupMmaLoadMatrixOp>(
-          op, op.getType(), newSubspan, newIndex, op.getLeadDimension());
+          op, op.getType(), newSubspan, newIndex, op.getLeadDimension(), rewriter.getBoolAttr(transposeLoad));
     } else if constexpr (std::is_same<OpType,
                                       gpu::SubgroupMmaStoreMatrixOp>::value) {
       rewriter.replaceOpWithNewOp<gpu::SubgroupMmaStoreMatrixOp>(
