@@ -45,6 +45,11 @@ namespace mlir {
 namespace iree_compiler {
 namespace {
 
+bool isMatmulOrBatchMatmul(linalg::LinalgOp linalgOp) {
+  return linalg::isaContractionOpInterface(linalgOp) &&
+         llvm::is_contained({2u, 3u}, linalgOp.getNumParallelLoops());
+}
+
 //===----------------------------------------------------------------------===//
 // Subgroup tiling patterns
 //===----------------------------------------------------------------------===//
@@ -281,9 +286,10 @@ class SPIRVTileAndVectorizeToCooperativeOpsPass final
     // First we need to discover the CodeGen lowering configuration. It was
     // decided earlier and attached to a linalg op as an attribute.
 
+    // TODO(raikonenfnu): Figure out why not detecting contractionOpinterface.
     linalg::LinalgOp rootOp;
-    funcOp.walk([&](linalg::ContractionOpInterface contractOp) {
-      if (getLoweringConfig(contractOp)) {
+    funcOp.walk([&](linalg::LinalgOp contractOp) {
+      if (isMatmulOrBatchMatmul(contractOp) && getLoweringConfig(contractOp)) {
         rootOp = cast<linalg::LinalgOp>(contractOp.getOperation());
         return WalkResult::interrupt();
       }

@@ -527,6 +527,7 @@ LogicalResult setMatmulOpConfig(spirv::ResourceLimitsAttr limits,
 
   if (isBM) workgroupTileSizes[bIndex] = 1;
 
+  // TODO(raikonenfnu): Try smaller tile size such as 8.
   if (!tileMatmulNToWorkgroupX(dimN, bestThreadN, residualThreads, bestX,
                                residualTilingFactor, workgroupSize[0],
                                workgroupTileSizes[nIndex]) ||
@@ -576,7 +577,6 @@ LogicalResult setMatmulOpConfig(spirv::ResourceLimitsAttr limits,
   tileSizes.push_back(workgroupTileSizes);
   tileSizes.push_back(threadTileSizes);
   tileSizes.push_back(reductionTileSizes);
-
   return setOpConfigAndEntryPointFnTranslation(
       op->getParentOfType<func::FuncOp>(), op, tileSizes, pipeline,
       workgroupSize);

@@ -979,6 +979,10 @@ static bool isFusableWithProducer(OpOperand &operand, bool aggressiveFusion) {
 
   auto consumerLinalgOp = cast<linalg::LinalgOp>(consumer);
   if (consumerLinalgOp.isInput(&operand)) {
+    bool fuseTransposeAndMatmul = isa<linalg::MatmulOp>(consumer) && isa<linalg::TransposeOp>(producer);
+    if(fuseTransposeAndMatmul) {
+      return true;
+    }
     // Only fuse on inputs if both ops are generic ops.
     if (!aggressiveFusion || !isa<linalg::GenericOp>(consumer) ||
         !isa<linalg::GenericOp>(producer)) {

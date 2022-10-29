@@ -51,7 +51,7 @@ static void populateTilingReductionPatterns(
   auto tilingOptions = linalg::LinalgTilingOptions()
                            .setLoopType(linalg::LinalgTilingLoopType::Loops)
                            .setTileSizeComputationFunction(getTileSizeFn);
-  TilingPatterns<linalg::BatchMatmulOp, linalg::MatmulOp>::insert(
+  TilingPatterns<linalg::BatchMatmulOp, linalg::MatmulOp, linalg::GenericOp>::insert(
       patterns, tilingOptions, filter);
 }
 

@@ -54,7 +54,7 @@ static Optional<CooperativeMatrixSize> getCooperativeMatrixSize(
 }
 
 static LogicalResult setOpConfig(const spirv::TargetEnv &targetEnv,
-                                 linalg::MatmulOp op) {
+                                 linalg::LinalgOp op) {
   // This configuration is only for cooperative matrix.
   if (!targetEnv.allows(spirv::Capability::CooperativeMatrixNV) ||
       !targetEnv.allows(spirv::Extension::SPV_NV_cooperative_matrix)) {
@@ -165,9 +165,12 @@ LogicalResult setNVIDIACodeGenConfig(const spirv::TargetEnv &targetEnv,
   spirv::ResourceLimitsAttr limits = targetEnv.getResourceLimits();
 
   // First try to see if we can use tensor cores.
-  if (auto matmulOp = dyn_cast<linalg::MatmulOp>(rootOp)) {
-    if (failed(setOpConfig(targetEnv, matmulOp))) return failure();
+  // if (auto matmulOp = dyn_cast<linalg::MatmulOp>(rootOp)) {
+  if (auto linalgOp = dyn_cast<linalg::LinalgOp>(rootOp)) {
+  if (isMatmulOrBatchMatmul(linalgOp)){
+    if (failed(setOpConfig(targetEnv, linalgOp))) return failure();
     if (getLoweringConfig(rootOp)) return success();
+  }
   }
 
   if (auto linalgOp = dyn_cast<linalg::LinalgOp>(rootOp)) {
