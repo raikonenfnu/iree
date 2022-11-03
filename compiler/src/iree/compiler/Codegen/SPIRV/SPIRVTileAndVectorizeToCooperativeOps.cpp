@@ -55,7 +55,7 @@ namespace {
 /// Gets the chosen hardware cooperative op size attached to the given `op`
 /// as CodeGen lowering configuration.
 static SmallVector<int64_t> getTargetCooperativeOpSize(linalg::LinalgOp op) {
-  return getTileSizes(op, 1);  // For subgroup level tiling
+  return getTileSizes(op, 3);  // For native vector sizes
 }
 
 /// Deduces required subgroup counts along all workgroup tiled dimensions.
@@ -91,7 +91,6 @@ static void populateTilingToSubgroupPatterns(ArrayRef<int64_t> subgroupCounts,
   auto getSubgroupProcInfoFn = [subgroupCounts, subgroupSize](
                                    OpBuilder &builder, Location loc,
                                    ArrayRef<Range> parallelLoopRanges) {
-    // TODO: query this from the target environment
     auto counts = llvm::to_vector<3>(subgroupCounts);
     // `getSubgroupIdsAndCounts` assumes we follow GPU (X, Y, Z) order.
     std::reverse(counts.begin(), counts.end());
@@ -320,10 +319,13 @@ class SPIRVTileAndVectorizeToCooperativeOpsPass final
     // Then tile and distribute to subgroups.
 
     {
-      unsigned subgroupSize = 32;
+      unsigned subgroupSize = 0;
       if (spirv::TargetEnvAttr attr = getSPIRVTargetEnvAttr(rootOp)) {
-        spirv::TargetEnv targetEnv(attr);
-        subgroupSize = targetEnv.getResourceLimits().getSubgroupSize();
+        subgroupSize = attr.getResourceLimits().getSubgroupSize();
+      }
+      if (!subgroupSize) {
+        funcOp.emitError("expected !spirv.target_env for subgroup size");
+        return signalPassFailure();
       }
       RewritePatternSet subgroupTilingPatterns(context);
       populateTilingToSubgroupPatterns(subgroupCounts, subgroupSize,
