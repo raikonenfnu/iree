@@ -28,6 +28,9 @@ namespace {
 
 /// Returns the GPU vendor for the given target `triple`.
 spirv::Vendor getVendor(const TargetTriple &triple) {
+  if (triple.getOS() == TargetTripleOS::macOS) {
+    return spirv::Vendor::Apple;
+  }
   switch (triple.getArch()) {
     case TargetTripleArch::Unknown:
       return spirv::Vendor::Unknown;
