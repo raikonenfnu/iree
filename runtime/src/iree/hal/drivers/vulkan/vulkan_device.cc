@@ -718,6 +718,7 @@ static iree_status_t iree_hal_vulkan_device_create_internal(
       options, instance, physical_device, logical_device,
       (iree_hal_device_t*)device, &device->device_allocator);
 
+  // status = iree_hal_allocator_create_caching(device->device_allocator, &device->device_allocator);
   // Create command pools for each queue family. If we don't have a transfer
   // queue then we'll ignore that one and just use the dispatch pool.
   // If we wanted to expose the pools through the HAL to allow the VM to more
@@ -814,6 +815,7 @@ iree_status_t iree_hal_vulkan_device_create(
     iree_hal_vulkan_syms_t* opaque_syms, VkInstance instance,
     VkPhysicalDevice physical_device, iree_allocator_t host_allocator,
     iree_hal_device_t** out_device) {
+  printf("initializing vulkan device!\n");
   DynamicSymbols* instance_syms = (DynamicSymbols*)opaque_syms;
 
   // Find the extensions we need (or want) that are also available

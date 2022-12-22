@@ -9,9 +9,6 @@
 #include "iree/base/tracing.h"
 #include "iree/hal/detail.h"
 #include "iree/hal/resource.h"
-#include <pthread.h>
-
-pthread_mutex_t lock;
 
 typedef struct iree_hal_buffer_node_t {
   iree_hal_buffer_t* cache_data;
@@ -92,12 +89,13 @@ static void iree_hal_caching_allocator_remove_buffer_from_cache(
 
 static bool iree_hal_caching_allocator_allocate_from_cache(
     iree_hal_caching_allocator_t* allocator, iree_host_size_t requested_size,
-    iree_hal_buffer_t** out_buffer) {
+    iree_hal_memory_type_t target_memory_type, iree_hal_buffer_t** out_buffer) {
   size_t buffer_index_in_cache = 0;
   iree_hal_buffer_node_t* cache_list_ptr = allocator->cache_list;
   while (cache_list_ptr) {
     if (cache_list_ptr->cache_data->allocation_size >= requested_size) {
-      break;
+      if (iree_hal_buffer_memory_type(cache_list_ptr->cache_data) == target_memory_type)
+        break;
     }
     cache_list_ptr = cache_list_ptr->next;
     buffer_index_in_cache++;
@@ -190,10 +188,12 @@ static iree_status_t iree_hal_caching_allocator_allocate_buffer(
   iree_hal_caching_allocator_t* allocator =
       iree_hal_caching_allocator_cast(base_allocator);
   if (iree_all_bits_set(params->type, IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL)) {
-    if (iree_hal_caching_allocator_allocate_from_cache(
-            allocator, allocation_size, out_buffer)) {
-      return iree_ok_status();
-    }
+    // if (!iree_all_bits_set(params->type, IREE_HAL_MEMORY_TYPE_HOST_VISIBLE)) {
+      if (iree_hal_caching_allocator_allocate_from_cache(
+              allocator, allocation_size, params->type, out_buffer)) {
+        return iree_ok_status();
+      }
+    // }
   }
   iree_status_t status;
   status = iree_hal_allocator_allocate_buffer(allocator->delegate_allocator,
@@ -218,10 +218,12 @@ static void iree_hal_caching_allocator_deallocate_buffer(
   iree_hal_caching_allocator_t* allocator =
       iree_hal_caching_allocator_cast(base_allocator);
   if (iree_all_bits_set(memory_type, IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL)) {
-    iree_status_t status = iree_hal_allocator_add_buffer_to_cache(base_buffer);
-    if (iree_status_is_ok(status)) {
-      return;
-    }
+    // if (!iree_all_bits_set(memory_type, IREE_HAL_MEMORY_TYPE_HOST_VISIBLE)) {
+      iree_status_t status = iree_hal_allocator_add_buffer_to_cache(base_buffer);
+      if (iree_status_is_ok(status)) {
+        return;
+      }
+    // }
   }
   iree_hal_allocator_deallocate_buffer(allocator->delegate_allocator,
                                        base_buffer);

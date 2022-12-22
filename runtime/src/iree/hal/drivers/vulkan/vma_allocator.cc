@@ -23,6 +23,7 @@ typedef struct iree_hal_vulkan_vma_allocator_t {
   iree_hal_device_t* device;  // unretained to avoid cycles
   iree_allocator_t host_allocator;
   VmaAllocator vma;
+  VmaPool pool;
 
   IREE_STATISTICS(VkPhysicalDeviceMemoryProperties memory_props;)
   IREE_STATISTICS(iree_hal_allocator_statistics_t statistics;)
@@ -165,6 +166,40 @@ iree_status_t iree_hal_vulkan_vma_allocator_create(
     vmaDestroyAllocator(vma);
   }
 
+  VkBufferCreateInfo sampleBufCreateInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+  sampleBufCreateInfo.size = 0x10000; // Doesn't matter here.
+  sampleBufCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  sampleBufCreateInfo.usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  sampleBufCreateInfo.usage |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+  sampleBufCreateInfo.usage |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  sampleBufCreateInfo.usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+
+  VmaAllocationCreateInfo sampleAllocCreateInfo = {};
+  sampleAllocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO;
+  sampleAllocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+  sampleAllocCreateInfo.flags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+
+  uint32_t memTypeIndex;
+  status = VK_RESULT_TO_STATUS(
+          vmaFindMemoryTypeIndexForBufferInfo(allocator->vma, &sampleBufCreateInfo, &sampleAllocCreateInfo, &memTypeIndex), "vmaFindMemoryTypeIndexForBufferInfo");
+  if(!iree_status_is_ok(status)) {
+    return status;
+  }
+
+  // Create a pool that has exactly 1 block, 2 GB.
+  VmaPoolCreateInfo poolCreateInfo = {};
+  poolCreateInfo.memoryTypeIndex = memTypeIndex;
+  poolCreateInfo.blockSize = options->large_heap_block_size;
+  poolCreateInfo.minBlockCount = 1;
+  poolCreateInfo.maxBlockCount = 1;
+  
+  VmaPool pool;
+  status = VK_RESULT_TO_STATUS(
+        vmaCreatePool(allocator->vma, &poolCreateInfo, &pool), "vmaCreatePool");
+  if(!iree_status_is_ok(status)) {
+    return status;
+  }
+  allocator->pool = pool;
   IREE_TRACE_ZONE_END(z0);
   return status;
 }
@@ -265,13 +300,18 @@ static iree_status_t iree_hal_vulkan_vma_allocator_allocate_internal(
   buffer_create_info.queueFamilyIndexCount = 0;
   buffer_create_info.pQueueFamilyIndices = NULL;
 
+  VmaPool pool = VK_NULL_HANDLE;
+  bool usePool = iree_all_bits_set(params->usage, IREE_HAL_BUFFER_USAGE_MAPPING) && iree_all_bits_set(params->usage, IREE_HAL_BUFFER_USAGE_TRANSFER) && iree_all_bits_set(params->usage, IREE_HAL_BUFFER_USAGE_DISPATCH_STORAGE);
+  if(usePool) {
+    pool = allocator->pool;
+  }
   VmaAllocationCreateInfo allocation_create_info;
   allocation_create_info.flags = flags;
   allocation_create_info.usage = VMA_MEMORY_USAGE_UNKNOWN;
   allocation_create_info.requiredFlags = 0;
   allocation_create_info.preferredFlags = 0;
   allocation_create_info.memoryTypeBits = 0;  // Automatic selection.
-  allocation_create_info.pool = VK_NULL_HANDLE;
+  allocation_create_info.pool = pool;
   allocation_create_info.pUserData = NULL;
   if (iree_all_bits_set(params->type, IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL)) {
     if (iree_all_bits_set(params->type, IREE_HAL_MEMORY_TYPE_HOST_VISIBLE)) {
@@ -294,16 +334,21 @@ static iree_status_t iree_hal_vulkan_vma_allocator_allocate_internal(
       allocation_create_info.usage = VMA_MEMORY_USAGE_CPU_ONLY;
     }
   }
+  // printf("new buffer: ");
   if (iree_all_bits_set(params->type, IREE_HAL_MEMORY_TYPE_HOST_CACHED)) {
+    // printf("IREE_HAL_MEMORY_TYPE_HOST_CACHED + ");
     allocation_create_info.requiredFlags |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
   }
   if (iree_all_bits_set(params->type, IREE_HAL_MEMORY_TYPE_HOST_COHERENT)) {
+    // printf("IREE_HAL_MEMORY_TYPE_HOST_COHERENT + ");
     allocation_create_info.requiredFlags |=
         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
   }
   if (iree_all_bits_set(params->usage, IREE_HAL_BUFFER_USAGE_MAPPING)) {
+    // printf("IREE_HAL_BUFFER_USAGE_MAPPING + ");
     allocation_create_info.requiredFlags |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
   }
+  // printf("\n");
 
   // TODO(benvanik): if on a unified memory system and initial data is present
   // we could set the mapping bit and ensure a much more efficient upload.
