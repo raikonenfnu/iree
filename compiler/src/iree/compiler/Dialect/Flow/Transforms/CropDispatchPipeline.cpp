@@ -41,9 +41,20 @@ class CropDispatchPipelinePass
     DispatchOp targetDispatch;
     for (auto dispatchOp : funcOp.getFunctionBody().getOps<DispatchOp>()) {
       targetDispatch = dispatchOp;
-      if (++index > dispatchIndex) break;
+      // batch_matmul_10x9216x9216x64, generic_2x320x9216, generic_2x9216x5x64
+      if(dispatchOp.getEntryPoint().getNestedReferences()[0].getValue().find("generic_2x9216x5x64") != StringRef::npos) {
+        llvm::outs()<<"foind in idx:"<<index<<" with: "<<dispatchOp.getEntryPoint().getNestedReferences()[0].getValue()<<"\n";
+      }
+      // llvm::outs()<<"Entry Point:"<<dispatchOp.getEntryPoint()<<"\n";
+      if (++index > dispatchIndex) {
+      llvm::outs()<<"Entry Point:"<<dispatchOp.getEntryPoint().getNestedReferences()[0].getValue()<<"\n";
+        break;
+      }
     }
-    if (index <= dispatchIndex) return;
+    if (index <= dispatchIndex) {
+      llvm::outs()<<"maximum index:"<<index<<"\n";
+      return;
+    }
 
     OpBuilder builder(targetDispatch);
     auto bufferType = funcOp.getResultTypes()[0];
