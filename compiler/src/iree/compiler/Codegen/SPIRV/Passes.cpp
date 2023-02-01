@@ -217,6 +217,7 @@ static void addSPIRVLoweringPasses(OpPassManager &pm, bool enableFastMath,
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 
+  pm.addPass(createSPIRVCombineDispatchPass());
   pm.addPass(createConvertToSPIRVPass(enableFastMath, use64bitIndex));
 
   auto getTargetEnv = [](spirv::ModuleOp moduleOp) {

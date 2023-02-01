@@ -524,6 +524,9 @@ void addSPIRVSubgroupReducePassPipeline(OpPassManager &pm);
 std::unique_ptr<OperationPass<ModuleOp>> createConvertToSPIRVPass(
     bool enableFastMath = false, bool use64bitIndex = false);
 
+// Combine SPIRV dispatches into one.
+std::unique_ptr<OperationPass<ModuleOp>> createSPIRVCombineDispatchPass();
+
 /// Creates a pass to fold processor ID uses where possible.
 std::unique_ptr<OperationPass<func::FuncOp>>
 createSPIRVFoldProcessorIDUsesPass();
