@@ -110,29 +110,84 @@ void SPIRVCombineDispatchPass::runOnOperation() {
   */
   SymbolTable symbolTable(AncestormoduleOp);
   MLIRContext *context = &getContext();
-  AncestormoduleOp->walk([&](IREE::Stream::CmdDispatchOp dispatchOp) {
-    llvm::outs()<<"dispatch:"<<dispatchOp<<"\n";
-    size_t resourceCount = dispatchOp.getResources().size();
-    auto resourceAccessesAttrs = dispatchOp.getResourceAccesses().getValue();
-    auto resourceSizes = dispatchOp.getResourceSizes();
-    auto resourceOffsets = dispatchOp.getResourceOffsets();
-    auto resourceLengths = dispatchOp.getResourceLengths();
-    auto operands = dispatchOp.getResources();
-    auto exportName = dispatchOp.getEntryPointAttr().getRootReference().getValue().split("::").first;
-    auto fn_name = StringAttr::get(context, exportName);
-    auto exportOp = symbolTable.lookupNearestSymbolFrom<IREE::HAL::ExecutableOp>(
-        dispatchOp, fn_name);
-    // llvm::outs()<<"export:"<<exportName<<" : "<<*exportOp<<"\n";
-    for (unsigned i = 0; i < resourceCount; ++i) {
-      auto resourceAccessAttr =
-          resourceAccessesAttrs[i]
-              .cast<IREE::Stream::ResourceAccessBitfieldAttr>();
-      auto resourceAccess = static_cast<IREE::Stream::ResourceAccessBitfield>(
-          resourceAccessAttr.getInt());
-      llvm::outs()<<"operand:"<<operands[i]<<"with access"<<resourceAccess<<","<<resourceSizes[i]<<","<<resourceOffsets[i]<<","<<resourceLengths[i]<<"\n";
+  // If need multiple executeOp, use AncestormoduleOp->walk([&](IREE::Stream::CmdDispatchOp dispatchOp)
+  for (auto funcOp : AncestormoduleOp.getOps<func::FuncOp>()) {
+    for (auto executeOp : funcOp.getOps<IREE::Stream::CmdExecuteOp>()) {
+      IREE::Stream::CmdDispatchOp prevDispatchOp;
+      llvm::SmallSetVector<Value, 4> writeResources;
+      for (auto dispatchOp : llvm::make_early_inc_range(executeOp.getOps<IREE::Stream::CmdDispatchOp>())) {
+        llvm::outs()<<"dispatch:"<<dispatchOp<<"\n";
+        size_t resourceCount = dispatchOp.getResources().size();
+        auto resourceAccessesAttrs = dispatchOp.getResourceAccesses().getValue();
+        auto resourceSizes = dispatchOp.getResourceSizes();
+        auto resourceOffsets = dispatchOp.getResourceOffsets();
+        auto resourceLengths = dispatchOp.getResourceLengths();
+        auto operands = dispatchOp.getResources();
+        auto exportName = dispatchOp.getEntryPointAttr().getRootReference().getValue().split("::").first;
+        auto fn_name = StringAttr::get(context, exportName);
+        auto exportOp = symbolTable.lookupNearestSymbolFrom<IREE::HAL::ExecutableOp>(
+            AncestormoduleOp, fn_name);
+        if(!exportOp) continue;
+        llvm::outs()<<"export:"<<exportName<<" : "<<exportOp.getSymName()<<"\n";
+        for (unsigned i = 0; i < resourceCount; ++i) {
+          auto resourceAccessAttr =
+              resourceAccessesAttrs[i]
+                  .cast<IREE::Stream::ResourceAccessBitfieldAttr>();
+          auto resourceAccess = static_cast<IREE::Stream::ResourceAccessBitfield>(
+              resourceAccessAttr.getInt());
+          if (resourceAccess == IREE::Stream::ResourceAccessBitfield::Read) {
+            if (writeResources.count(operands[i]) != 0 && operands[i].getLifetime() == IREE::Stream::Lifetime::Transient) {
+              // TODO: check with resourceOffset and resourceLength to make sure it's exactly the same.
+              eliminatedResource.insert(operands[i]);
+            } else {
+              newReadResource.insert(operands[i]);
+            }
+          } else if (resourceAccess == IREE::Stream::ResourceAccessBitfield::Write) {
+            newWriteResources.insert(operands[i]);
+          }
+          /*
+          0.Create list of newReadResources + newWriteResources
+          1.Looking at eliminatedResource, combine the function regions:
+          2. Create new funcOp using all reads and all writes. (look at the fusion code in llvm-project)
+            copy  block of first funcOp region, copy block of SecondFuncOp region,
+            find eliminatedResource part in secondOpRegion and replace use with the returning variable of eliminatedResource of first funcOp.
+          */
+          // combineDispatchOps(prevDispatchOp, dispatchOp, eliminatedResource, newWriteResources, newReadResources);
+          llvm::outs()<<"operand:"<<operands[i]<<"with access"<<resourceAccess<<","<<resourceSizes[i]<<","<<resourceOffsets[i]<<","<<resourceLengths[i]<<"\n";
+        }
+        prevDispatchOp = dispatchOp;
+      }
     }
-    llvm::outs()<<"\n\n";
-  });
+  }
+  // for (auto funcOp : llvm::make_early_inc_range(
+  //           AncestormoduleOp.getOps<func::FuncOp>())) {
+  //   for (auto dispatchOp : llvm::make_early_inc_range(
+  //             funcOp.getOps<IREE::Stream::CmdDispatchOp>())) {
+  // // AncestormoduleOp->walk([&](IREE::Stream::CmdDispatchOp dispatchOp) {
+  //   llvm::outs()<<"dispatch:"<<dispatchOp<<"\n";
+  //   size_t resourceCount = dispatchOp.getResources().size();
+  //   auto resourceAccessesAttrs = dispatchOp.getResourceAccesses().getValue();
+  //   auto resourceSizes = dispatchOp.getResourceSizes();
+  //   auto resourceOffsets = dispatchOp.getResourceOffsets();
+  //   auto resourceLengths = dispatchOp.getResourceLengths();
+  //   auto operands = dispatchOp.getResources();
+  //   auto exportName = dispatchOp.getEntryPointAttr().getRootReference().getValue().split("::").first;
+  //   auto fn_name = StringAttr::get(context, exportName);
+  //   auto exportOp = symbolTable.lookupNearestSymbolFrom<IREE::HAL::ExecutableOp>(
+  //       dispatchOp, fn_name);
+  //   llvm::outs()<<"export:"<<exportName<<" : "<<exportOp<<"\n";
+  //   for (unsigned i = 0; i < resourceCount; ++i) {
+  //     auto resourceAccessAttr =
+  //         resourceAccessesAttrs[i]
+  //             .cast<IREE::Stream::ResourceAccessBitfieldAttr>();
+  //     auto resourceAccess = static_cast<IREE::Stream::ResourceAccessBitfield>(
+  //         resourceAccessAttr.getInt());
+  //     llvm::outs()<<"operand:"<<operands[i]<<"with access"<<resourceAccess<<","<<resourceSizes[i]<<","<<resourceOffsets[i]<<","<<resourceLengths[i]<<"\n";
+  //   }
+  //   prevDispatchOp = dispatchOp;
+  //   llvm::outs()<<"\n\n";
+  // }
+  // }
 }
 
 //===----------------------------------------------------------------------===//
