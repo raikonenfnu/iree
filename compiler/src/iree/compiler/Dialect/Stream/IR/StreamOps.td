@@ -788,7 +788,7 @@ def Stream_TensorImportOp : Stream_PureOp<"tensor.import", [
     OptionalAttr<Stream_AffinityAttr>:$affinity
   );
   let results = (outs
-    Stream_ExternalResource:$result
+    AnyTypeOf<[Stream_ExternalResource, Stream_StagingResource]>:$result
   );
 
   let assemblyFormat = [{
@@ -834,7 +834,7 @@ def Stream_TensorExportOp : Stream_PureOp<"tensor.export", [
   }];
 
   let arguments = (ins
-    Stream_ExternalResource:$source,
+    AnyTypeOf<[Stream_ExternalResource, Stream_StagingResource]>:$source,
     TypeAttr:$source_encoding,
     Stream_ShapeDynamicDims:$source_encoding_dims,
     Stream_Size:$source_size,

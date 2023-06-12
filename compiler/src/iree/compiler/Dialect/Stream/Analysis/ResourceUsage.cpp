@@ -306,8 +306,20 @@ private:
           getState() ^= targetUsage.getState();
         })
         .Case([&](IREE::Stream::TensorImportOp op) {
-          removeAssumedBits(NOT_MUTATED | NOT_EXTERNAL);
-          auto &resultUsage = solver.getElementFor<ValueResourceUsage>(
+          auto targetType =
+              llvm::cast<IREE::Stream::ResourceType>(op.getResult().getType());
+          switch (targetType.getLifetime()) {
+          case IREE::Stream::Lifetime::Staging:
+            removeAssumedBits(NOT_MUTATED | NOT_STAGING_READ |
+                              NOT_STAGING_WRITE | NOT_TRANSFER_READ |
+                              NOT_TRANSFER_WRITE);
+            break;
+          case IREE::Stream::Lifetime::External:
+          default:
+            removeAssumedBits(NOT_MUTATED | NOT_EXTERNAL);
+            break;
+          }
+          auto resultUsage = solver.getElementFor<ValueResourceUsage>(
               *this, Position::forValue(op.getResult()),
               DFX::Resolution::REQUIRED);
           getState() ^= resultUsage.getState();
@@ -531,7 +543,19 @@ private:
           removeAssumedBits(NOT_INDIRECT | NOT_GLOBAL_WRITE);
         })
         .Case([&](IREE::Stream::TensorExportOp op) {
-          removeAssumedBits(NOT_MUTATED | NOT_EXTERNAL);
+          auto sourceType =
+              llvm::cast<IREE::Stream::ResourceType>(op.getSource().getType());
+          switch (sourceType.getLifetime()) {
+          case IREE::Stream::Lifetime::Staging:
+            removeAssumedBits(NOT_MUTATED | NOT_STAGING_READ |
+                              NOT_STAGING_WRITE | NOT_TRANSFER_READ |
+                              NOT_TRANSFER_WRITE);
+            break;
+          case IREE::Stream::Lifetime::External:
+          default:
+            removeAssumedBits(NOT_MUTATED | NOT_EXTERNAL);
+            break;
+          }
         })
         .Case([&](IREE::Stream::AsyncCloneOp op) {
           removeAssumedBits(NOT_TRANSFER_READ);
