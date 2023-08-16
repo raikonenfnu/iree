@@ -358,12 +358,20 @@ static iree_status_t iree_hal_rocm_direct_command_buffer_dispatch(
       iree_hal_rocm_native_executable_for_entry_point(executable, entry_point);
   // TODO(raikonenfnu): Currently using NULL stream, need to figure out way to
   // access proper stream from command buffer
+  char *dispatch_name;
+  iree_hal_rocm_native_executable_dispatch_name(executable, entry_point, &dispatch_name);
+  printf("dispatching:%s\n", dispatch_name);
   ROCM_RETURN_IF_ERROR(
       command_buffer->context->syms,
       hipModuleLaunchKernel(func, workgroup_x, workgroup_y, workgroup_z,
                             block_size_x, block_size_y, block_size_z, 0, 0,
                             command_buffer->current_descriptor, NULL),
       "hipModuleLaunchKernel");
+  printf("dispatch done\n");
+  printf("syncing start!\n");
+  ROCM_RETURN_IF_ERROR(command_buffer->context->syms, hipStreamSynchronize(0),
+                      "hipStreamSynchronize");
+  printf("syncing done!\n");
   return iree_ok_status();
 }
 

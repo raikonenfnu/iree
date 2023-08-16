@@ -23,6 +23,7 @@ typedef struct iree_hal_rocm_native_executable_function_t {
   uint32_t block_size_x;
   uint32_t block_size_y;
   uint32_t block_size_z;
+  char* dispatch_name;
 } iree_hal_rocm_native_executable_function_t;
 
 typedef struct iree_hal_rocm_native_executable_t {
@@ -95,6 +96,7 @@ iree_status_t iree_hal_rocm_native_executable_create(
       executable->entry_functions[i].block_size_x = block_sizes_vec[i].x;
       executable->entry_functions[i].block_size_y = block_sizes_vec[i].y;
       executable->entry_functions[i].block_size_z = block_sizes_vec[i].z;
+      executable->entry_functions[i].dispatch_name = strdup(entry_name);
       executable->pipeline_layouts[i] = executable_params->pipeline_layouts[i];
       iree_hal_pipeline_layout_retain(executable_params->pipeline_layouts[i]);
     }
@@ -129,6 +131,14 @@ iree_status_t iree_hal_rocm_native_executable_block_size(
   *x = executable->entry_functions[entry_point].block_size_x;
   *y = executable->entry_functions[entry_point].block_size_y;
   *z = executable->entry_functions[entry_point].block_size_z;
+  return iree_ok_status();
+}
+
+iree_status_t iree_hal_rocm_native_executable_dispatch_name(
+    iree_hal_executable_t* base_executable, int32_t entry_point, char** out_name) {
+  iree_hal_rocm_native_executable_t* executable =
+      iree_hal_rocm_native_executable_cast(base_executable);
+  *out_name = strdup(executable->entry_functions[entry_point].dispatch_name);
   return iree_ok_status();
 }
 

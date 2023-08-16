@@ -37,6 +37,10 @@ iree_status_t iree_hal_rocm_native_executable_block_size(
 iree_hal_pipeline_layout_t* iree_hal_rocm_executable_get_layout(
     iree_hal_executable_t* executable, int32_t entry_point);
 
+/// Return dispatch name.
+iree_status_t iree_hal_rocm_native_executable_dispatch_name(
+    iree_hal_executable_t* base_executable, int32_t entry_point, char** out_name);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
