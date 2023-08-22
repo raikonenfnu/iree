@@ -17,7 +17,10 @@ package(
 iree_compiler_cc_library(
     name = "Utils",
     srcs = [
+        "LLVMGPUAMDMMAPatterns.cpp",
+        "LLVMGPULayout.cpp",
         "LLVMGPULayoutAnalysisAndDistribution.cpp",
+        "LLVMGPULayoutVectorToGPU.cpp",
         "LLVMGPUUtils.cpp",
     ],
     hdrs = [
@@ -28,6 +31,7 @@ iree_compiler_cc_library(
         "//compiler/src/iree/compiler/Codegen/Utils",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AffineDialect",
+        "@llvm-project//mlir:AMDGPUDialect",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:GPUDialect",

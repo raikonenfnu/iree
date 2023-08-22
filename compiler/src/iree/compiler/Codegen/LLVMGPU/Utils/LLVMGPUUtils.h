@@ -21,6 +21,9 @@ void createAsyncGroups(RewriterBase &rewriter, func::FuncOp funcOp,
 /// Function to do layout analysis and distribution.
 void doLayoutAnalysisAndDistribution(RewriterBase &rewriter,
                                      func::FuncOp funcOp);
+LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
+                                            func::FuncOp funcOp,
+                                            bool useAMDWMMA = true);
 
 /// Function to reorder transposes and elementwise ops.
 void reorderTranspose(RewriterBase &rewriter, func::FuncOp funcOp);
@@ -32,6 +35,9 @@ void reorderTranspose(RewriterBase &rewriter, func::FuncOp funcOp);
 /// Also adds barriers to make sure we are done writing/reading
 /// from the previous alias group before starting a new one.
 void packSharedMemoryAlloc(func::FuncOp funcOp);
+
+void populatePrepareVectorToAMDMMAPatterns(RewritePatternSet &patterns,
+                                           bool useMfma);
 
 } // namespace iree_compiler
 } // namespace mlir

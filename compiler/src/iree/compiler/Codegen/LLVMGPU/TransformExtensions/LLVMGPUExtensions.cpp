@@ -17,6 +17,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Conversion/VectorToGPU/VectorToGPU.h"
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -56,6 +57,7 @@ iree_compiler::IREE::transform_dialect::LLVMGPUExtensions::LLVMGPUExtensions() {
   // CreateAsyncGroupsOp depends on the following two dialects.
   declareGeneratedDialect<gpu::GPUDialect>();
   declareGeneratedDialect<nvgpu::NVGPUDialect>();
+  declareGeneratedDialect<amdgpu::AMDGPUDialect>();
 
   registerTransformOps<
 #define GET_OP_LIST
@@ -853,8 +855,10 @@ transform_dialect::LayoutAnalysisAndDistributionOp::applyToOne(
     transform::TransformRewriter &rewriter, func::FuncOp target,
     transform::ApplyToEachResultList &results,
     transform::TransformState &state) {
-  iree_compiler::doLayoutAnalysisAndDistribution(rewriter,
-                                                 cast<func::FuncOp>(target));
+  if (failed(iree_compiler::convertVectorToGPUUsingLayout(
+          rewriter, cast<func::FuncOp>(target), true))) {
+    return DiagnosedSilenceableFailure::definiteFailure();
+  }
   results.push_back(target);
   return DiagnosedSilenceableFailure::success();
 }
@@ -1492,6 +1496,11 @@ void transform_dialect::PackSharedMemoryAllocOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   transform::onlyReadsHandle(getTarget(), effects);
   transform::modifiesPayload(effects);
+}
+
+void transform_dialect::ApplyPrepareVectorToAMDMMAPatternsOp::populatePatterns(
+    RewritePatternSet &patterns) {
+  populatePrepareVectorToAMDMMAPatterns(patterns, getUseMfma());
 }
 
 #define GET_OP_CLASSES
