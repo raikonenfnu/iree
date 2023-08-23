@@ -83,6 +83,12 @@ struct LLVMGPULayout {
   Operation *source;
   // Mapping of vector index to label(s)
   DenseMap<uint32_t, SmallVector<llvm::StringRef>> vectorMapping;
+  // Broadcast info
+  struct BroadcastInfo {
+    bool broadcast{false};
+    uint32_t repeatStride{0};
+  };
+  BroadcastInfo broadcastInfo;
 };
 
 } // namespace mlir::iree_compiler

@@ -21,8 +21,10 @@ static void
 addToLayoutMap(StringRef type, Value value,
                const LLVMGPULayout::layoutType &layout,
                layoutMapType &layoutMap,
-               DenseMap<uint32_t, SmallVector<StringRef>> &vectorMapping) {
+               DenseMap<uint32_t, SmallVector<StringRef>> &vectorMapping,
+               const LLVMGPULayout::BroadcastInfo &broadcastInfo) {
   LLVMGPULayout newLayout(layout, vectorMapping);
+  newLayout.broadcastInfo = broadcastInfo;
   if (layoutMap.contains(value)) {
     layoutMap[value].push_back(newLayout);
     return;
@@ -57,7 +59,10 @@ static void createWMMALayout(Value matrix, StringRef type,
     colLayout["lanex"] = 16;
     rowLayout["vecx"] = 16;
     layout = {rowLayout, colLayout};
-    addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping);
+    LLVMGPULayout::BroadcastInfo broadcastInfo;
+    broadcastInfo.broadcast = true;
+    broadcastInfo.repeatStride = 16;
+    addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, broadcastInfo);
     return;
   }
   colLayout["lanex"] = 16;
@@ -68,7 +73,8 @@ static void createWMMALayout(Value matrix, StringRef type,
   }
   layout = {rowLayout, colLayout};
   vectorMapping = {{0, {"batchy"}}, {1, {"batchx"}}, {2, {"vecx"}}};
-  addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping);
+  LLVMGPULayout::BroadcastInfo broadcastInfo;
+  addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, broadcastInfo);
 }
 
 LogicalResult setAMDWMMALayouts(Value aMatrix, Value bMatrix, Value cMatrix,
@@ -164,6 +170,12 @@ static Value getOffset(int dim, LLVMGPULayout &layout,
     if (id == "lanez") {
       laneIds.push_back(
           rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::z));
+    }
+  }
+  if (layout.broadcastInfo.broadcast) {
+    Value repeatStride = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(layout.broadcastInfo.repeatStride));
+    for (int i = 0; i < laneIds.size(); i++) {
+      laneIds[i] = rewriter.create<arith::RemUIOp>(loc, laneIds[i], repeatStride);
     }
   }
   return layout.substituteDimensions(
