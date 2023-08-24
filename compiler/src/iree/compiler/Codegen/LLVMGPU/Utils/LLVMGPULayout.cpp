@@ -190,6 +190,8 @@ AffineExpr LLVMGPULayout::computeOffset(
   for (const auto &[name, shape] : layout[tensorDim]) {
     if (layoutDims.contains(name)) {
       offset = offset + stride * dims[i++];
+      stride = stride * builder.getAffineConstantExpr(shape);
+      continue;
     }
     if (!iterator.contains(name))
       continue;
