@@ -21,7 +21,7 @@ static void
 addToLayoutMap(StringRef type, Value value,
                const LLVMGPULayout::layoutType &layout,
                layoutMapType &layoutMap,
-               DenseMap<uint32_t, SmallVector<StringRef>> &vectorMapping,
+               DenseMap<uint32_t, SmallVector<Dimension>> &vectorMapping,
                std::function<Value(Value, Location, OpBuilder &)> encodeFn = nullptr,
                std::function<Value(Value, Location, OpBuilder &)> decodeFn = nullptr) {
   LLVMGPULayout newLayout(layout, vectorMapping);
@@ -52,27 +52,27 @@ static void createWMMALayout(Value matrix, StringRef type,
   uint32_t batchCol = matrixShape[1] / 16;
   LLVMGPULayout::layoutState colLayout, rowLayout;
   LLVMGPULayout::layoutType layout;
-  DenseMap<uint32_t, SmallVector<StringRef>> vectorMapping{
-      {0, {"batchy"}}, {1, {"batchx"}}, {2, {"vecx"}}};
+  DenseMap<uint32_t, SmallVector<Dimension>> vectorMapping{
+      {0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
   // Layout is specified in reverse here, starting from batch.
-  colLayout["batchx"] = batchCol;
-  rowLayout["batchy"] = batchRow;
+  colLayout[Dim::BATCHX] = batchCol;
+  rowLayout[Dim::BATCHY] = batchRow;
   if ((type == "aMatrix") || (type == "bMatrix")) {
-    colLayout["lanex"] = 16;
-    rowLayout["vecx"] = 16;
+    colLayout[Dim::LANEX] = 16;
+    rowLayout[Dim::VECTORX] = 16;
     layout = {rowLayout, colLayout};
     addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping);
     return;
   }
-  colLayout["lanex"] = 16;
-  rowLayout["laney"] = 2;
+  colLayout[Dim::LANEX] = 16;
+  rowLayout[Dim::LANEY] = 2;
   if (kAMDWarpSize == 32) {
-    rowLayout["vecx"] = 8;
+    rowLayout[Dim::VECTORX] = 8;
   } else {
-    rowLayout["vecx"] = 4;
+    rowLayout[Dim::VECTORX] = 4;
   }
   layout = {rowLayout, colLayout};
-  vectorMapping = {{0, {"batchy"}}, {1, {"batchx"}}, {2, {"vecx"}}};
+  vectorMapping = {{0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
   std::function<Value(Value, Location, OpBuilder &)> encodeFn, decodeFn;
   // Since only 8 values are produced, we need to broadcast to 16
   encodeFn = [&](Value vector, Location loc, OpBuilder &rewriter) {
@@ -180,7 +180,7 @@ static SmallVector<Value> handlePermutations(SmallVector<Value> &indices,
 static SmallVector<SmallVector<Value>> getLaneIds(LLVMGPULayout &layout,
                                                   Location loc, OpBuilder &rewriter) {
   Value threadX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
-  SmallVector<StringRef> laneOrder{"lanex", "laney"};
+  SmallVector<Dimension> laneOrder{Dim::LANEX, Dim::LANEY};
   SmallVector<SmallVector<Value>> laneIds;
   Value lastShape;
   for (auto id : laneOrder) {
@@ -188,12 +188,12 @@ static SmallVector<SmallVector<Value>> getLaneIds(LLVMGPULayout &layout,
       laneIds.push_back({});
       for (auto [name, shape] : layout.layout[i]) {
         if (name != id) continue;
-        if (name == "lanex") {
+        if (name == Dim::LANEX) {
           Value shapeValue = rewriter.create<arith::ConstantIndexOp>(loc, shape);
           laneIds[i].push_back(rewriter.create<arith::RemUIOp>(loc, threadX, shapeValue));
           lastShape = shapeValue;
         }
-        if (name == "laney") {
+        if (name == Dim::LANEY) {
           // By convention, laney follows lanex. See lane order defined above.
           assert((!laneIds.empty()) && "Laney defined without defining LaneX");
           laneIds[i].push_back(rewriter.create<arith::DivUIOp>(loc, threadX, lastShape));
@@ -446,7 +446,6 @@ LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
   if (failed(doVectorDistribution(layoutMap, operationsToLower, valueMapping,
                                   rewriter)))
     return failure();
-  funcOp->getParentOfType<ModuleOp>().dump();
   if (failed(eraseOps(operationsToLower, rewriter)))
     return failure();
   return success();

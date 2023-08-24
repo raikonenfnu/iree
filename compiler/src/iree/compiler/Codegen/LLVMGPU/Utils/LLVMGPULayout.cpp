@@ -10,6 +10,20 @@ using namespace llvm;
 
 namespace mlir::iree_compiler {
 
+static StringRef dimensionToString(Dimension dim) {
+  switch (dim) {
+    case Dim::BATCHX: return "batchx";
+    case Dim::BATCHY: return "batchy";
+    case Dim::LANEX: return "lanex";
+    case Dim::LANEY: return "laney";
+    case Dim::LANEZ: return "lanez";
+    case Dim::VECTORX: return "vectorx";
+    case Dim::VECTORY: return "vectory";
+    case Dim::VECTORZ: return "vectorz";
+    default: return "unknown";
+  }
+}
+
 void LLVMGPULayout::print(StringRef str) {
   LLVM_DEBUG({
     llvm::dbgs() << str << " = \n";
@@ -17,40 +31,48 @@ void LLVMGPULayout::print(StringRef str) {
     for (auto &state : layout) {
       llvm::dbgs() << "(Tensor dim " << i++ << ") [ ";
       for (auto &[name, shape] : state) {
-        llvm::dbgs() << name << " : " << shape << " ";
+        llvm::dbgs() << dimensionToString(name) << " : " << shape << " ";
       }
       llvm::dbgs() << " ] \n";
     }
   });
 }
 
-int32_t LLVMGPULayout::getDimension(int dim, llvm::StringRef name) {
-  if (layout[0].contains(name))
-    return layout[0][name];
+int32_t LLVMGPULayout::getDimension(int dim, Dimension name) {
+  if (layout[dim].contains(name))
+    return layout[dim][name];
   return -1;
 }
 
-int32_t LLVMGPULayout::getRowDimension(llvm::StringRef name) {
+int32_t LLVMGPULayout::getRowDimension(Dimension name) {
   return getDimension(0, name);
 }
 
-int32_t LLVMGPULayout::getColDimension(llvm::StringRef name) {
+int32_t LLVMGPULayout::getColDimension(Dimension name) {
   return getDimension(1, name);
+}
+
+static bool isBatchDimension(Dimension name) {
+  return ((name == Dim::BATCHX) || (name == Dim::BATCHY));
+}
+
+static bool isLaneDimension(Dimension name) {
+  return ((name == Dim::LANEX) || (name == Dim::LANEY) || (name == Dim::LANEZ));
 }
 
 int32_t LLVMGPULayout::getColBatchDimension() {
   for (auto [name, shape] : layout[1]) {
-    if (name.starts_with_insensitive("batch"))
+    if (isBatchDimension(name))
       return shape;
   }
   return -1;
 }
 
-DenseSet<StringRef> LLVMGPULayout::getLaneIds(int dim) {
+DenseSet<Dimension> LLVMGPULayout::getLaneIds(int dim) {
   assert(layout.size() > dim);
-  DenseSet<StringRef> laneIds;
+  DenseSet<Dimension> laneIds;
   for (auto [name, shape] : layout[dim]) {
-    if (name.starts_with_insensitive("lane"))
+    if (isLaneDimension(name))
       laneIds.insert(name);
   }
   return laneIds;
@@ -58,11 +80,10 @@ DenseSet<StringRef> LLVMGPULayout::getLaneIds(int dim) {
 
 LLVMGPULayout::IterationSpace
 LLVMGPULayout::getIterationSpace(uint32_t tensorDim,
-                                 DenseSet<llvm::StringRef> dims) {
+                                 std::function<bool(Dimension)> filter) {
   LLVMGPULayout::IterationSpace iterationSpace;
   for (auto [label, shape] : layout[tensorDim]) {
-    if (!dims.empty() && !dims.contains(label))
-      continue;
+    if (filter && !filter(label)) continue;
     LLVMGPULayout::Iterator iterator(0, shape);
     iterationSpace.iterators[label] = iterator;
   }
@@ -71,15 +92,16 @@ LLVMGPULayout::getIterationSpace(uint32_t tensorDim,
 
 LLVMGPULayout::IterationSpace LLVMGPULayout::getCombinedIterationSpace() {
   assert(layout.size() == 2);
-  auto rowIterationSpace = getIterationSpace(0);
-  auto colIterationSpace = getIterationSpace(1);
+  auto isNotLaneDimension = [&](Dimension name) { return !isLaneDimension(name); };
+  auto rowIterationSpace = getIterationSpace(0, isNotLaneDimension);
+  auto colIterationSpace = getIterationSpace(1, isNotLaneDimension);
   return rowIterationSpace.combine(colIterationSpace);
 }
 
 LLVMGPULayout::IterationSpace LLVMGPULayout::getBatchIterationSpace() {
   assert(layout.size() == 2);
-  auto batchRowIterationSpace = getIterationSpace(0, {"batchy"});
-  auto batchColIterationSpace = getIterationSpace(1, {"batchx"});
+  auto batchRowIterationSpace = getIterationSpace(0, isBatchDimension);
+  auto batchColIterationSpace = getIterationSpace(1, isBatchDimension);
   return batchRowIterationSpace.combine(batchColIterationSpace);
 }
 
@@ -140,15 +162,9 @@ LLVMGPULayout::IterationSpace LLVMGPULayout::IterationSpace::combine(
     const LLVMGPULayout::IterationSpace &newSpace) {
   LLVMGPULayout::IterationSpace newIterationSpace;
   for (auto [name, iterator] : iterators) {
-    // Ignore lane dims
-    if (name.starts_with_insensitive("lane"))
-      continue;
     newIterationSpace.iterators[name] = iterator;
   }
   for (auto [name, iterator] : newSpace.iterators) {
-    // Ignore lane dims
-    if (name.starts_with_insensitive("lane"))
-      continue;
     newIterationSpace.iterators[name] = iterator;
   }
   return newIterationSpace;
@@ -171,7 +187,7 @@ bool LLVMGPULayout::IterationSpace::next() {
 void LLVMGPULayout::IterationSpace::print() {
   LLVM_DEBUG({
     for (auto [key, iterator] : iterators) {
-      llvm::dbgs() << key << " = " << iterator.current << " / " << iterator.end
+      llvm::dbgs() << dimensionToString(key) << " = " << iterator.current << " / " << iterator.end
                    << "\n";
     }
     llvm::dbgs() << "====================\n";
@@ -180,7 +196,7 @@ void LLVMGPULayout::IterationSpace::print() {
 
 AffineExpr LLVMGPULayout::computeOffset(
     uint32_t tensorDim, LLVMGPULayout::IterationSpace::iteratorType &iterator,
-    const DenseSet<StringRef> &layoutDims, OpBuilder &builder) {
+    const DenseSet<Dimension> &layoutDims, OpBuilder &builder) {
   assert(tensorDim < layout.size());
   SmallVector<AffineExpr> dims(layoutDims.size());
   bindDimsList(builder.getContext(), MutableArrayRef{dims});
