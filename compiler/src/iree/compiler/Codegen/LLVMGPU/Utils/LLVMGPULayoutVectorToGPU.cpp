@@ -22,9 +22,11 @@ addToLayoutMap(StringRef type, Value value,
                const LLVMGPULayout::layoutType &layout,
                layoutMapType &layoutMap,
                DenseMap<uint32_t, SmallVector<StringRef>> &vectorMapping,
-               const LLVMGPULayout::BroadcastInfo &broadcastInfo) {
+               std::function<Value(Value, Location, OpBuilder &)> encodeFn = nullptr,
+               std::function<Value(Value, Location, OpBuilder &)> decodeFn = nullptr) {
   LLVMGPULayout newLayout(layout, vectorMapping);
-  newLayout.broadcastInfo = broadcastInfo;
+  if (encodeFn) newLayout.encodeFn = encodeFn;
+  if (decodeFn) newLayout.decodeFn = decodeFn;
   if (layoutMap.contains(value)) {
     layoutMap[value].push_back(newLayout);
     return;
@@ -59,22 +61,42 @@ static void createWMMALayout(Value matrix, StringRef type,
     colLayout["lanex"] = 16;
     rowLayout["vecx"] = 16;
     layout = {rowLayout, colLayout};
-    LLVMGPULayout::BroadcastInfo broadcastInfo;
-    broadcastInfo.broadcast = true;
-    broadcastInfo.repeatStride = 16;
-    addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, broadcastInfo);
+    addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping);
     return;
   }
   colLayout["lanex"] = 16;
+  rowLayout["laney"] = 2;
   if (kAMDWarpSize == 32) {
-    rowLayout["vecx"] = 16;
+    rowLayout["vecx"] = 8;
   } else {
-    rowLayout["vecx"] = 16;
+    rowLayout["vecx"] = 4;
   }
   layout = {rowLayout, colLayout};
   vectorMapping = {{0, {"batchy"}}, {1, {"batchx"}}, {2, {"vecx"}}};
-  LLVMGPULayout::BroadcastInfo broadcastInfo;
-  addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, broadcastInfo);
+  std::function<Value(Value, Location, OpBuilder &)> encodeFn, decodeFn;
+  // Since only 8 values are produced, we need to broadcast to 16
+  encodeFn = [&](Value vector, Location loc, OpBuilder &rewriter) {
+    auto elementType = vector.getType().cast<VectorType>().getElementType();
+    auto vectorType = VectorType::get({16}, elementType);
+    Value result = rewriter.create<arith::ConstantOp>(loc, vectorType, rewriter.getZeroAttr(vectorType));
+    for (int i = 0; i < 8; i++) {
+      Value element = rewriter.create<vector::ExtractOp>(loc, vector, SmallVector<int64_t>{i});
+      result = rewriter.create<vector::InsertOp>(loc, element, result, SmallVector<int64_t>{2 * i});
+    }
+    return result;
+  };
+  // We need to extract the correct 8 values from 16
+  decodeFn = [&](Value vector, Location loc, OpBuilder &rewriter) {
+    auto elementType = vector.getType().cast<VectorType>().getElementType();
+    auto vectorType = VectorType::get({8}, elementType);
+    Value result = rewriter.create<arith::ConstantOp>(loc, vectorType, rewriter.getZeroAttr(vectorType));
+    for (int i = 0; i < 8; i++) {
+      Value element = rewriter.create<vector::ExtractOp>(loc, vector, SmallVector<int64_t>{2 * i});
+      result = rewriter.create<vector::InsertOp>(loc, element, result, SmallVector<int64_t>{i});
+    }
+    return result;
+  };
+  addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, encodeFn, decodeFn);
 }
 
 LogicalResult setAMDWMMALayouts(Value aMatrix, Value bMatrix, Value cMatrix,
@@ -154,30 +176,38 @@ static SmallVector<Value> handlePermutations(SmallVector<Value> &indices,
   return newIndices;
 }
 
+// This function delinearizes thread-x into higher dimensions as required by the layout
+static SmallVector<SmallVector<Value>> getLaneIds(LLVMGPULayout &layout,
+                                                  Location loc, OpBuilder &rewriter) {
+  Value threadX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
+  SmallVector<StringRef> laneOrder{"lanex", "laney"};
+  SmallVector<SmallVector<Value>> laneIds;
+  Value lastShape;
+  for (auto id : laneOrder) {
+    for (int i = 0; i < layout.layout.size(); i++) {
+      laneIds.push_back({});
+      for (auto [name, shape] : layout.layout[i]) {
+        if (name != id) continue;
+        if (name == "lanex") {
+          Value shapeValue = rewriter.create<arith::ConstantIndexOp>(loc, shape);
+          laneIds[i].push_back(rewriter.create<arith::RemUIOp>(loc, threadX, shapeValue));
+          lastShape = shapeValue;
+        }
+        if (name == "laney") {
+          // By convention, laney follows lanex. See lane order defined above.
+          assert((!laneIds.empty()) && "Laney defined without defining LaneX");
+          laneIds[i].push_back(rewriter.create<arith::DivUIOp>(loc, threadX, lastShape));
+        }
+      }
+    }
+  }
+  return laneIds;
+}
+
 static Value getOffset(int dim, LLVMGPULayout &layout,
                        LLVMGPULayout::IterationSpace::iteratorType &iterator,
+                       SmallVector<Value> &laneIds,
                        Location loc, OpBuilder &rewriter) {
-  SmallVector<Value> laneIds;
-  for (StringRef id : layout.getLaneIds(dim)) {
-    if (id == "lanex") {
-      laneIds.push_back(
-          rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x));
-    }
-    if (id == "laney") {
-      laneIds.push_back(
-          rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::y));
-    }
-    if (id == "lanez") {
-      laneIds.push_back(
-          rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::z));
-    }
-  }
-  if (layout.broadcastInfo.broadcast) {
-    Value repeatStride = rewriter.create<arith::ConstantOp>(loc, rewriter.getIndexAttr(layout.broadcastInfo.repeatStride));
-    for (int i = 0; i < laneIds.size(); i++) {
-      laneIds[i] = rewriter.create<arith::RemUIOp>(loc, laneIds[i], repeatStride);
-    }
-  }
   return layout.substituteDimensions(
       layout.computeOffset(dim, iterator, layout.getLaneIds(dim), rewriter),
       laneIds, loc, rewriter);
@@ -188,8 +218,9 @@ getIndices(LLVMGPULayout &layout,
            LLVMGPULayout::IterationSpace::iteratorType &iterator,
            SmallVector<Value> indices, AffineMap permutationMap, Location loc,
            OpBuilder &rewriter) {
-  Value rowOffset = getOffset(0, layout, iterator, loc, rewriter);
-  Value colOffset = getOffset(1, layout, iterator, loc, rewriter);
+  SmallVector<SmallVector<Value>> laneIds = getLaneIds(layout, loc, rewriter);
+  Value rowOffset = getOffset(0, layout, iterator, laneIds[0], loc, rewriter);
+  Value colOffset = getOffset(1, layout, iterator, laneIds[1], loc, rewriter);
   Value rowIndex = rewriter.create<arith::AddIOp>(loc, rowOffset, indices[0]);
   Value colIndex = rewriter.create<arith::AddIOp>(loc, colOffset, indices[1]);
   SmallVector<Value> newIndices{rowIndex, colIndex};
@@ -289,7 +320,7 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
   Location loc = contractOp.getLoc();
   Type elementType = llvm::cast<ShapedType>(lhs.getType()).getElementType();
   auto vectorType =
-      VectorType::get(lhsLayout.getMappedVectorShape(), elementType);
+      VectorType::get(resultLayout.getMappedVectorShape(), elementType);
   Value result = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
   auto createContract =
@@ -298,6 +329,9 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
             resultLayout.getMappedVectorOffset(iterator);
         Value dMatrix = rewriter.create<vector::ExtractOp>(
             loc, valueMapping.at(acc), offset);
+        if (resultLayout.encodeFn) {
+          dMatrix = resultLayout.encodeFn(dMatrix, loc, rewriter);
+        }
         for (int k = 0; k < lhsLayout.getColBatchDimension(); k++) {
           Value aMatrix = rewriter.create<vector::ExtractOp>(
               loc, valueMapping.at(lhs), SmallVector<int64_t>{k, offset[0]});
@@ -305,6 +339,9 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
               loc, valueMapping.at(rhs), SmallVector<int64_t>{k, offset[1]});
           dMatrix = rewriter.create<amdgpu::WMMAOp>(loc, dMatrix.getType(),
                                                     aMatrix, bMatrix, dMatrix);
+        }
+        if (resultLayout.decodeFn) {
+          dMatrix = resultLayout.decodeFn(dMatrix, loc, rewriter);
         }
         result =
             rewriter.create<vector::InsertOp>(loc, dMatrix, result, offset);
@@ -409,6 +446,7 @@ LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
   if (failed(doVectorDistribution(layoutMap, operationsToLower, valueMapping,
                                   rewriter)))
     return failure();
+  funcOp->getParentOfType<ModuleOp>().dump();
   if (failed(eraseOps(operationsToLower, rewriter)))
     return failure();
   return success();
