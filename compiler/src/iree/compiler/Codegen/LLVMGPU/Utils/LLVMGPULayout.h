@@ -30,6 +30,10 @@ using Dimension = uint32_t;
 /// as a high-dimensional vector. The layout can be used
 /// for vector distribution.
 struct LLVMGPULayout {
+  enum class ContractType {
+    MMT,
+    MTM
+  };
   using layoutState = llvm::SmallMapVector<Dimension, uint32_t, 8>;
   using layoutType = llvm::SmallVector<layoutState, 2>;
   LLVMGPULayout(const layoutType &layout,
@@ -61,7 +65,9 @@ struct LLVMGPULayout {
   int32_t getDimension(int dim, Dimension name);
   int32_t getRowDimension(Dimension name);
   int32_t getColDimension(Dimension name);
+  int32_t getBatchDimension(int dim);
   int32_t getColBatchDimension();
+  int32_t getRowBatchDimension();
   DenseSet<Dimension> getLaneIds(int dim);
 
   IterationSpace getIterationSpace(uint32_t tensorDim,
@@ -100,7 +106,7 @@ struct LLVMGPULayout {
 
   std::function<Value(Value, Location, OpBuilder &)> encodeFn{nullptr};
   std::function<Value(Value, Location, OpBuilder &)> decodeFn{nullptr};
-
+  ContractType contractType;
 };
 
 } // namespace mlir::iree_compiler

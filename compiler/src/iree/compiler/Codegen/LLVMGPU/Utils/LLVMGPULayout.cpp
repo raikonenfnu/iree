@@ -60,12 +60,20 @@ static bool isLaneDimension(Dimension name) {
   return ((name == Dim::LANEX) || (name == Dim::LANEY) || (name == Dim::LANEZ));
 }
 
-int32_t LLVMGPULayout::getColBatchDimension() {
-  for (auto [name, shape] : layout[1]) {
+int32_t LLVMGPULayout::getBatchDimension(int dim) {
+  for (auto [name, shape] : layout[dim]) {
     if (isBatchDimension(name))
       return shape;
   }
   return -1;
+}
+
+int32_t LLVMGPULayout::getColBatchDimension() {
+  return getBatchDimension(1);
+}
+
+int32_t LLVMGPULayout::getRowBatchDimension() {
+  return getBatchDimension(0);
 }
 
 DenseSet<Dimension> LLVMGPULayout::getLaneIds(int dim) {

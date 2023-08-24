@@ -22,9 +22,11 @@ addToLayoutMap(StringRef type, Value value,
                const LLVMGPULayout::layoutType &layout,
                layoutMapType &layoutMap,
                DenseMap<uint32_t, SmallVector<Dimension>> &vectorMapping,
+               LLVMGPULayout::ContractType contractType,
                std::function<Value(Value, Location, OpBuilder &)> encodeFn = nullptr,
                std::function<Value(Value, Location, OpBuilder &)> decodeFn = nullptr) {
   LLVMGPULayout newLayout(layout, vectorMapping);
+  newLayout.contractType = contractType;
   if (encodeFn) newLayout.encodeFn = encodeFn;
   if (decodeFn) newLayout.decodeFn = decodeFn;
   if (layoutMap.contains(value)) {
@@ -52,6 +54,7 @@ static void createWMMALayout(Value matrix, StringRef type,
   uint32_t batchCol = matrixShape[1] / 16;
   LLVMGPULayout::layoutState colLayout, rowLayout;
   LLVMGPULayout::layoutType layout;
+  LLVMGPULayout::ContractType contractType = LLVMGPULayout::ContractType::MTM;
   DenseMap<uint32_t, SmallVector<Dimension>> vectorMapping{
       {0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
   // Layout is specified in reverse here, starting from batch.
@@ -61,7 +64,7 @@ static void createWMMALayout(Value matrix, StringRef type,
     colLayout[Dim::LANEX] = 16;
     rowLayout[Dim::VECTORX] = 16;
     layout = {rowLayout, colLayout};
-    addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping);
+    addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, contractType);
     return;
   }
   colLayout[Dim::LANEX] = 16;
@@ -96,7 +99,7 @@ static void createWMMALayout(Value matrix, StringRef type,
     }
     return result;
   };
-  addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, encodeFn, decodeFn);
+  addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, contractType, encodeFn, decodeFn);
 }
 
 LogicalResult setAMDWMMALayouts(Value aMatrix, Value bMatrix, Value cMatrix,
@@ -323,6 +326,12 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
       VectorType::get(resultLayout.getMappedVectorShape(), elementType);
   Value result = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
+  int K{0};
+  if (resultLayout.contractType == LLVMGPULayout::ContractType::MTM) {
+    K = lhsLayout.getRowBatchDimension();
+  } else {
+    K = lhsLayout.getColBatchDimension();
+  }
   auto createContract =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
         SmallVector<int64_t> offset =
@@ -332,7 +341,7 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
         if (resultLayout.encodeFn) {
           dMatrix = resultLayout.encodeFn(dMatrix, loc, rewriter);
         }
-        for (int k = 0; k < lhsLayout.getColBatchDimension(); k++) {
+        for (int k = 0; k < K; k++) {
           Value aMatrix = rewriter.create<vector::ExtractOp>(
               loc, valueMapping.at(lhs), SmallVector<int64_t>{k, offset[0]});
           Value bMatrix = rewriter.create<vector::ExtractOp>(
