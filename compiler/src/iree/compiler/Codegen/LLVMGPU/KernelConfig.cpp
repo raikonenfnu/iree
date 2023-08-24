@@ -76,7 +76,7 @@ namespace {
 struct TargetInfo {
   // TODO: add finer grain control for other tensorcore types.
   bool hasTF32TensorCore = false;
-  bool hasWarpShuffle = false;
+  bool hasWarpShuffle = true;
   bool hasMmaSync = false;
 };
 
