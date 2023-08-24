@@ -327,10 +327,19 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
   Value result = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
   int K{0};
+  std::function<SmallVector<int64_t>(int, int)> aMatrixIndices, bMatrixIndices;
   if (resultLayout.contractType == LLVMGPULayout::ContractType::MTM) {
     K = lhsLayout.getRowBatchDimension();
+    // A matrix indices = (k, i)
+    aMatrixIndices = [](int i, int k) -> SmallVector<int64_t> { return {k, i}; };
+    // B matrix indices = (k, j)
+    bMatrixIndices = [](int k, int j) -> SmallVector<int64_t> { return {k, j}; };
   } else {
     K = lhsLayout.getColBatchDimension();
+    // A matrix indices = (i, k)
+    aMatrixIndices = [](int i, int k) -> SmallVector<int64_t> { return {i, k}; };
+    // B matrix indices = (j, k)
+    bMatrixIndices = [](int k, int j) -> SmallVector<int64_t> { return {j, k}; };
   }
   auto createContract =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -343,9 +352,9 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
         }
         for (int k = 0; k < K; k++) {
           Value aMatrix = rewriter.create<vector::ExtractOp>(
-              loc, valueMapping.at(lhs), SmallVector<int64_t>{k, offset[0]});
+              loc, valueMapping.at(lhs), aMatrixIndices(offset[0], k));
           Value bMatrix = rewriter.create<vector::ExtractOp>(
-              loc, valueMapping.at(rhs), SmallVector<int64_t>{k, offset[1]});
+              loc, valueMapping.at(rhs), bMatrixIndices(k, offset[1]));
           dMatrix = rewriter.create<amdgpu::WMMAOp>(loc, dMatrix.getType(),
                                                     aMatrix, bMatrix, dMatrix);
         }
