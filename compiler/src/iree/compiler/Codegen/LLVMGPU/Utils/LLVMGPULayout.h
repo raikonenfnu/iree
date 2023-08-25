@@ -36,6 +36,7 @@ struct LLVMGPULayout {
   };
   using layoutState = llvm::SmallMapVector<Dimension, uint32_t, 8>;
   using layoutType = llvm::SmallVector<layoutState, 2>;
+  LLVMGPULayout() {}
   LLVMGPULayout(const layoutType &layout,
                 DenseMap<uint32_t, SmallVector<Dimension>> &vectorMapping,
                 Operation *source = nullptr)

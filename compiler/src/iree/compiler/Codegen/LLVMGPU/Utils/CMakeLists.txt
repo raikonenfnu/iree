@@ -17,6 +17,7 @@ iree_cc_library(
     "LLVMGPUUtils.h"
   SRCS
     "LLVMGPUAMDMMAPatterns.cpp"
+    "LLVMGPUHWConfig.cpp"
     "LLVMGPULayout.cpp"
     "LLVMGPULayoutAnalysisAndDistribution.cpp"
     "LLVMGPULayoutVectorToGPU.cpp"

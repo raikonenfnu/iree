@@ -18,6 +18,7 @@ iree_compiler_cc_library(
     name = "Utils",
     srcs = [
         "LLVMGPUAMDMMAPatterns.cpp",
+        "LLVMGPUHWConfig.cpp",
         "LLVMGPULayout.cpp",
         "LLVMGPULayoutAnalysisAndDistribution.cpp",
         "LLVMGPULayoutVectorToGPU.cpp",

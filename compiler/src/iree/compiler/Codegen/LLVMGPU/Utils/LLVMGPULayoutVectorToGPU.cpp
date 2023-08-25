@@ -1,4 +1,5 @@
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPULayout.h"
+#include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUHWConfig.h"
 #include "llvm/ADT/DenseMap.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -15,26 +16,13 @@ using layoutMapType =
 
 namespace {
 
-static constexpr uint32_t kAMDWarpSize = 32;
-
 static void
-addToLayoutMap(StringRef type, Value value,
-               const LLVMGPULayout::layoutType &layout,
-               layoutMapType &layoutMap,
-               DenseMap<uint32_t, SmallVector<Dimension>> &vectorMapping,
-               LLVMGPULayout::ContractType contractType,
-               std::function<Value(Value, Location, OpBuilder &)> encodeFn = nullptr,
-               std::function<Value(Value, Location, OpBuilder &)> decodeFn = nullptr) {
-  LLVMGPULayout newLayout(layout, vectorMapping);
-  newLayout.contractType = contractType;
-  if (encodeFn) newLayout.encodeFn = encodeFn;
-  if (decodeFn) newLayout.decodeFn = decodeFn;
+addToLayoutMap(Value value, layoutMapType &layoutMap, LLVMGPULayout &newLayout) {
   if (layoutMap.contains(value)) {
     layoutMap[value].push_back(newLayout);
     return;
   }
   layoutMap[value] = {newLayout};
-  newLayout.print(type);
 }
 
 static LLVMGPULayout &getLayout(layoutMapType &layoutMap, Value value) {
@@ -43,115 +31,29 @@ static LLVMGPULayout &getLayout(layoutMapType &layoutMap, Value value) {
   return layoutMap[value][0];
 }
 
-// Comes from here:
-// https://www.amd.com/system/files/TechDocs/rdna3-shader-instruction-set-architecture-feb-2023_0.pdf
-// Currently only targets 16x16x16 f16.f16.f32 instruction.
-static void createWMMALayout(Value matrix, StringRef type,
-                             layoutMapType &layoutMap) {
-  auto matrixType = llvm::cast<ShapedType>(matrix.getType());
-  ArrayRef<int64_t> matrixShape = matrixType.getShape();
-  uint32_t batchRow = matrixShape[0] / 16;
-  uint32_t batchCol = matrixShape[1] / 16;
-  LLVMGPULayout::layoutState colLayout, rowLayout;
-  LLVMGPULayout::layoutType layout;
-  LLVMGPULayout::ContractType contractType = LLVMGPULayout::ContractType::MTM;
-  DenseMap<uint32_t, SmallVector<Dimension>> vectorMapping{
-      {0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
-  // Layout is specified in reverse here, starting from batch.
-  colLayout[Dim::BATCHX] = batchCol;
-  rowLayout[Dim::BATCHY] = batchRow;
-  if ((type == "aMatrix") || (type == "bMatrix")) {
-    colLayout[Dim::LANEX] = 16;
-    rowLayout[Dim::VECTORX] = 16;
-    layout = {rowLayout, colLayout};
-    addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, contractType);
-    return;
+LogicalResult setMMALayout(vector::ContractionOp contractOp,
+                           layoutMapType &layoutMap, LLVMGPUHWConfig &hwConfig) {
+  Value a = contractOp.getLhs();
+  Value b = contractOp.getRhs();
+  Value c = contractOp.getAcc();
+  Value d = contractOp.getResult();
+  if (!hwConfig.verifyOperandTypes(a, b, c, d) || !hwConfig.verifyContract(contractOp)) {
+    return failure();
   }
-  colLayout[Dim::LANEX] = 16;
-  rowLayout[Dim::LANEY] = 2;
-  if (kAMDWarpSize == 32) {
-    rowLayout[Dim::VECTORX] = 8;
-  } else {
-    rowLayout[Dim::VECTORX] = 4;
+  SmallVector<Value> values{a, b, c, d};
+  SmallVector<MatrixType> names{MatrixType::A, MatrixType::B, MatrixType::C, MatrixType::D};
+  for (auto [name, value] : llvm::zip(names, values)) {
+    auto layout = hwConfig.getLayout(name, value);
+    addToLayoutMap(value, layoutMap, layout);
   }
-  layout = {rowLayout, colLayout};
-  vectorMapping = {{0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
-  std::function<Value(Value, Location, OpBuilder &)> encodeFn, decodeFn;
-  // Since only 8 values are produced, we need to broadcast to 16
-  encodeFn = [&](Value vector, Location loc, OpBuilder &rewriter) {
-    auto elementType = vector.getType().cast<VectorType>().getElementType();
-    auto vectorType = VectorType::get({16}, elementType);
-    Value result = rewriter.create<arith::ConstantOp>(loc, vectorType, rewriter.getZeroAttr(vectorType));
-    for (int i = 0; i < 8; i++) {
-      Value element = rewriter.create<vector::ExtractOp>(loc, vector, SmallVector<int64_t>{i});
-      result = rewriter.create<vector::InsertOp>(loc, element, result, SmallVector<int64_t>{2 * i});
-    }
-    return result;
-  };
-  // We need to extract the correct 8 values from 16
-  decodeFn = [&](Value vector, Location loc, OpBuilder &rewriter) {
-    auto elementType = vector.getType().cast<VectorType>().getElementType();
-    auto vectorType = VectorType::get({8}, elementType);
-    Value result = rewriter.create<arith::ConstantOp>(loc, vectorType, rewriter.getZeroAttr(vectorType));
-    for (int i = 0; i < 8; i++) {
-      Value element = rewriter.create<vector::ExtractOp>(loc, vector, SmallVector<int64_t>{2 * i});
-      result = rewriter.create<vector::InsertOp>(loc, element, result, SmallVector<int64_t>{i});
-    }
-    return result;
-  };
-  addToLayoutMap(type, matrix, layout, layoutMap, vectorMapping, contractType, encodeFn, decodeFn);
-}
-
-LogicalResult setAMDWMMALayouts(Value aMatrix, Value bMatrix, Value cMatrix,
-                                Value dMatrix, layoutMapType &layoutMap) {
-  createWMMALayout(aMatrix, "aMatrix", layoutMap);
-  createWMMALayout(bMatrix, "bMatrix", layoutMap);
-  createWMMALayout(cMatrix, "cMatrix", layoutMap);
-  createWMMALayout(dMatrix, "dMatrix", layoutMap);
   return success();
 }
 
-static bool isMatmulTransposeA(vector::ContractionOp contractOp) {
-  // Set up the parallel/reduction structure in right form.
-  using MapList = ArrayRef<ArrayRef<AffineExpr>>;
-  auto infer = [](MapList m) { return AffineMap::inferFromExprList(m); };
-  AffineExpr m, n, k;
-  bindDims(contractOp.getContext(), m, n, k);
-  auto iteratorTypes = contractOp.getIteratorTypes().getValue();
-  if (!(vector::isParallelIterator(iteratorTypes[0]) &&
-        vector::isParallelIterator(iteratorTypes[1]) &&
-        vector::isReductionIterator(iteratorTypes[2])))
-    return false;
-  SmallVector<AffineMap> maps = contractOp.getIndexingMapsArray();
-  return maps == infer({{k, m}, {k, n}, {m, n}});
-}
-
-static bool hasF16Type(Value value) {
-  ShapedType type = dyn_cast<ShapedType>(value.getType());
-  return type.getElementType().isF16();
-}
-
-LogicalResult setMMALayout(vector::ContractionOp contractOp,
-                           layoutMapType &layoutMap, bool useAMDWMMA) {
-  Value aMatrix = contractOp.getLhs();
-  Value bMatrix = contractOp.getRhs();
-  Value cMatrix = contractOp.getAcc();
-  Value dMatrix = contractOp.getResult();
-  if (!((hasF16Type(aMatrix)) && hasF16Type(bMatrix)))
-    return failure();
-  if (useAMDWMMA) {
-    if (!isMatmulTransposeA(contractOp))
-      return failure();
-    return setAMDWMMALayouts(aMatrix, bMatrix, cMatrix, dMatrix, layoutMap);
-  }
-  return failure();
-}
-
 LogicalResult setLayouts(layoutMapType &layoutMap, func::FuncOp funcOp,
-                         bool useAMDWMMA) {
+                         LLVMGPUHWConfig &hwConfig) {
   WalkResult result = funcOp.walk([&](Operation *op) {
     if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
-      if (failed(setMMALayout(contractOp, layoutMap, useAMDWMMA)))
+      if (failed(setMMALayout(contractOp, layoutMap, hwConfig)))
         return WalkResult::interrupt();
     }
     return WalkResult::advance();
@@ -454,9 +356,11 @@ LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
                                             func::FuncOp funcOp,
                                             bool useAMDWMMA) {
   layoutMapType layoutMap;
+  // TODO: Use fold extf pattern before switching to mixed precision
+  AMDWMMAConfig hwConfig(AMDWMMAConfig::WMMAType::F16_16X16X16_F16, 32);
   SmallVector<Operation *> operationsToLower;
   collectOperations(funcOp, operationsToLower);
-  if (failed(setLayouts(layoutMap, funcOp, useAMDWMMA)))
+  if (failed(setLayouts(layoutMap, funcOp, hwConfig)))
     return failure();
   if (failed(propagateLayouts(layoutMap, funcOp)))
     return failure();
