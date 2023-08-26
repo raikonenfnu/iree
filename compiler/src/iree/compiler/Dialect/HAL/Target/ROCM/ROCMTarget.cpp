@@ -61,6 +61,16 @@ static std::string translateModuleToObj(llvm::Module &module,
   return targetObj;
 }
 
+static void dumpBitcodeToPath(StringRef path, StringRef baseName,
+                              StringRef suffix, StringRef extension,
+                              llvm::Module &module) {
+  llvm::SmallVector<char, 0> data;
+  llvm::raw_svector_ostream ostream(data);
+  llvm::WriteBitcodeToFile(module, ostream);
+  dumpDataToPath(path, baseName, suffix, extension,
+                 StringRef(data.data(), data.size()));
+}
+
 static std::string translateModuleToISA(llvm::Module &module,
                                         llvm::TargetMachine &targetMachine) {
   std::string targetISA;
@@ -195,6 +205,13 @@ public:
 
     llvmModule->setDataLayout(targetMachine->createDataLayout());
 
+    // Dump just the codegen bitcode before linking and optimization.
+    if (!options.dumpIntermediatesPath.empty()) {
+      dumpBitcodeToPath(options.dumpIntermediatesPath,
+                        options.dumpBaseName, variantOp.getName(),
+                        ".codegen.bc", *llvmModule);
+    }
+
     iree_compiler::FlatbufferBuilder builder;
     iree_hal_rocm_ExecutableDef_start_as_root(builder);
 
@@ -202,6 +219,13 @@ public:
     if (clROCMLinkBC) {
       linkROCDLIfNecessary(llvmModule.get(), clROCMTargetChip,
                            clROCMBitcodeDir);
+    }
+
+    // Dump all linked bitcode prior to optimization.
+    if (!options.dumpIntermediatesPath.empty()) {
+      dumpBitcodeToPath(options.dumpIntermediatesPath,
+                        options.dumpBaseName, variantOp.getName(),
+                        ".linked.bc", *llvmModule);
     }
 
     // Serialize hsaco kernel into the binary that we will embed in the
