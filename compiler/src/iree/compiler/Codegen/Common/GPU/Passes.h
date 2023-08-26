@@ -52,6 +52,12 @@ pipelineSharedMemoryCopy(RewriterBase &rewriter, scf::ForOp forOp,
 LogicalResult tileReductionToSerialLoops(func::FuncOp funcOp,
                                          bool fuseInputProducer = false);
 
+// Lowers workgroup memory copies to distributed transfer_read/transfer_write
+// ops. Expects the memory copy to be marked with copy_to_workgroup_memory
+// marker.
+LogicalResult gpuDistributeSharedMemoryCopy(func::FuncOp funcOp);
+
+
 LogicalResult swizzleWorkgroupsInFunc(func::FuncOp funcOp,
                                       unsigned swizzleLogTile);
 

@@ -367,29 +367,20 @@ UnrollSharedMemoryLoops(func::FuncOp funcOp,
   }
 }
 
-namespace {
-
-class GPUDistributeSharedMemoryCopyPass
-    : public GPUDistributeSharedMemoryCopyBase<
-          GPUDistributeSharedMemoryCopyPass> {
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<gpu::GPUDialect, vector::VectorDialect, scf::SCFDialect>();
-  }
-  void runOnOperation() override {
-    func::FuncOp funcOp = getOperation();
+LogicalResult gpuDistributeSharedMemoryCopy(func::FuncOp funcOp) {
     FailureOr<IREE::HAL::ExecutableExportOp> exportOp = getEntryPoint(funcOp);
     if (failed(exportOp))
-      return;
+      return success();
     auto workgroupSize = getWorkgroupSize(exportOp.value());
     workgroupSize.resize(3, 1);
-    MLIRContext *context = &getContext();
+    MLIRContext *context = funcOp.getContext();
     SmallVector<linalg::GenericOp> copiesToWorkgroupMem;
     funcOp.walk([&](linalg::GenericOp copyOp) {
       if (hasMarker(copyOp, getCopyToWorkgroupMemoryMarker()))
         copiesToWorkgroupMem.push_back(copyOp);
     });
     if (copiesToWorkgroupMem.empty())
-      return;
+      return success();
 
     // Step 0. First clean up the IR.
     hoistAlloc(funcOp);
@@ -420,7 +411,7 @@ class GPUDistributeSharedMemoryCopyPass
       populateTileToUnroll(serialTilingPatterns, flatWorkgroupSize);
       if (failed(applyPatternsAndFoldGreedily(
               funcOp, std::move(serialTilingPatterns)))) {
-        return signalPassFailure();
+        return failure();
       }
       debugPrint(funcOp, "After step 1: tiling");
 
@@ -431,7 +422,7 @@ class GPUDistributeSharedMemoryCopyPass
       populateTilingAndDistribute(tileAndDistributePatterns, flatId);
       if (failed(applyPatternsAndFoldGreedily(
               funcOp, std::move(tileAndDistributePatterns)))) {
-        return signalPassFailure();
+        return failure();
       }
       debugPrint(funcOp, "After step 2: thread distribution");
 
@@ -440,7 +431,7 @@ class GPUDistributeSharedMemoryCopyPass
       populateVectorizationPatterns(vectorizationPatterns);
       if (failed(applyPatternsAndFoldGreedily(
               funcOp, std::move(vectorizationPatterns)))) {
-        return signalPassFailure();
+        return failure();
       }
       debugPrint(funcOp, "After step 3: vectorization");
 
@@ -457,7 +448,7 @@ class GPUDistributeSharedMemoryCopyPass
                                                workgroupSize);
       if (failed(applyPatternsAndFoldGreedily(
               funcOp, std::move(threadLevelTilingPatterns)))) {
-        return signalPassFailure();
+        return failure();
       }
       debugPrint(funcOp, "After tiling for unaligned case");
 
@@ -468,9 +459,23 @@ class GPUDistributeSharedMemoryCopyPass
           threadTilingCanonicalizationPatterns);
       if (failed(applyPatternsAndFoldGreedily(
               funcOp, std::move(threadTilingCanonicalizationPatterns)))) {
-        return signalPassFailure();
+        return failure();
       }
     }
+  return success();
+}
+
+namespace {
+
+class GPUDistributeSharedMemoryCopyPass
+    : public GPUDistributeSharedMemoryCopyBase<
+          GPUDistributeSharedMemoryCopyPass> {
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<gpu::GPUDialect, vector::VectorDialect, scf::SCFDialect>();
+  }
+  void runOnOperation() override {
+    if (failed(gpuDistributeSharedMemoryCopy(getOperation())))
+      signalPassFailure();
   }
 };
 
