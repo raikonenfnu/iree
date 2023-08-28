@@ -13,6 +13,7 @@
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
 #include "iree/compiler/Utils/FlatbufferUtils.h"
 #include "iree/schemas/rocm_executable_def_builder.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
@@ -30,7 +31,7 @@
 static llvm::cl::opt<std::string>
     clROCMTargetChip("iree-rocm-target-chip",
                      llvm::cl::desc("ROCm target Chip"),
-                     llvm::cl::init("gfx908"));
+                     llvm::cl::init("gfx1100"));
 
 static llvm::cl::opt<bool>
     clROCMLinkBC("iree-rocm-link-bc",
