@@ -49,8 +49,10 @@ struct LLVMGPULayout {
   struct Iterator {
     Iterator() {}
     Iterator(uint32_t begin, uint32_t end) : begin(begin), end(end) {}
+    Iterator(uint32_t begin, uint32_t end, uint32_t stride) : begin(begin), end(end),
+      stride(stride) {}
     bool next();
-    uint32_t begin{0}, end{0}, current{0};
+    uint32_t begin{0}, end{0}, current{0}, stride{1};
   };
 
   // Every layout defines an iteration space. This struct represents that
@@ -76,6 +78,7 @@ struct LLVMGPULayout {
 
   // Returns the column iteration space nested inside the row iteration space.
   IterationSpace getCombinedIterationSpace();
+  IterationSpace getVectorStridedCombinedIterationSpace(uint32_t stride);
 
   // Returns the iteration space spanned by the batch dimensions of the rows and
   // cols.

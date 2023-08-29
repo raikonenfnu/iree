@@ -595,4 +595,37 @@ def GpuDistributeSharedMemoryCopyOp :
   }];
 }
 
+def IREEEraseHALDescriptorTypeFromMemRefOp : Op<
+    Transform_Dialect, "iree.erase_hal_descriptor_type_from_memref",
+    [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+     TransformEachOpTrait,
+     TransformOpInterface,
+     ReportTrackingListenerFailuresOpTrait]> {
+  let description = [{
+    This is a pre-processing pass for iree.bufferize. It tries to remove
+    tensor.empty ops by replacing them with suitable destination tensors,
+    which can reduce the number of allocations when bufferizing.
+
+    This transform is not part of iree.bufferize because additional
+    canonicalization are sometimes possible after eliminate_empty_tensors but
+    before iree.bufferize.
+
+    #### Return modes
+
+    This transform does not consume the target handle and always return success.
+  }];
+
+  let arguments = (ins TransformHandleTypeInterface:$target);
+  let results = (outs);
+  let assemblyFormat = "attr-dict $target `:` functional-type($target, results)";
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::transform::TransformRewriter &rewriter,
+        ::mlir::func::FuncOp funcOp,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
 #endif // IREE_COMPILER_CODEGEN_COMMON_TRANSFORMEXTENSIONS_COMMONEXTENSIONS

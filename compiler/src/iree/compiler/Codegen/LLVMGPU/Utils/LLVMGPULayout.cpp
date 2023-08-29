@@ -60,6 +60,10 @@ static bool isLaneDimension(Dimension name) {
   return ((name == Dim::LANEX) || (name == Dim::LANEY) || (name == Dim::LANEZ));
 }
 
+static bool isVectorDimension(Dimension name) {
+  return ((name == Dim::VECTORX) || (name == Dim::VECTORY) || (name == Dim::VECTORZ));
+}
+
 int32_t LLVMGPULayout::getBatchDimension(int dim) {
   for (auto [name, shape] : layout[dim]) {
     if (isBatchDimension(name))
@@ -103,6 +107,29 @@ LLVMGPULayout::IterationSpace LLVMGPULayout::getCombinedIterationSpace() {
   auto isNotLaneDimension = [&](Dimension name) { return !isLaneDimension(name); };
   auto rowIterationSpace = getIterationSpace(0, isNotLaneDimension);
   auto colIterationSpace = getIterationSpace(1, isNotLaneDimension);
+  return rowIterationSpace.combine(colIterationSpace);
+}
+
+static LLVMGPULayout::IterationSpace createVectorStridedIterationSpace(LLVMGPULayout::IterationSpace iterationSpace,
+  uint32_t stride) {
+  LLVMGPULayout::IterationSpace newIterationSpace;
+  for (auto [name, iterator] : iterationSpace.iterators) {
+    if (isVectorDimension(name)) {
+      newIterationSpace.iterators[name] = LLVMGPULayout::Iterator(iterator.begin, iterator.end, stride);
+    } else {
+      newIterationSpace.iterators[name] = iterator;
+    }
+  }
+  return newIterationSpace;
+}
+
+LLVMGPULayout::IterationSpace LLVMGPULayout::getVectorStridedCombinedIterationSpace(uint32_t stride) {
+  assert(layout.size() == 2);
+  auto isNotLaneDimension = [&](Dimension name) { return !isLaneDimension(name); };
+  auto rowIterationSpace = getIterationSpace(0, isNotLaneDimension);
+  rowIterationSpace = createVectorStridedIterationSpace(rowIterationSpace, stride);
+  auto colIterationSpace = getIterationSpace(1, isNotLaneDimension);
+  colIterationSpace = createVectorStridedIterationSpace(colIterationSpace, stride);
   return rowIterationSpace.combine(colIterationSpace);
 }
 
@@ -159,8 +186,8 @@ LLVMGPULayout::getMappedVectorOffset(IterationSpace::iteratorType &iterator) {
 // Returns true if iterator is at the end of iteration space.
 // Returns false otherwise.
 bool LLVMGPULayout::Iterator::next() {
-  current += 1;
-  bool done = current == end;
+  current += stride;
+  bool done = current >= end;
   if (done)
     current = 0;
   return done;

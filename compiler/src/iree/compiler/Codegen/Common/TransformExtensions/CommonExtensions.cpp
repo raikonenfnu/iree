@@ -1022,5 +1022,27 @@ void transform_dialect::GpuDistributeSharedMemoryCopyOp::getEffects(
   transform::modifiesPayload(effects);
 }
 
+//===----------------------------------------------------------------------===//
+// IREEEraseHALDescriptorTypeFromMemRefOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform_dialect::IREEEraseHALDescriptorTypeFromMemRefOp::applyToOne(
+    transform::TransformRewriter &rewriter, ::mlir::func::FuncOp funcOp,
+    ::mlir::transform::ApplyToEachResultList &results,
+    ::mlir::transform::TransformState &state) {
+  if (failed(
+          eraseHALDescriptorTypeFromMemRef(funcOp)))
+    return emitDefaultDefiniteFailure(funcOp)
+           << "failed to eliminate hal descriptors from memrefs";
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform_dialect::IREEEraseHALDescriptorTypeFromMemRefOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  transform::onlyReadsHandle(getTarget(), effects);
+  transform::modifiesPayload(effects);
+}
+
 #define GET_OP_CLASSES
 #include "iree/compiler/Codegen/Common/TransformExtensions/CommonExtensionsOps.cpp.inc"

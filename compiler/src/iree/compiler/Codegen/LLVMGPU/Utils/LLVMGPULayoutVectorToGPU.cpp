@@ -149,22 +149,25 @@ distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
   Location loc = readOp.getLoc();
   Value vector = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
-  // TODO: Switch to AMD specific load
-  // TODO: Handle broadcasts
+  // Load 4 elements at a time
+  uint32_t stride{4};
   auto loadFromMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
-        Value element = rewriter.create<memref::LoadOp>(
-            loc, source,
-            getIndices(layout, iterator, readOp.getIndices(),
-                       readOp.getPermutationMap(), loc, rewriter));
-        auto vectorType = VectorType::get({1}, elementType);
-        Value broadcasted =
-            rewriter.create<vector::BroadcastOp>(loc, vectorType, element);
+        auto vectorType = VectorType::get({stride}, elementType);
+        Value sgprOffset = rewriter.create<arith::ConstantOp>(loc, rewriter.getI32IntegerAttr(0));
+        auto indices = getIndices(layout, iterator, readOp.getIndices(),
+                       readOp.getPermutationMap(), loc, rewriter);
+        // Bitcast to integer
+        for (int i = 0; i < indices.size(); i++)
+          indices[i] = rewriter.create<arith::IndexCastOp>(loc, rewriter.getI32Type(), indices[i]);
+        Value element = rewriter.create<amdgpu::RawBufferLoadOp>(loc, vectorType, source,
+            indices, rewriter.getBoolAttr(false), rewriter.getI32IntegerAttr(0),
+            sgprOffset);
         vector = rewriter.create<vector::InsertStridedSliceOp>(
-            loc, broadcasted, vector, layout.getMappedVectorOffset(iterator),
+            loc, element, vector, layout.getMappedVectorOffset(iterator),
             SmallVector<int64_t>{1});
       };
-  auto rowColIterationSpace = layout.getCombinedIterationSpace();
+  auto rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(stride);
   layout.map(loadFromMemref, rowColIterationSpace);
   valueMapping.try_emplace(result, vector);
   return success();
