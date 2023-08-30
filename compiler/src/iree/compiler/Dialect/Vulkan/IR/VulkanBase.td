@@ -135,6 +135,7 @@ def VK_TTP_Unknown     : I32EnumAttrCase<"Unknown", 0, "unknown">;
 def VK_TTP_Adreno640   : I32EnumAttrCase<"Adreno_640", 100, "a640">;
 def VK_TTP_Adreno650   : I32EnumAttrCase<"Adreno_650", 101, "a650">;
 def VK_TTP_Adreno660   : I32EnumAttrCase<"Adreno_660", 102, "a660">;
+def VK_TTP_Adreno740   : I32EnumAttrCase<"Adreno_740", 103, "a740">;
 // Software emulated GPU
 def VK_TTP_SwiftShader : I32EnumAttrCase<"SwiftShader", 200, "swiftshader">;
 // Translation layers
@@ -142,7 +143,7 @@ def VK_TTP_MoltenVK    : I32EnumAttrCase<"MoltenVK", 300, "moltenvk">;
 
 def VK_TargetProductAttr : VK_I32Enum<
   "TargetTripleProduct", "recognized target product", [
-    VK_TTP_Unknown, VK_TTP_Adreno650, VK_TTP_Adreno660, VK_TTP_SwiftShader,
+    VK_TTP_Unknown, VK_TTP_Adreno650, VK_TTP_Adreno660, VK_TTP_Adreno740, VK_TTP_SwiftShader,
     VK_TTP_MoltenVK,
   ]>;
 

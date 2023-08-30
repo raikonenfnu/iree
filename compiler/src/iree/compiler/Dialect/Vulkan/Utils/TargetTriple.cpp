@@ -428,9 +428,11 @@ CapabilitiesAttr getCapabilities(const TargetTriple &triple,
                        SubgroupFeature::ShuffleRelative | SubgroupFeature::Quad;
 
     shaderFloat16 = shaderInt8 = shaderInt16 = true;
-
-    storageBuffer16BitAccess = true;
-    if (triple.getOS() == TargetTripleOS::Android31) {
+    if(triple.getProduct() == TargetTripleProduct::Adreno_740) {
+      storageBuffer16BitAccess = storageBuffer8BitAccess = true;
+    }
+    if (triple.getOS() == TargetTripleOS::Android31 || 
+        triple.getProduct() == TargetTripleProduct::Adreno_740) {
       storageBuffer8BitAccess = true;
     }
 
