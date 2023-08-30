@@ -38,6 +38,29 @@ void LLVMGPULayout::print(StringRef str) {
   });
 }
 
+static bool isBatchDimension(Dimension name) {
+  return ((name == Dim::BATCHX) || (name == Dim::BATCHY));
+}
+
+static bool isLaneDimension(Dimension name) {
+  return ((name == Dim::LANEX) || (name == Dim::LANEY) || (name == Dim::LANEZ));
+}
+
+static bool isVectorDimension(Dimension name) {
+  return ((name == Dim::VECTORX) || (name == Dim::VECTORY) || (name == Dim::VECTORZ));
+}
+
+bool LLVMGPULayout::supportsVectorLoadsStores(uint32_t numElements) {
+  for (auto perDimLayout : layout) {
+    for (auto [name, size] : perDimLayout) {
+      if (isVectorDimension(name))
+        if (size % numElements != 0)
+          return false;
+    }
+  }
+  return true;
+}
+
 int32_t LLVMGPULayout::getDimension(int dim, Dimension name) {
   if (layout[dim].contains(name))
     return layout[dim][name];
@@ -50,18 +73,6 @@ int32_t LLVMGPULayout::getRowDimension(Dimension name) {
 
 int32_t LLVMGPULayout::getColDimension(Dimension name) {
   return getDimension(1, name);
-}
-
-static bool isBatchDimension(Dimension name) {
-  return ((name == Dim::BATCHX) || (name == Dim::BATCHY));
-}
-
-static bool isLaneDimension(Dimension name) {
-  return ((name == Dim::LANEX) || (name == Dim::LANEY) || (name == Dim::LANEZ));
-}
-
-static bool isVectorDimension(Dimension name) {
-  return ((name == Dim::VECTORX) || (name == Dim::VECTORY) || (name == Dim::VECTORZ));
 }
 
 int32_t LLVMGPULayout::getBatchDimension(int dim) {

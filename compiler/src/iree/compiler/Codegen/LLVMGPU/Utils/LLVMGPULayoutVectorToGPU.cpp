@@ -149,11 +149,14 @@ distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
   Location loc = readOp.getLoc();
   Value vector = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
-  // Load 4 elements at a time
-  uint32_t stride{4};
-  auto loadFromMemref =
+  std::function<void(LLVMGPULayout::IterationSpace::iteratorType &)> loadFromMemref;
+  LLVMGPULayout::IterationSpace rowColIterationSpace;
+  // TODO: Determine number of elements to load from layout
+  uint32_t numElements{4};
+  if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
+    loadFromMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
-        auto vectorType = VectorType::get({stride}, elementType);
+        auto vectorType = VectorType::get({numElements}, elementType);
         Value sgprOffset = rewriter.create<arith::ConstantOp>(loc, rewriter.getI32IntegerAttr(0));
         auto indices = getIndices(layout, iterator, readOp.getIndices(),
                        readOp.getPermutationMap(), loc, rewriter);
@@ -166,8 +169,24 @@ distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
         vector = rewriter.create<vector::InsertStridedSliceOp>(
             loc, element, vector, layout.getMappedVectorOffset(iterator),
             SmallVector<int64_t>{1});
-      };
-  auto rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(stride);
+    };
+    rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(numElements);
+  } else {
+    loadFromMemref =
+      [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
+        Value element = rewriter.create<memref::LoadOp>(
+            loc, source,
+            getIndices(layout, iterator, readOp.getIndices(),
+                       readOp.getPermutationMap(), loc, rewriter));
+        auto vectorType = VectorType::get({1}, elementType);
+        Value broadcasted =
+            rewriter.create<vector::BroadcastOp>(loc, vectorType, element);
+        vector = rewriter.create<vector::InsertStridedSliceOp>(
+            loc, broadcasted, vector, layout.getMappedVectorOffset(iterator),
+            SmallVector<int64_t>{1});
+    };
+    rowColIterationSpace = layout.getCombinedIterationSpace();
+  }
   layout.map(loadFromMemref, rowColIterationSpace);
   valueMapping.try_emplace(result, vector);
   return success();
@@ -184,7 +203,35 @@ static LogicalResult distributeTransferWrites(
   Value source = writeOp.getSource();
   auto layout = getLayout(layoutMap, vector);
   Location loc = writeOp.getLoc();
-  auto storeToMemref =
+  std::function<void(LLVMGPULayout::IterationSpace::iteratorType &)> storeToMemref;
+  LLVMGPULayout::IterationSpace rowColIterationSpace;
+  // TODO: Determine number of elements to load from layout
+  uint32_t numElements{4};
+  if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
+    storeToMemref =
+      [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
+        SmallVector<int64_t> offsets = layout.getMappedVectorOffset(iterator);
+        SmallVector<int64_t> strides(offsets.size(), 1);
+        SmallVector<int64_t> shapes(offsets.size(), 1);
+        // Assume all vector dims have been collapsed to innermost dim
+        // TODO: Relax this constraint
+        shapes[shapes.size() - 1] = numElements;
+        Value result = rewriter.create<vector::ExtractStridedSliceOp>(
+            loc, valueMapping.at(vector), offsets, shapes, strides);
+        Value sgprOffset = rewriter.create<arith::ConstantOp>(loc, rewriter.getI32IntegerAttr(0));
+        auto indices = getIndices(layout, iterator, writeOp.getIndices(),
+                       writeOp.getPermutationMap(), loc, rewriter);
+        // Bitcast to integer
+        for (int i = 0; i < indices.size(); i++)
+          indices[i] = rewriter.create<arith::IndexCastOp>(loc, rewriter.getI32Type(), indices[i]);
+        rewriter.create<amdgpu::RawBufferStoreOp>(
+            loc, result, source,
+            indices, rewriter.getBoolAttr(false), rewriter.getI32IntegerAttr(0),
+            sgprOffset);
+    };
+    rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(numElements);
+  } else {
+    storeToMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
         Value result = rewriter.create<vector::ExtractOp>(
             loc, valueMapping.at(vector),
@@ -193,8 +240,9 @@ static LogicalResult distributeTransferWrites(
             loc, result, source,
             getIndices(layout, iterator, writeOp.getIndices(),
                        writeOp.getPermutationMap(), loc, rewriter));
-      };
-  auto rowColIterationSpace = layout.getCombinedIterationSpace();
+    };
+    rowColIterationSpace = layout.getCombinedIterationSpace();
+  }
   layout.map(storeToMemref, rowColIterationSpace);
   return success();
 }

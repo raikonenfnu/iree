@@ -43,6 +43,7 @@ struct LLVMGPULayout {
       : layout(layout), vectorMapping(vectorMapping), source(source) {}
 
   void print(llvm::StringRef str);
+  bool supportsVectorLoadsStores(uint32_t numElements);
 
   // Iterator-class that is used to represent the induction variable
   // for a single dimension.
