@@ -213,11 +213,10 @@ static LogicalResult distributeTransferWrites(
         SmallVector<int64_t> offsets = layout.getMappedVectorOffset(iterator);
         SmallVector<int64_t> strides(offsets.size(), 1);
         SmallVector<int64_t> shapes(offsets.size(), 1);
-        // Assume all vector dims have been collapsed to innermost dim
-        // TODO: Relax this constraint
         shapes[shapes.size() - 1] = numElements;
         Value result = rewriter.create<vector::ExtractStridedSliceOp>(
             loc, valueMapping.at(vector), offsets, shapes, strides);
+        result = rewriter.create<vector::ExtractOp>(loc, result, SmallVector<int64_t>(offsets.size() - 1, 0));
         Value sgprOffset = rewriter.create<arith::ConstantOp>(loc, rewriter.getI32IntegerAttr(0));
         auto indices = getIndices(layout, iterator, writeOp.getIndices(),
                        writeOp.getPermutationMap(), loc, rewriter);
