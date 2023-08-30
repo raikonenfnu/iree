@@ -68,6 +68,30 @@ struct ConvertHalInterfaceBindingSubspan final
   }
 };
 
+struct ConvertVectorInsert final : OpConversionPattern<vector::InsertOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(vector::InsertOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type newResTy = getTypeConverter()->convertType(op.getType());
+    if (!newResTy)
+      return rewriter.notifyMatchFailure(
+          op->getLoc(), llvm::formatv("failed to convert memref type: {0}",
+                                      op.getType()));
+
+    auto newOp =
+      rewriter.replaceOpWithNewOp<vector::InsertOp>(
+          op, newResTy, adaptor.getSource(), adaptor.getDest(),
+          op.getPosition());
+    LLVM_DEBUG(llvm::dbgs()
+               << "WideIntegerEmulation: new op: " << newOp << "\n");
+    (void)newOp;
+    return success();
+  }
+};
+
+
 //===----------------------------------------------------------------------===//
 // Rewrite patterns
 //===----------------------------------------------------------------------===//
@@ -147,7 +171,7 @@ struct FlattenElementwisePattern final : RewritePattern {
 static void
 populateIreeI64EmulationPatterns(arith::WideIntEmulationConverter &converter,
                                  RewritePatternSet &patterns) {
-  patterns.add<ConvertHalInterfaceBindingSubspan>(converter,
+  patterns.add<ConvertHalInterfaceBindingSubspan, ConvertVectorInsert>(converter,
                                                   patterns.getContext());
 }
 
