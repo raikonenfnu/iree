@@ -30,6 +30,7 @@ using namespace mlir::iree_compiler;
 
 static constexpr unsigned cudaWarpSize = 32;
 static constexpr StringLiteral kCudaTarget = "cuda";
+static constexpr StringLiteral kRocmTarget = "rocm";
 namespace mlir {
 namespace iree_compiler {
 llvm::cl::opt<std::string> clGPUCodegenTransformDialectFileName(
@@ -162,11 +163,19 @@ bool isCudaTarget(func::FuncOp entryPoint) {
   return false;
 }
 
-static TargetInfo getTargetInfo(func::FuncOp entryPoint) {
+bool isRocmTarget(func::FuncOp entryPoint) {
+  if (auto variantOp =
+          entryPoint->getParentOfType<IREE::HAL::ExecutableVariantOp>()) {
+    IREE::HAL::ExecutableTargetAttr targetAttr = variantOp.getTarget();
+    if (auto backend = targetAttr.getBackend()) {
+      return backend.getValue().str() == kCudaTarget;
+    }
+  }
+  return false;
+}
+
+static TargetInfo getCudaTargetInfo(func::FuncOp entryPoint) {
   TargetInfo info;
-  // TODO: fill out target info for other vendors.
-  if (!isCudaTarget(entryPoint))
-    return info;
   // All the cuda target are assumed to have warp support.
   info.hasWarpShuffle = true;
   StringRef targetName = getTargetArch(entryPoint);
@@ -186,6 +195,33 @@ static TargetInfo getTargetInfo(func::FuncOp entryPoint) {
   if (smVersion >= 80) {
     info.hasTF32TensorCore = true;
     info.hasMmaSync = true;
+  }
+  return info;
+}
+
+static TargetInfo getRocmTargetInfo(func::FuncOp entryPoint) {
+  TargetInfo info;
+  StringRef targetName = getTargetArch(entryPoint);
+  // If no target name is set assume all the features are off.
+  if (targetName == "")
+    return info;
+  if (!StringRef(targetName).starts_with("gfx")) {
+    entryPoint.emitError("unknown target name ") << targetName;
+    return info;
+  }
+  // Assumes all gfx has warp shuffle.
+  info.hasWarpShuffle = true;
+  // TODO: Check and enable for WMMA once pipeline is available.
+  return info;
+}
+
+static TargetInfo getTargetInfo(func::FuncOp entryPoint) {
+  TargetInfo info;
+  // TODO: fill out target info for other vendors.
+  if (isCudaTarget(entryPoint)) {
+    info = getCudaTargetInfo(entryPoint);
+  } else if (isRocmTarget(entryPoint)) {
+    info = getRocmTargetInfo(entryPoint);
   }
   return info;
 }
