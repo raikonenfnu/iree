@@ -174,7 +174,7 @@ distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
   std::function<void(LLVMGPULayout::IterationSpace::iteratorType &)> loadFromMemref;
   LLVMGPULayout::IterationSpace rowColIterationSpace;
   // TODO: Determine number of elements to load from layout
-  uint32_t numElements{8};
+  uint32_t numElements{1};
   if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
     loadFromMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -223,7 +223,7 @@ static LogicalResult distributeTransferWrites(
   std::function<void(LLVMGPULayout::IterationSpace::iteratorType &)> storeToMemref;
   LLVMGPULayout::IterationSpace rowColIterationSpace;
   // TODO: Determine number of elements to load from layout
-  uint32_t numElements{8};
+  uint32_t numElements{1};
   if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
     storeToMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
