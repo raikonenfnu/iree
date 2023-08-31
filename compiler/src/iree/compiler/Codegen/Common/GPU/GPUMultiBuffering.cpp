@@ -15,6 +15,51 @@
 namespace mlir {
 namespace iree_compiler {
 
+LogicalResult gpuMultiBuffering(func::FuncOp funcOp, unsigned numBuffers,
+                                bool skipOverrideAnalysis) {
+  // First hoist all shared memory allocations to the entry block of the
+  // function. We can see memref.alloc in loops after bufferizing scf.forall
+  // with promoted shared memory usage inside.
+
+  SmallVector<memref::AllocOp> allocs;
+  // Collect all the alloc operations.
+  funcOp.walk([&](memref::AllocOp allocOp) {
+    if (hasSharedMemoryAddressSpace(allocOp.getType()))
+      allocs.push_back(allocOp);
+  });
+
+  assert(funcOp.getBlocks().size() == 1);
+  for (memref::AllocOp allocOp : allocs) {
+    if (allocOp->getParentOp() != funcOp)
+      allocOp->moveBefore(&*funcOp.begin()->begin());
+  }
+
+  // Then perform multibuffering transformations.
+
+  allocs.clear();
+  // Collect all the alloc operations.
+  funcOp.walk([&](memref::AllocOp allocOp) {
+    // Skip allocations not used in a loop.
+    for (Operation *user : allocOp->getUsers()) {
+      auto loop = user->getParentOfType<scf::ForOp>();
+      if (!loop)
+        return WalkResult::advance();
+    }
+    allocs.push_back(allocOp);
+    return WalkResult::advance();
+  });
+  // Apply multi-buffering to all of them.
+  for (memref::AllocOp alloc : allocs) {
+    if (failed(memref::multiBuffer(alloc, numBuffers, skipOverrideAnalysis))) {
+      // Error out and stop if any buffer cannot be multi buffered, as future
+      // software pipelining transformations will assume this happened.
+      alloc.emitOpError("cannot be multi-buffered");
+      return failure();
+    }
+  }
+  return success();
+}
+
 namespace {
 struct GPUMultiBufferingPass
     : public GPUMultiBufferingBase<GPUMultiBufferingPass> {
@@ -25,48 +70,8 @@ struct GPUMultiBufferingPass
   }
 
   void runOnOperation() override {
-    auto funcOp = getOperation();
-
-    // First hoist all shared memory allocations to the entry block of the
-    // function. We can see memref.alloc in loops after bufferizing scf.forall
-    // with promoted shared memory usage inside.
-
-    SmallVector<memref::AllocOp> allocs;
-    // Collect all the alloc operations.
-    funcOp.walk([&](memref::AllocOp allocOp) {
-      if (hasSharedMemoryAddressSpace(allocOp.getType()))
-        allocs.push_back(allocOp);
-    });
-
-    assert(funcOp.getBlocks().size() == 1);
-    for (memref::AllocOp allocOp : allocs) {
-      if (allocOp->getParentOp() != funcOp)
-        allocOp->moveBefore(&*funcOp.begin()->begin());
-    }
-
-    // Then perform multibuffering transformations.
-
-    allocs.clear();
-    // Collect all the alloc operations.
-    funcOp.walk([&](memref::AllocOp allocOp) {
-      // Skip allocations not used in a loop.
-      for (Operation *user : allocOp->getUsers()) {
-        auto loop = user->getParentOfType<scf::ForOp>();
-        if (!loop)
-          return WalkResult::advance();
-      }
-      allocs.push_back(allocOp);
-      return WalkResult::advance();
-    });
-    // Apply multi-buffering to all of them.
-    for (memref::AllocOp alloc : allocs) {
-      if (failed(memref::multiBuffer(alloc, numBuffers))) {
-        // Error out and stop if any buffer cannot be multi buffered, as future
-        // software pipelining transformations will assume this happened.
-        alloc.emitOpError("cannot be multi-buffered");
-        return signalPassFailure();
-      }
-    }
+    if (failed(gpuMultiBuffering(getOperation(), numBuffers)))
+      return signalPassFailure();
   }
 
 private:

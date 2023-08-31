@@ -1044,5 +1044,26 @@ void transform_dialect::IREEEraseHALDescriptorTypeFromMemRefOp::getEffects(
   transform::modifiesPayload(effects);
 }
 
+//===----------------------------------------------------------------------===//
+// GpuMultiBufferingOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform_dialect::GpuMultiBufferingOp::applyToOne(
+    transform::TransformRewriter &rewriter, ::mlir::func::FuncOp funcOp,
+    ::mlir::transform::ApplyToEachResultList &results,
+    ::mlir::transform::TransformState &state) {
+  if (failed(gpuMultiBuffering(funcOp, getNumBuffers(), getSkipOverrideAnalysis())))
+    return emitDefaultDefiniteFailure(funcOp)
+           << "failed to create multiple buffers for pipelining";
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform_dialect::GpuMultiBufferingOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  transform::onlyReadsHandle(getTarget(), effects);
+  transform::modifiesPayload(effects);
+}
+
 #define GET_OP_CLASSES
 #include "iree/compiler/Codegen/Common/TransformExtensions/CommonExtensionsOps.cpp.inc"

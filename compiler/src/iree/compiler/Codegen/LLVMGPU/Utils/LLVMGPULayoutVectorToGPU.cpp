@@ -6,8 +6,11 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
+
+#define DEBUG_TYPE "iree-llvmgpu-layout-vector-to-gpu"
 
 namespace mlir::iree_compiler {
 
@@ -61,9 +64,28 @@ LogicalResult setLayouts(layoutMapType &layoutMap, func::FuncOp funcOp,
   return result.wasInterrupted() ? failure() : success();
 }
 
+static void propagateLayoutToFor(scf::ForOp forOp,
+                                 layoutMapType &layoutMap) {
+  for (auto argIndex : llvm::enumerate(forOp.getRegionIterArgs())) {
+    BlockArgument &arg = argIndex.value();
+    if (!layoutMap.count(arg))
+      continue;
+    OpOperand &operand = forOp.getOpOperandForRegionIterArg(arg);
+    Value result = forOp.getResult(argIndex.index());
+    LLVMGPULayout newLayout = getLayout(layoutMap, arg);
+    addToLayoutMap(operand.get(), layoutMap, newLayout);
+    addToLayoutMap(result, layoutMap, newLayout);
+    newLayout.print("for operand/result");
+  }
+}
+
 LogicalResult propagateLayouts(layoutMapType &layoutMap, func::FuncOp funcOp) {
-  WalkResult result =
-      funcOp.walk([&](Operation *op) { return WalkResult::advance(); });
+  WalkResult result = funcOp.walk([&](Operation *op) {
+   if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+    propagateLayoutToFor(forOp, layoutMap);
+   }
+   return WalkResult::advance();
+  });
   return result.wasInterrupted() ? failure() : success();
 }
 
@@ -152,20 +174,15 @@ distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
   std::function<void(LLVMGPULayout::IterationSpace::iteratorType &)> loadFromMemref;
   LLVMGPULayout::IterationSpace rowColIterationSpace;
   // TODO: Determine number of elements to load from layout
-  uint32_t numElements{4};
+  uint32_t numElements{8};
   if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
     loadFromMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
         auto vectorType = VectorType::get({numElements}, elementType);
-        Value sgprOffset = rewriter.create<arith::ConstantOp>(loc, rewriter.getI32IntegerAttr(0));
         auto indices = getIndices(layout, iterator, readOp.getIndices(),
                        readOp.getPermutationMap(), loc, rewriter);
-        // Bitcast to integer
-        for (int i = 0; i < indices.size(); i++)
-          indices[i] = rewriter.create<arith::IndexCastOp>(loc, rewriter.getI32Type(), indices[i]);
-        Value element = rewriter.create<amdgpu::RawBufferLoadOp>(loc, vectorType, source,
-            indices, rewriter.getBoolAttr(false), rewriter.getI32IntegerAttr(0),
-            sgprOffset);
+        Value element = rewriter.create<vector::LoadOp>(loc, vectorType, source,
+            indices);
         vector = rewriter.create<vector::InsertStridedSliceOp>(
             loc, element, vector, layout.getMappedVectorOffset(iterator),
             SmallVector<int64_t>{1});
@@ -206,7 +223,7 @@ static LogicalResult distributeTransferWrites(
   std::function<void(LLVMGPULayout::IterationSpace::iteratorType &)> storeToMemref;
   LLVMGPULayout::IterationSpace rowColIterationSpace;
   // TODO: Determine number of elements to load from layout
-  uint32_t numElements{4};
+  uint32_t numElements{8};
   if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
     storeToMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -217,16 +234,9 @@ static LogicalResult distributeTransferWrites(
         Value result = rewriter.create<vector::ExtractStridedSliceOp>(
             loc, valueMapping.at(vector), offsets, shapes, strides);
         result = rewriter.create<vector::ExtractOp>(loc, result, SmallVector<int64_t>(offsets.size() - 1, 0));
-        Value sgprOffset = rewriter.create<arith::ConstantOp>(loc, rewriter.getI32IntegerAttr(0));
         auto indices = getIndices(layout, iterator, writeOp.getIndices(),
                        writeOp.getPermutationMap(), loc, rewriter);
-        // Bitcast to integer
-        for (int i = 0; i < indices.size(); i++)
-          indices[i] = rewriter.create<arith::IndexCastOp>(loc, rewriter.getI32Type(), indices[i]);
-        rewriter.create<amdgpu::RawBufferStoreOp>(
-            loc, result, source,
-            indices, rewriter.getBoolAttr(false), rewriter.getI32IntegerAttr(0),
-            sgprOffset);
+        rewriter.create<vector::StoreOp>(loc, result, source, indices);
     };
     rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(numElements);
   } else {
@@ -347,11 +357,118 @@ static LogicalResult distributeConstants(arith::ConstantOp constantOp,
   return success();
 }
 
+static void replaceForOpWithNewSignature(RewriterBase &rewriter,
+                                         scf::ForOp loop,
+                                         ValueRange newIterOperands,
+                                         layoutMapType &layoutMap,
+                                         DenseMap<Value, Value> &valueMapping) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(loop);
+
+  // Create a new loop before the existing one, with the extra operands.
+  // We will be using dummy values instead of the old operands
+  // only for those operands that are being distributed
+  SmallVector<Value> newOperands;
+  auto operands = llvm::to_vector(loop.getIterOperands());
+  for (auto operand : operands) {
+    if (!layoutMap.count(operand)) {
+      newOperands.push_back(operand);
+      continue;
+    }
+    Value zero = rewriter.create<arith::ConstantOp>(
+        loop.getLoc(), rewriter.getZeroAttr(operand.getType()));
+    newOperands.push_back(zero);
+  }
+
+  newOperands.append(newIterOperands.begin(), newIterOperands.end());
+  scf::ForOp newLoop = rewriter.create<scf::ForOp>(
+      loop.getLoc(), loop.getLowerBound(), loop.getUpperBound(), loop.getStep(),
+      newOperands);
+  newLoop.getBody()->erase();
+
+  newLoop.getLoopBody().getBlocks().splice(
+      newLoop.getLoopBody().getBlocks().begin(),
+      loop.getLoopBody().getBlocks());
+  for (Value operand : newIterOperands)
+    newLoop.getBody()->addArgument(operand.getType(), operand.getLoc());
+
+  // Replace old results and propagate layouts
+  int numOldResults = loop.getNumResults();
+  for (auto it : llvm::zip(loop.getResults(),
+                           newLoop.getResults().take_front(numOldResults))) {
+    if (layoutMap.count(std::get<0>(it))) {
+      addToLayoutMap(std::get<1>(it), layoutMap, getLayout(layoutMap, std::get<0>(it)));
+    }
+    rewriter.replaceAllUsesWith(std::get<0>(it), std::get<1>(it));
+  }
+
+  // Propagate layout + mapping from old to new block args and results
+  auto bbArgs = newLoop.getRegionIterArgs();
+  auto results = newLoop.getResults();
+  for (int i = 0; i < numOldResults; i++) {
+    if (layoutMap.count(bbArgs[i])) {
+      addToLayoutMap(bbArgs[i + numOldResults], layoutMap, getLayout(layoutMap, bbArgs[i]));
+    }
+    valueMapping.try_emplace(bbArgs[i], bbArgs[i + numOldResults]);
+    if (layoutMap.count(results[i])) {
+      addToLayoutMap(results[i + numOldResults], layoutMap, getLayout(layoutMap, results[i]));
+    }
+    valueMapping.try_emplace(results[i], results[i + numOldResults]);
+  }
+
+  return;
+}
+
+static LogicalResult distributeFor(scf::ForOp forOp,
+                                   layoutMapType &layoutMap,
+                                   DenseMap<Value, Value> &valueMapping,
+                                   RewriterBase &rewriter) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(forOp);
+
+  SmallVector<Value> newOperands;
+  for (const auto &operand : llvm::enumerate(forOp.getIterOperands())) {
+    if (!valueMapping.count(operand.value())) {
+      continue;
+    }
+    newOperands.push_back(valueMapping.at(operand.value()));
+  }
+  replaceForOpWithNewSignature(rewriter, forOp, newOperands, layoutMap,
+                               valueMapping);
+  return success();
+}
+
+static LogicalResult distributeYield(scf::YieldOp yieldOp,
+                                     layoutMapType &layoutMap,
+                                     DenseMap<Value, Value> &valueMapping,
+                                     RewriterBase &rewriter) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(yieldOp);
+
+  // Update yield op with additional operand
+  auto loop = cast<scf::ForOp>(yieldOp->getParentOp());
+  auto yieldOperands = llvm::to_vector(yieldOp.getOperands());
+  for (const auto &operand : llvm::enumerate(yieldOp.getOperands())) {
+    if (!valueMapping.count(operand.value()))
+      continue;
+    // Replace the yield of old value with the for op argument to make it easier
+    // to remove the dead code.
+    yieldOperands[operand.index()] = loop.getIterOperands()[operand.index()];
+    yieldOperands.push_back(valueMapping.at(operand.value()));
+  }
+  rewriter.create<scf::YieldOp>(yieldOp.getLoc(), yieldOperands);
+  return success();
+}
+
 LogicalResult doVectorDistribution(layoutMapType &layoutMap,
                                    SmallVector<Operation *> &operations,
                                    DenseMap<Value, Value> &valueMapping,
                                    RewriterBase &rewriter) {
   for (Operation *op : operations) {
+    LLVM_DEBUG({
+      llvm::dbgs() << "Distributing op = ";
+      op->dump();
+    });
     if (auto readOp = dyn_cast<vector::TransferReadOp>(op)) {
       if (failed(distributeTransferReads(readOp, layoutMap, valueMapping,
                                          rewriter)))
@@ -372,6 +489,14 @@ LogicalResult doVectorDistribution(layoutMapType &layoutMap,
                                      rewriter)))
         return failure();
     }
+    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+      if (failed(distributeFor(forOp, layoutMap, valueMapping, rewriter)))
+        return failure();
+    }
+    if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+      if (failed(distributeYield(yieldOp, layoutMap, valueMapping, rewriter)))
+        return failure();
+    }
   }
   return success();
 }
@@ -380,7 +505,16 @@ LogicalResult eraseOps(SmallVector<Operation *> opsToErase,
                        RewriterBase &rewriter) {
   for (int i = opsToErase.size() - 1; i >= 0; i--) {
     if (isa<vector::TransferReadOp, vector::TransferWriteOp,
-            vector::ContractionOp>(opsToErase[i])) {
+            vector::ContractionOp, scf::ForOp, scf::YieldOp>(opsToErase[i])) {
+      LLVM_DEBUG({
+        llvm::dbgs() << "Erasing op = ";
+        opsToErase[i]->dump();
+        if (!opsToErase[i]->getUses().empty()) {
+          llvm::dbgs() << "\n Uses = \n";
+          for (OpOperand &use : opsToErase[i]->getUses())
+            use.getOwner()->dump();
+        }
+      });
       assert(opsToErase[i]->getUses().empty());
       rewriter.eraseOp(opsToErase[i]);
     }

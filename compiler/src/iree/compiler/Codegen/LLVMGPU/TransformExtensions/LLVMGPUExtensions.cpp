@@ -810,6 +810,34 @@ transform_dialect::PipelineSharedMemoryCopiesOp::applyToOne(
 }
 
 //===----------------------------------------------------------------------===//
+// GPUPipeliningOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform_dialect::GPUPipeliningOp::applyToOne(
+    transform::TransformRewriter &rewriter, scf::ForOp forOp,
+    transform::ApplyToEachResultList &results,
+    transform::TransformState &state) {
+  int64_t depth(getDepth());
+  auto strategy = getStrategy();
+  PipeliningSchedulingStrategy pipeliningStrategy = PipeliningSchedulingStrategy::nvidiaTensorCore;
+  if (strategy == 0) {
+    pipeliningStrategy = PipeliningSchedulingStrategy::loadGlobalStage0;
+  }
+  if (strategy == 1) {
+    pipeliningStrategy = PipeliningSchedulingStrategy::loadStoreStage0;
+  }
+  FailureOr<scf::ForOp> pipelinedFor = iree_compiler::pipelineSharedMemoryCopy(
+      rewriter, forOp, pipeliningStrategy, getPeelEpilogue(), depth);
+  if (failed(pipelinedFor)) {
+    results.push_back(forOp);
+    return DiagnosedSilenceableFailure::success();
+  }
+  results.push_back(pipelinedFor.value());
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===----------------------------------------------------------------------===//
 // SynchronizeLoopOp
 //===----------------------------------------------------------------------===//
 

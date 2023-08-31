@@ -89,6 +89,9 @@ createGPUDistributeSharedMemoryCopy();
 std::unique_ptr<OperationPass<func::FuncOp>>
 createGPUMultiBuffering(unsigned numBuffers = 5);
 
+LogicalResult gpuMultiBuffering(func::FuncOp funcOp, unsigned numBuffers = 5,
+                                bool skipOverrideAnalysis = false);
+
 /// Apply software pipelining.
 std::unique_ptr<OperationPass<func::FuncOp>>
 createGPUPipeliningPass(bool epiloguePeeling = true, unsigned depth = 1,
