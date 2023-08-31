@@ -168,7 +168,7 @@ bool isRocmTarget(func::FuncOp entryPoint) {
           entryPoint->getParentOfType<IREE::HAL::ExecutableVariantOp>()) {
     IREE::HAL::ExecutableTargetAttr targetAttr = variantOp.getTarget();
     if (auto backend = targetAttr.getBackend()) {
-      return backend.getValue().str() == kCudaTarget;
+      return backend.getValue().str() == kRocmTarget;
     }
   }
   return false;
