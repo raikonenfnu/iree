@@ -249,7 +249,7 @@ AffineExpr LLVMGPULayout::computeOffset(
   AffineExpr offset = builder.getAffineConstantExpr(0);
   AffineExpr stride = builder.getAffineConstantExpr(1);
   int i = 0;
-  for (const auto &[name, shape] : layout[tensorDim]) {
+  for (const auto &[name, shape] : llvm::reverse(layout[tensorDim])) {
     if (layoutDims.contains(name)) {
       offset = offset + stride * dims[i++];
       stride = stride * builder.getAffineConstantExpr(shape);
