@@ -95,12 +95,12 @@ LLVMGPULayout AMDWMMAConfig::createWMMAF16Layout(MatrixType matrixType, ArrayRef
     return createLayout(matrixType, layout, vectorMapping, contractType);
   }
   colLayout[Dim::LANEX] = 16;
-  rowLayout[Dim::LANEY] = 2;
   if (warpSize == 32) {
     rowLayout[Dim::VECTORX] = 8;
   } else {
     rowLayout[Dim::VECTORX] = 4;
   }
+  rowLayout[Dim::LANEY] = 2;
   layout = {rowLayout, colLayout};
   vectorMapping = {{0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
   std::function<Value(Value, Location, OpBuilder &)> encodeFn, decodeFn;
