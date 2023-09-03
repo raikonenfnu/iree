@@ -1065,5 +1065,24 @@ void transform_dialect::GpuMultiBufferingOp::getEffects(
   transform::modifiesPayload(effects);
 }
 
+//===----------------------------------------------------------------------===//
+// GpuReduceBankConflictsOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform_dialect::GpuReduceBankConflictsOp::applyToOne(
+    transform::TransformRewriter &rewriter, ::mlir::func::FuncOp funcOp,
+    ::mlir::transform::ApplyToEachResultList &results,
+    ::mlir::transform::TransformState &state) {
+  gpuReduceBankConflicts(funcOp, getPaddingSizeBits());
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform_dialect::GpuReduceBankConflictsOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  transform::onlyReadsHandle(getTarget(), effects);
+  transform::modifiesPayload(effects);
+}
+
 #define GET_OP_CLASSES
 #include "iree/compiler/Codegen/Common/TransformExtensions/CommonExtensionsOps.cpp.inc"

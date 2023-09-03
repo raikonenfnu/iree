@@ -653,4 +653,28 @@ def GpuMultiBufferingOp :
   }];
 }
 
+def GpuReduceBankConflictsOp :
+  Op<Transform_Dialect, "iree.gpu_reduce_bank_conflicts",
+    [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+     TransformOpInterface, TransformEachOpTrait]> {
+  let summary = "Reduce shared memory bank conflicts";
+  let description = [{
+  }];
+
+  let arguments = (ins TransformHandleTypeInterface:$target,
+                       I64Attr:$padding_size_bits);
+  let results = (outs);
+
+  let assemblyFormat = "$target attr-dict `:` functional-type(operands, results)";
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::transform::TransformRewriter &rewriter,
+        ::mlir::func::FuncOp funcOp,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
+}
+
 #endif // IREE_COMPILER_CODEGEN_COMMON_TRANSFORMEXTENSIONS_COMMONEXTENSIONS

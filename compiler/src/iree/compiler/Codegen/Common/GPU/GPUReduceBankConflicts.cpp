@@ -45,6 +45,20 @@ static void padAlloc(MLIRContext *context, memref::AllocOp allocOp,
   rewriter.eraseOp(allocOp);
 }
 
+void gpuReduceBankConflicts(func::FuncOp funcOp, int64_t paddingSizeBits) {
+  MLIRContext *context = funcOp.getContext();
+  SmallVector<memref::AllocOp> sharedMemAllocs;
+  // Collect all the alloc operations.
+  funcOp.walk([&](memref::AllocOp allocOp) {
+    if (hasSharedMemoryAddressSpace(allocOp.getType()) &&
+        allocOp.getType().hasStaticShape()) {
+      sharedMemAllocs.push_back(allocOp);
+    }
+  });
+  for (memref::AllocOp alloc : sharedMemAllocs)
+    padAlloc(context, alloc, paddingSizeBits);
+}
+
 namespace {
 
 /// Pass to reduce the number of bank conflicts when accessing shared memory in
@@ -63,18 +77,7 @@ public:
       : paddingSizeBits(paddingSizeBits) {}
 
   void runOnOperation() override {
-    auto funcOp = getOperation();
-    MLIRContext *context = &getContext();
-    SmallVector<memref::AllocOp> sharedMemAllocs;
-    // Collect all the alloc operations.
-    funcOp.walk([&](memref::AllocOp allocOp) {
-      if (hasSharedMemoryAddressSpace(allocOp.getType()) &&
-          allocOp.getType().hasStaticShape()) {
-        sharedMemAllocs.push_back(allocOp);
-      }
-    });
-    for (memref::AllocOp alloc : sharedMemAllocs)
-      padAlloc(context, alloc, paddingSizeBits);
+    gpuReduceBankConflicts(getOperation(), paddingSizeBits);
   }
 };
 } // namespace
