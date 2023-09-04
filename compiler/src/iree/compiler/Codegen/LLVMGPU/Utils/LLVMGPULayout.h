@@ -32,7 +32,8 @@ using Dimension = uint32_t;
 struct LLVMGPULayout {
   enum class ContractType {
     MMT,
-    MTM
+    MTM,
+    MM
   };
   using layoutState = llvm::SmallMapVector<Dimension, uint32_t, 8>;
   using layoutType = llvm::SmallVector<layoutState, 2>;

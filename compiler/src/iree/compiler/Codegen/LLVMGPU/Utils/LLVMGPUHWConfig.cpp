@@ -25,6 +25,29 @@ static LLVMGPULayout createLayout(MatrixType type,
   return newLayout;
 }
 
+SmallVector<int64_t> LLVMGPUHWConfig::getIndices(MatrixType matrixType, int i, int j) {
+  if (matrixType == MatrixType::A) {
+    switch (contractType) {
+      case LLVMGPULayout::ContractType::MM:
+      case LLVMGPULayout::ContractType::MMT:
+        return SmallVector<int64_t>{i, j};
+      case LLVMGPULayout::ContractType::MTM:
+        return SmallVector<int64_t>{j, i};
+    }
+  }
+
+  if (matrixType == MatrixType::B) {
+    switch (contractType) {
+      case LLVMGPULayout::ContractType::MM:
+      case LLVMGPULayout::ContractType::MTM:
+        return SmallVector<int64_t>{i, j};
+      case LLVMGPULayout::ContractType::MMT:
+        return SmallVector<int64_t>{j, i};
+    }
+  }
+  return SmallVector<int64_t>{i, j};
+}
+
 LLVMGPULayout AMDWMMAConfig::getLayout(MatrixType matrixType, Value matrix) {
   auto type = llvm::cast<ShapedType>(matrix.getType());
   ArrayRef<int64_t> matrixShape = type.getShape();
@@ -57,7 +80,7 @@ bool AMDWMMAConfig::verifyOperandTypes(Value a, Value b, Value c, Value d) {
   return false;
 }
 
-static bool isMatmulTransposeA(vector::ContractionOp contractOp) {
+bool AMDWMMAConfig::verifyContract(vector::ContractionOp contractOp) {
   // Set up the parallel/reduction structure in right form.
   using MapList = ArrayRef<ArrayRef<AffineExpr>>;
   auto infer = [](MapList m) { return AffineMap::inferFromExprList(m); };
@@ -69,28 +92,51 @@ static bool isMatmulTransposeA(vector::ContractionOp contractOp) {
         vector::isReductionIterator(iteratorTypes[2])))
     return false;
   SmallVector<AffineMap> maps = contractOp.getIndexingMapsArray();
-  return maps == infer({{k, m}, {k, n}, {m, n}});
+  switch (contractType) {
+    case LLVMGPULayout::ContractType::MTM:
+      return maps == infer({{k, m}, {k, n}, {m, n}});
+    case LLVMGPULayout::ContractType::MMT:
+      return maps == infer({{m, k}, {n, k}, {m, n}});
+    case LLVMGPULayout::ContractType::MM:
+      return maps == infer({{m, k}, {k, n}, {m, n}});
+    default:
+      return false;
+  }
 }
-
-bool AMDWMMAConfig::verifyContract(vector::ContractionOp contractOp) {
-  return isMatmulTransposeA(contractOp);
-}
-
 
 LLVMGPULayout AMDWMMAConfig::createWMMAF16Layout(MatrixType matrixType, ArrayRef<int64_t> matrixShape) {
   uint32_t batchRow = matrixShape[0] / 16;
   uint32_t batchCol = matrixShape[1] / 16;
   LLVMGPULayout::layoutState colLayout, rowLayout;
   LLVMGPULayout::layoutType layout;
-  LLVMGPULayout::ContractType contractType = LLVMGPULayout::ContractType::MTM;
   DenseMap<uint32_t, SmallVector<Dimension>> vectorMapping{
       {0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
   // Layout is specified in reverse here, starting from batch.
   colLayout[Dim::BATCHX] = batchCol;
   rowLayout[Dim::BATCHY] = batchRow;
   if ((matrixType == MatrixType::A) || (matrixType == MatrixType::B)) {
-    colLayout[Dim::LANEX] = 16;
-    rowLayout[Dim::VECTORX] = 16;
+    if (contractType == LLVMGPULayout::ContractType::MTM) {
+      // Corresponds to loading by col
+      colLayout[Dim::LANEX] = 16;
+      rowLayout[Dim::VECTORX] = 16;
+    }
+    if (contractType == LLVMGPULayout::ContractType::MMT) {
+      // Corresponds to loading by row
+      rowLayout[Dim::LANEX] = 16;
+      colLayout[Dim::VECTORX] = 16;
+    }
+    if (contractType == LLVMGPULayout::ContractType::MM) {
+      if (matrixType == MatrixType::A) {
+        // Load A by row
+        rowLayout[Dim::LANEX] = 16;
+        colLayout[Dim::VECTORX] = 16;
+      }
+      if (matrixType == MatrixType::B) {
+        // Load B by col
+        colLayout[Dim::LANEX] = 16;
+        rowLayout[Dim::VECTORX] = 16;
+      }
+    }
     layout = {rowLayout, colLayout};
     return createLayout(matrixType, layout, vectorMapping, contractType);
   }

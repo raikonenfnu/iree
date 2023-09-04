@@ -158,6 +158,7 @@ getIndices(LLVMGPULayout &layout,
 static LogicalResult
 distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
                         DenseMap<Value, Value> &valueMapping,
+                        LLVMGPUHWConfig &hwConfig,
                         OpBuilder &rewriter) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(readOp);
@@ -175,6 +176,21 @@ distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
   LLVMGPULayout::IterationSpace rowColIterationSpace;
   // TODO: Determine number of elements to load from layout
   uint32_t numElements{1};
+  // For MMT, load 8 elements at a time
+  if (hwConfig.contractType == LLVMGPULayout::ContractType::MMT) {
+    numElements = 8;
+  }
+  // For MM, load 8 elements at a time only for A matrix
+  if (hwConfig.contractType == LLVMGPULayout::ContractType::MM) {
+    for (Operation *user : result.getUsers()) {
+      if (auto contractOp = dyn_cast<vector::ContractionOp>(user)) {
+        if (result == contractOp.getLhs()) {
+          numElements = 8;
+          break;
+        }
+      }
+    }
+  }
   if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
     loadFromMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -268,6 +284,7 @@ static bool hasKey(SmallVector<Value> &values, T &layoutMap) {
 static LogicalResult distributeContracts(vector::ContractionOp contractOp,
                                          layoutMapType &layoutMap,
                                          DenseMap<Value, Value> &valueMapping,
+                                         LLVMGPUHWConfig &hwConfig,
                                          OpBuilder &rewriter) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(contractOp);
@@ -289,19 +306,10 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
   Value result = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
   int K{0};
-  std::function<SmallVector<int64_t>(int, int)> aMatrixIndices, bMatrixIndices;
   if (resultLayout.contractType == LLVMGPULayout::ContractType::MTM) {
     K = lhsLayout.getRowBatchDimension();
-    // A matrix indices = (k, i)
-    aMatrixIndices = [](int i, int k) -> SmallVector<int64_t> { return {k, i}; };
-    // B matrix indices = (k, j)
-    bMatrixIndices = [](int k, int j) -> SmallVector<int64_t> { return {k, j}; };
   } else {
     K = lhsLayout.getColBatchDimension();
-    // A matrix indices = (i, k)
-    aMatrixIndices = [](int i, int k) -> SmallVector<int64_t> { return {i, k}; };
-    // B matrix indices = (j, k)
-    bMatrixIndices = [](int k, int j) -> SmallVector<int64_t> { return {j, k}; };
   }
   auto createContract =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -314,9 +322,9 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
         }
         for (int k = 0; k < K; k++) {
           Value aMatrix = rewriter.create<vector::ExtractOp>(
-              loc, valueMapping.at(lhs), aMatrixIndices(offset[0], k));
+              loc, valueMapping.at(lhs), hwConfig.getIndices(MatrixType::A, offset[0], k));
           Value bMatrix = rewriter.create<vector::ExtractOp>(
-              loc, valueMapping.at(rhs), bMatrixIndices(k, offset[1]));
+              loc, valueMapping.at(rhs), hwConfig.getIndices(MatrixType::B, k, offset[1]));
           dMatrix = rewriter.create<amdgpu::WMMAOp>(loc, dMatrix.getType(),
                                                     aMatrix, bMatrix, dMatrix);
         }
@@ -463,6 +471,7 @@ static LogicalResult distributeYield(scf::YieldOp yieldOp,
 LogicalResult doVectorDistribution(layoutMapType &layoutMap,
                                    SmallVector<Operation *> &operations,
                                    DenseMap<Value, Value> &valueMapping,
+                                   LLVMGPUHWConfig &hwConfig,
                                    RewriterBase &rewriter) {
   for (Operation *op : operations) {
     LLVM_DEBUG({
@@ -470,12 +479,12 @@ LogicalResult doVectorDistribution(layoutMapType &layoutMap,
       op->dump();
     });
     if (auto readOp = dyn_cast<vector::TransferReadOp>(op)) {
-      if (failed(distributeTransferReads(readOp, layoutMap, valueMapping,
+      if (failed(distributeTransferReads(readOp, layoutMap, valueMapping, hwConfig,
                                          rewriter)))
         return failure();
     }
     if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
-      if (failed(distributeContracts(contractOp, layoutMap, valueMapping,
+      if (failed(distributeContracts(contractOp, layoutMap, valueMapping, hwConfig,
                                      rewriter)))
         return failure();
     }
@@ -541,7 +550,8 @@ LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
                                             bool useAMDWMMA) {
   layoutMapType layoutMap;
   // TODO: Use fold extf pattern before switching to mixed precision
-  AMDWMMAConfig hwConfig(AMDWMMAConfig::WMMAType::F16_16X16X16_F16, 32);
+  AMDWMMAConfig hwConfig(AMDWMMAConfig::WMMAType::F16_16X16X16_F16,
+                         LLVMGPULayout::ContractType::MTM, 32);
   SmallVector<Operation *> operationsToLower;
   collectOperations(funcOp, operationsToLower);
   if (failed(setLayouts(layoutMap, funcOp, hwConfig)))
@@ -550,7 +560,7 @@ LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
     return failure();
   DenseMap<Value, Value> valueMapping;
   if (failed(doVectorDistribution(layoutMap, operationsToLower, valueMapping,
-                                  rewriter)))
+                                  hwConfig, rewriter)))
     return failure();
   if (failed(eraseOps(operationsToLower, rewriter)))
     return failure();
