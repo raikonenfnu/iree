@@ -191,11 +191,25 @@ struct VectorTransferReadToLoad final
   }
 };
 
+// Transform gpu.barrier -> amdgpu.lds_barrier
+struct RewriteBarriers final
+    : public OpRewritePattern<gpu::BarrierOp> {
+  using OpRewritePattern<gpu::BarrierOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(gpu::BarrierOp op,
+                                PatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    rewriter.replaceOpWithNewOp<amdgpu::LDSBarrierOp>(op);
+    return success();
+  }
+};
+
 } // namespace
 
 void populatePrepareVectorToAMDMMAPatterns(RewritePatternSet &patterns,
                                            bool useMfma) {
-  patterns.add<VectorTransferReadToLoad>(
+  patterns.add<VectorTransferReadToLoad, RewriteBarriers>(
       patterns.getContext());
 }
 

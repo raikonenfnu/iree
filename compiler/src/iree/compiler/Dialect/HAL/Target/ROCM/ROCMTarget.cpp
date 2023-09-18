@@ -287,6 +287,7 @@ void registerROCMTargetBackends() {
         LLVMInitializeAMDGPUTarget();
         LLVMInitializeAMDGPUTargetMC();
         LLVMInitializeAMDGPUTargetInfo();
+        LLVMInitializeAMDGPUAsmParser();
         LLVMInitializeAMDGPUAsmPrinter();
         return std::make_shared<ROCMTargetBackend>();
       });
