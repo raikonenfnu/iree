@@ -319,7 +319,7 @@ private:
             removeAssumedBits(NOT_MUTATED | NOT_EXTERNAL);
             break;
           }
-          auto resultUsage = solver.getElementFor<ValueResourceUsage>(
+          auto &resultUsage = solver.getElementFor<ValueResourceUsage>(
               *this, Position::forValue(op.getResult()),
               DFX::Resolution::REQUIRED);
           getState() ^= resultUsage.getState();

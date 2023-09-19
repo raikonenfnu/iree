@@ -988,6 +988,7 @@ void SetupHalBindings(nanobind::module_ m) {
       py::arg("buffer"), py::arg("shape"), py::arg("element_type"));
   hal_buffer_view
       .def("map", HalMappedMemory::CreateFromBufferView, py::keep_alive<0, 1>())
+      .def("get_buffer", HalBuffer::CreateFromBufferView, py::keep_alive<0, 1>())
       .def_prop_ro("shape",
                    [](HalBufferView& self) {
                      iree_host_size_t rank =

@@ -196,6 +196,10 @@ class HalBuffer : public ApiRefCounted<HalBuffer, iree_hal_buffer_t> {
     return HalBufferView::StealFromRawPtr(bv);
   }
 
+  static HalBuffer CreateFromBufferView(HalBufferView& bv) {
+    return HalBuffer::BorrowFromRawPtr(iree_hal_buffer_view_buffer(bv.raw_ptr()));
+  }
+
   py::str Repr();
 };
 
