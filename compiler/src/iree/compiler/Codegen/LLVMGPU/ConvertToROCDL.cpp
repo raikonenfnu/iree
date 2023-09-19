@@ -54,6 +54,28 @@ struct DropSharedMemoryDeallocOp : public OpRewritePattern<memref::DeallocOp> {
   }
 };
 
+static StringRef getTargetArch(func::FuncOp entryPoint) {
+  if (auto variantOp =
+          entryPoint->getParentOfType<IREE::HAL::ExecutableVariantOp>()) {
+    IREE::HAL::ExecutableTargetAttr targetAttr = variantOp.getTarget();
+    if (auto config = targetAttr.getConfiguration()) {
+      if (auto attr = config.getAs<StringAttr>("target_arch")) {
+        return attr.getValue();
+      }
+    }
+  }
+  return "";
+}
+
+static StringRef getChipset(ModuleOp m) {
+  for (func::FuncOp funcOp : m.getOps<func::FuncOp>()) {
+    if (isEntryPoint(funcOp)) {
+      return getTargetArch(funcOp);
+    }
+  }
+  return "";
+}
+
 /// A pass that replaces all occurrences of GPU device operations with their
 /// corresponding ROCDL equivalent.
 ///
@@ -127,7 +149,8 @@ struct ConvertToROCDLPass : public ConvertToROCDLBase<ConvertToROCDLPass> {
       populateFuncToLLVMConversionPatterns(converter, llvmPatterns);
       cf::populateControlFlowToLLVMConversionPatterns(converter, llvmPatterns);
       arith::populateArithToLLVMConversionPatterns(converter, llvmPatterns);
-      FailureOr<amdgpu::Chipset> maybeChipset = amdgpu::Chipset::parse("gfx1100");
+      StringRef chipset = getChipset(m);
+      FailureOr<amdgpu::Chipset> maybeChipset = amdgpu::Chipset::parse(chipset);
       populateAMDGPUToROCDLConversionPatterns(converter, llvmPatterns, *maybeChipset);
       populateVectorToLLVMConversionPatterns(converter, llvmPatterns);
       populateGpuToROCDLConversionPatterns(converter, llvmPatterns,

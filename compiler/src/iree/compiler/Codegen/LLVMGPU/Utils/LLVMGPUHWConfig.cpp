@@ -1,4 +1,5 @@
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUHWConfig.h"
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "LLVMGPUHWConfig.h"
 
@@ -8,10 +9,12 @@ static LLVMGPULayout createLayout(MatrixType type,
         LLVMGPULayout::layoutType layout,
         DenseMap<uint32_t, SmallVector<Dimension>> &vectorMapping,
         LLVMGPULayout::ContractType contractType,
+        uint32_t maxTransferElements,
         std::function<Value(Value, Location, OpBuilder &)> encodeFn = nullptr,
         std::function<Value(Value, Location, OpBuilder &)> decodeFn = nullptr) {
   LLVMGPULayout newLayout(layout, vectorMapping);
   newLayout.contractType = contractType;
+  newLayout.maxTransferElems = maxTransferElements;
   if (encodeFn) newLayout.encodeFn = encodeFn;
   if (decodeFn) newLayout.decodeFn = decodeFn;
   StringRef typeName;
@@ -80,7 +83,7 @@ bool AMDWMMAConfig::verifyOperandTypes(Value a, Value b, Value c, Value d) {
   return false;
 }
 
-bool AMDWMMAConfig::verifyContract(vector::ContractionOp contractOp) {
+bool LLVMGPUHWConfig::verifyContract(vector::ContractionOp contractOp) {
   // Set up the parallel/reduction structure in right form.
   using MapList = ArrayRef<ArrayRef<AffineExpr>>;
   auto infer = [](MapList m) { return AffineMap::inferFromExprList(m); };
@@ -114,32 +117,36 @@ LLVMGPULayout AMDWMMAConfig::createWMMAF16Layout(MatrixType matrixType, ArrayRef
   // Layout is specified in reverse here, starting from batch.
   colLayout[Dim::BATCHX] = batchCol;
   rowLayout[Dim::BATCHY] = batchRow;
+  uint32_t maxTransferElements{1};
   if ((matrixType == MatrixType::A) || (matrixType == MatrixType::B)) {
-    if (contractType == LLVMGPULayout::ContractType::MTM) {
-      // Corresponds to loading by col
-      colLayout[Dim::LANEX] = 16;
-      rowLayout[Dim::VECTORX] = 16;
-    }
     if (contractType == LLVMGPULayout::ContractType::MMT) {
-      // Corresponds to loading by row
+      // B has a transposed layout, so should be the same as A
+      if (matrixType == MatrixType::B) {
+        matrixType = MatrixType::A;
+      }
+      // With mmt layout, we can transfer the maximum number of elements
+      maxTransferElements = 8;
+    }
+    if (contractType == LLVMGPULayout::ContractType::MTM) {
+      // A has a transposed layout, so should be the same as B
+      if (matrixType == MatrixType::A) {
+        matrixType = MatrixType::B;
+      }
+    }
+    if (matrixType == MatrixType::A) {
+      // Load A by row
       rowLayout[Dim::LANEX] = 16;
       colLayout[Dim::VECTORX] = 16;
     }
-    if (contractType == LLVMGPULayout::ContractType::MM) {
-      if (matrixType == MatrixType::A) {
-        // Load A by row
-        rowLayout[Dim::LANEX] = 16;
-        colLayout[Dim::VECTORX] = 16;
-      }
-      if (matrixType == MatrixType::B) {
-        // Load B by col
-        colLayout[Dim::LANEX] = 16;
-        rowLayout[Dim::VECTORX] = 16;
-      }
+    if (matrixType == MatrixType::B) {
+      // Load B by col
+      colLayout[Dim::LANEX] = 16;
+      rowLayout[Dim::VECTORX] = 16;
     }
     layout = {rowLayout, colLayout};
-    return createLayout(matrixType, layout, vectorMapping, contractType);
+    return createLayout(matrixType, layout, vectorMapping, contractType, maxTransferElements);
   }
+  // C and D have a different layout than A and B and require encode/decode functions
   colLayout[Dim::LANEX] = 16;
   if (warpSize == 32) {
     rowLayout[Dim::VECTORX] = 8;
@@ -175,7 +182,78 @@ LLVMGPULayout AMDWMMAConfig::createWMMAF16Layout(MatrixType matrixType, ArrayRef
   if (wmmaType == WMMAType::F32_16X16X16_F16) {
     encodeFn = decodeFn = nullptr;
   }
-  return createLayout(matrixType, layout, vectorMapping, contractType, encodeFn, decodeFn);
+  // For C and D matrices, due to the non-unit stride we can only store one element at a time
+  maxTransferElements = 1;
+  return createLayout(matrixType, layout, vectorMapping, contractType, maxTransferElements, encodeFn, decodeFn);
+}
+
+Value AMDWMMAConfig::computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) {
+  return rewriter.create<amdgpu::WMMAOp>(loc, c.getType(), a, b, c);
+}
+
+bool AMDMFMAConfig::verifyOperandTypes(Value a, Value b, Value c, Value d) {
+  switch (mfmaType) {
+    case MFMAType::F32_16X16X16_F16:
+        return hasF16Type(a) && hasF16Type(b) && hasF32Type(c) && hasF32Type(d);
+  }
+  return false;
+}
+
+LLVMGPULayout AMDMFMAConfig::getLayout(MatrixType matrixType, Value matrix) {
+  auto type = llvm::cast<ShapedType>(matrix.getType());
+  ArrayRef<int64_t> matrixShape = type.getShape();
+  switch (mfmaType) {
+    case MFMAType::F32_16X16X16_F16:
+        return createMFMALayout(matrixType, matrixShape);
+    default:
+        return LLVMGPULayout();
+  }
+}
+
+LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<int64_t> matrixShape) {
+  uint32_t batchRow = matrixShape[0] / 16;
+  uint32_t batchCol = matrixShape[1] / 16;
+  LLVMGPULayout::layoutState colLayout, rowLayout;
+  LLVMGPULayout::layoutType layout;
+  DenseMap<uint32_t, SmallVector<Dimension>> vectorMapping{
+      {0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
+  // Layout is specified in reverse here, starting from batch.
+  colLayout[Dim::BATCHX] = batchCol;
+  rowLayout[Dim::BATCHY] = batchRow;
+  uint32_t maxTransferElements{1};
+  if (contractType == LLVMGPULayout::ContractType::MMT) {
+    // B has a transposed layout, so should be the same as A
+    if (matrixType == MatrixType::B) {
+      matrixType = MatrixType::A;
+    }
+    if ((matrixType == MatrixType::A) || (matrixType == MatrixType::B)) {
+      maxTransferElements = 4;
+    }
+  }
+  if (contractType == LLVMGPULayout::ContractType::MTM) {
+    // A has a transposed layout, so should be the same as B
+    if (matrixType == MatrixType::A) {
+      matrixType = MatrixType::B;
+    }
+  }
+  if (matrixType == MatrixType::A) {
+    rowLayout[Dim::LANEX] = 16;
+    colLayout[Dim::LANEY] = 4;
+    colLayout[Dim::VECTORX] = 4;
+  } else {
+    colLayout[Dim::LANEX] = 16;
+    rowLayout[Dim::LANEY] = 4;
+    rowLayout[Dim::VECTORX] = 4;
+  }
+  layout = {rowLayout, colLayout};
+  return createLayout(matrixType, layout, vectorMapping, contractType, maxTransferElements);
+}
+
+Value AMDMFMAConfig::computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) {
+  uint32_t m, n, k, blks;
+  m = n = k = 16;
+  blks = 1;
+  return rewriter.create<amdgpu::MFMAOp>(loc, c.getType(), m, n, k, blks, a, b, c);
 }
 
 }

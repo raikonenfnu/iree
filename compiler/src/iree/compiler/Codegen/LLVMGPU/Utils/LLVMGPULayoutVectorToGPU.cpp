@@ -35,25 +35,25 @@ static LLVMGPULayout &getLayout(layoutMapType &layoutMap, Value value) {
 }
 
 LogicalResult setMMALayout(vector::ContractionOp contractOp,
-                           layoutMapType &layoutMap, LLVMGPUHWConfig &hwConfig) {
+                           layoutMapType &layoutMap, std::shared_ptr<LLVMGPUHWConfig> hwConfig) {
   Value a = contractOp.getLhs();
   Value b = contractOp.getRhs();
   Value c = contractOp.getAcc();
   Value d = contractOp.getResult();
-  if (!hwConfig.verifyOperandTypes(a, b, c, d) || !hwConfig.verifyContract(contractOp)) {
+  if (!hwConfig->verifyOperandTypes(a, b, c, d) || !hwConfig->verifyContract(contractOp)) {
     return failure();
   }
   SmallVector<Value> values{a, b, c, d};
   SmallVector<MatrixType> names{MatrixType::A, MatrixType::B, MatrixType::C, MatrixType::D};
   for (auto [name, value] : llvm::zip(names, values)) {
-    auto layout = hwConfig.getLayout(name, value);
+    auto layout = hwConfig->getLayout(name, value);
     addToLayoutMap(value, layoutMap, layout);
   }
   return success();
 }
 
 LogicalResult setLayouts(layoutMapType &layoutMap, func::FuncOp funcOp,
-                         LLVMGPUHWConfig &hwConfig) {
+                         std::shared_ptr<LLVMGPUHWConfig> hwConfig) {
   WalkResult result = funcOp.walk([&](Operation *op) {
     if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
       if (failed(setMMALayout(contractOp, layoutMap, hwConfig)))
@@ -158,7 +158,7 @@ getIndices(LLVMGPULayout &layout,
 static LogicalResult
 distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
                         DenseMap<Value, Value> &valueMapping,
-                        LLVMGPUHWConfig &hwConfig,
+                        std::shared_ptr<LLVMGPUHWConfig> hwConfig,
                         OpBuilder &rewriter) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(readOp);
@@ -174,23 +174,7 @@ distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
       loc, vectorType, rewriter.getZeroAttr(vectorType));
   std::function<void(LLVMGPULayout::IterationSpace::iteratorType &)> loadFromMemref;
   LLVMGPULayout::IterationSpace rowColIterationSpace;
-  // TODO: Determine number of elements to load from layout
-  uint32_t numElements{1};
-  // For MMT, load 8 elements at a time
-  if (hwConfig.contractType == LLVMGPULayout::ContractType::MMT) {
-    numElements = 8;
-  }
-  // For MM, load 8 elements at a time only for A matrix
-  if (hwConfig.contractType == LLVMGPULayout::ContractType::MM) {
-    for (Operation *user : result.getUsers()) {
-      if (auto contractOp = dyn_cast<vector::ContractionOp>(user)) {
-        if (result == contractOp.getLhs()) {
-          numElements = 8;
-          break;
-        }
-      }
-    }
-  }
+  uint32_t numElements = layout.maxTransferElems;
   if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
     loadFromMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -238,8 +222,7 @@ static LogicalResult distributeTransferWrites(
   Location loc = writeOp.getLoc();
   std::function<void(LLVMGPULayout::IterationSpace::iteratorType &)> storeToMemref;
   LLVMGPULayout::IterationSpace rowColIterationSpace;
-  // TODO: Determine number of elements to load from layout
-  uint32_t numElements{1};
+  uint32_t numElements = layout.maxTransferElems;
   if ((numElements > 1) && layout.supportsVectorLoadsStores(numElements)) {
     storeToMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -284,7 +267,7 @@ static bool hasKey(SmallVector<Value> &values, T &layoutMap) {
 static LogicalResult distributeContracts(vector::ContractionOp contractOp,
                                          layoutMapType &layoutMap,
                                          DenseMap<Value, Value> &valueMapping,
-                                         LLVMGPUHWConfig &hwConfig,
+                                         std::shared_ptr<LLVMGPUHWConfig> hwConfig,
                                          OpBuilder &rewriter) {
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(contractOp);
@@ -300,7 +283,7 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
     return failure();
   auto resultLayout = getLayout(layoutMap, contractResult);
   Location loc = contractOp.getLoc();
-  Type elementType = llvm::cast<ShapedType>(lhs.getType()).getElementType();
+  Type elementType = llvm::cast<ShapedType>(acc.getType()).getElementType();
   auto vectorType =
       VectorType::get(resultLayout.getMappedVectorShape(), elementType);
   Value result = rewriter.create<arith::ConstantOp>(
@@ -322,11 +305,10 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
         }
         for (int k = 0; k < K; k++) {
           Value aMatrix = rewriter.create<vector::ExtractOp>(
-              loc, valueMapping.at(lhs), hwConfig.getIndices(MatrixType::A, offset[0], k));
+              loc, valueMapping.at(lhs), hwConfig->getIndices(MatrixType::A, offset[0], k));
           Value bMatrix = rewriter.create<vector::ExtractOp>(
-              loc, valueMapping.at(rhs), hwConfig.getIndices(MatrixType::B, k, offset[1]));
-          dMatrix = rewriter.create<amdgpu::WMMAOp>(loc, dMatrix.getType(),
-                                                    aMatrix, bMatrix, dMatrix);
+              loc, valueMapping.at(rhs), hwConfig->getIndices(MatrixType::B, k, offset[1]));
+          dMatrix = hwConfig->computeMMA(aMatrix, bMatrix, dMatrix, loc, rewriter);
         }
         if (resultLayout.decodeFn) {
           dMatrix = resultLayout.decodeFn(dMatrix, loc, rewriter);
@@ -471,7 +453,7 @@ static LogicalResult distributeYield(scf::YieldOp yieldOp,
 LogicalResult doVectorDistribution(layoutMapType &layoutMap,
                                    SmallVector<Operation *> &operations,
                                    DenseMap<Value, Value> &valueMapping,
-                                   LLVMGPUHWConfig &hwConfig,
+                                   std::shared_ptr<LLVMGPUHWConfig> hwConfig,
                                    RewriterBase &rewriter) {
   for (Operation *op : operations) {
     LLVM_DEBUG({
@@ -547,23 +529,34 @@ static void collectOperations(Operation *rootOp,
 
 LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
                                             func::FuncOp funcOp,
-                                            bool useAMDWMMA) {
+                                            bool useAMDMFMA) {
   layoutMapType layoutMap;
-  // TODO: Use fold extf pattern before switching to mixed precision
-  AMDWMMAConfig hwConfig(AMDWMMAConfig::WMMAType::F16_16X16X16_F16,
-                         LLVMGPULayout::ContractType::MTM, 32);
+  std::shared_ptr<LLVMGPUHWConfig> hwConfig;
+  if (useAMDMFMA) {
+    hwConfig = std::make_shared<AMDMFMAConfig>(AMDMFMAConfig::MFMAType::F32_16X16X16_F16, LLVMGPULayout::ContractType::MMT, 64);
+  } else {
+    hwConfig = std::make_shared<AMDWMMAConfig>(AMDWMMAConfig::WMMAType::F16_16X16X16_F16, LLVMGPULayout::ContractType::MMT, 32);
+  }
   SmallVector<Operation *> operationsToLower;
   collectOperations(funcOp, operationsToLower);
-  if (failed(setLayouts(layoutMap, funcOp, hwConfig)))
+  if (failed(setLayouts(layoutMap, funcOp, hwConfig))) {
+    llvm::dbgs() << "Failed to set layouts ...\n";
     return failure();
-  if (failed(propagateLayouts(layoutMap, funcOp)))
+  }
+  if (failed(propagateLayouts(layoutMap, funcOp))) {
+    llvm::dbgs() << "Failed to propagate layouts ...\n";
     return failure();
+  }
   DenseMap<Value, Value> valueMapping;
   if (failed(doVectorDistribution(layoutMap, operationsToLower, valueMapping,
-                                  hwConfig, rewriter)))
+                                  hwConfig, rewriter))) {
+    llvm::dbgs() << "Failed to do vector distribution ...\n";
     return failure();
-  if (failed(eraseOps(operationsToLower, rewriter)))
+  }
+  if (failed(eraseOps(operationsToLower, rewriter))) {
+    llvm::dbgs() << "Failed to erase ops ...\n";
     return failure();
+  }
   return success();
 }
 

@@ -18,8 +18,9 @@ struct LLVMGPUHWConfig {
     return LLVMGPULayout();
   }
   virtual bool verifyOperandTypes(Value a, Value b, Value c, Value d) { return false; }
-  virtual bool verifyContract(vector::ContractionOp contractOp) { return false; }
+  bool verifyContract(vector::ContractionOp contractOp);
   SmallVector<int64_t> getIndices(MatrixType matrixType, int i, int j);
+  virtual Value computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) { return Value{}; }
 
   LLVMGPULayout::ContractType contractType;
 };
@@ -36,14 +37,35 @@ struct AMDWMMAConfig : public LLVMGPUHWConfig {
 
   LLVMGPULayout getLayout(MatrixType matrixType, Value matrix) override;
   bool verifyOperandTypes(Value a, Value b, Value c, Value d) override;
-  bool verifyContract(vector::ContractionOp contractOp) override;
 
   LLVMGPULayout createWMMAF16Layout(MatrixType matrixType,
                                     ArrayRef<int64_t> matrixShape);
+  Value computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) override;
 
   WMMAType wmmaType;
   uint32_t warpSize;
 };
+
+// For more information, see link below:
+// https://gpuopen.com/learn/amd-lab-notes/amd-lab-notes-matrix-cores-readme/
+struct AMDMFMAConfig : public LLVMGPUHWConfig {
+  enum class MFMAType {
+    F32_16X16X16_F16
+  };
+  AMDMFMAConfig(MFMAType mfmaType, LLVMGPULayout::ContractType contractType, uint32_t warpSize) :
+    LLVMGPUHWConfig(contractType), mfmaType(mfmaType), warpSize(warpSize) {}
+
+  LLVMGPULayout getLayout(MatrixType matrixType, Value matrix) override;
+  bool verifyOperandTypes(Value a, Value b, Value c, Value d) override;
+
+  LLVMGPULayout createMFMALayout(MatrixType matrixType,
+                                 ArrayRef<int64_t> matrixShape);
+  Value computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) override;
+
+  MFMAType mfmaType;
+  uint32_t warpSize;
+};
+
 }
 
 #endif // IREE_COMPILER_CODEGEN_LLVMGPU_LLVMGPUHWCONFIG_H_

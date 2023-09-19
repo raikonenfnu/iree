@@ -113,6 +113,7 @@ struct LLVMGPULayout {
   std::function<Value(Value, Location, OpBuilder &)> encodeFn{nullptr};
   std::function<Value(Value, Location, OpBuilder &)> decodeFn{nullptr};
   ContractType contractType;
+  uint32_t maxTransferElems;
 };
 
 } // namespace mlir::iree_compiler

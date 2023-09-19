@@ -19,6 +19,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
@@ -61,7 +62,7 @@ static std::string translateModuleToObj(llvm::Module &module,
   return targetObj;
 }
 
-static std::string translateModuleToISA(llvm::Module &module,
+static std::string translateModuleToISA(llvm::Module *module,
                                         llvm::TargetMachine &targetMachine) {
   std::string targetISA;
   {
@@ -70,7 +71,7 @@ static std::string translateModuleToISA(llvm::Module &module,
     llvm::legacy::PassManager codegenPasses;
     targetMachine.addPassesToEmitFile(codegenPasses, pstream, nullptr,
                                       llvm::CGFT_AssemblyFile);
-    codegenPasses.run(module);
+    codegenPasses.run(*module);
   }
   return targetISA;
 }
@@ -206,6 +207,10 @@ public:
 
     // Serialize hsaco kernel into the binary that we will embed in the
     // final FlatBuffer.
+    std::unique_ptr<llvm::Module> moduleCopy;
+    if (!options.dumpIntermediatesPath.empty()) {
+      moduleCopy = llvm::CloneModule(*llvmModule);
+    }
     std::string targetObj = translateModuleToObj(*llvmModule, *targetMachine);
     std::string targetHSACO = createHsaco(targetObj, libraryName);
     if (!options.dumpBinariesPath.empty()) {
@@ -244,7 +249,7 @@ public:
         builder.getBufferAttr(executableBuilder.getContext()));
 
     if (!options.dumpIntermediatesPath.empty()) {
-      std::string targetISA = translateModuleToISA(*llvmModule, *targetMachine);
+      std::string targetISA = translateModuleToISA(moduleCopy.get(), *targetMachine);
       dumpDataToPath(options.dumpIntermediatesPath, options.dumpBaseName,
                      variantOp.getName(), ".rocmasm", targetISA);
     }

@@ -27,6 +27,7 @@ class ForOp;
 namespace vector {
 class VectorDialect;
 class WarpExecuteOnLane0Op;
+class ContractionOp;
 } // namespace vector
 
 namespace iree_compiler {

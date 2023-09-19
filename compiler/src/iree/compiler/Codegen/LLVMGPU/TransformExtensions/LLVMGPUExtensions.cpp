@@ -884,7 +884,7 @@ transform_dialect::LayoutAnalysisAndDistributionOp::applyToOne(
     transform::ApplyToEachResultList &results,
     transform::TransformState &state) {
   if (failed(iree_compiler::convertVectorToGPUUsingLayout(
-          rewriter, cast<func::FuncOp>(target), true))) {
+          rewriter, cast<func::FuncOp>(target), getUseMfma()))) {
     return DiagnosedSilenceableFailure::definiteFailure();
   }
   results.push_back(target);
@@ -1529,6 +1529,30 @@ void transform_dialect::PackSharedMemoryAllocOp::getEffects(
 void transform_dialect::ApplyPrepareVectorToAMDMMAPatternsOp::populatePatterns(
     RewritePatternSet &patterns) {
   populatePrepareVectorToAMDMMAPatterns(patterns, getUseMfma());
+}
+
+//===---------------------------------------------------------------------===//
+// FoldExtIntoContractionOp
+//===---------------------------------------------------------------------===//
+DiagnosedSilenceableFailure transform_dialect::FoldExtIntoContractionOp::applyToOne(
+    transform::TransformRewriter &rewriter, vector::ContractionOp target,
+    transform::ApplyToEachResultList &results,
+    transform::TransformState &state) {
+
+  auto lhsDefOp = target.getLhs().getDefiningOp<arith::ExtFOp>();
+  auto rhsDefOp = target.getRhs().getDefiningOp<arith::ExtFOp>();
+
+  if (!lhsDefOp || !rhsDefOp) {
+    return mlir::emitDefiniteFailure(target,
+                                     "no defining op on contract operands");
+  }
+
+  auto newContractOp = rewriter.replaceOpWithNewOp<vector::ContractionOp>(
+      target, lhsDefOp->getOperand(0), rhsDefOp->getOperand(0),
+      target.getAcc(), target.getIndexingMapsAttr(),
+      target.getIteratorTypesAttr());
+  results.push_back(newContractOp);
+  return DiagnosedSilenceableFailure::success();
 }
 
 #define GET_OP_CLASSES

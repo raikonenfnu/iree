@@ -592,7 +592,8 @@ def LayoutAnalysisAndDistributionOp :
 
   }];
 
-  let arguments = (ins TransformHandleTypeInterface:$target);
+  let arguments = (ins TransformHandleTypeInterface:$target,
+                       DefaultValuedAttr<BoolAttr, "false">:$use_mfma);
   let results = (outs Variadic<TransformHandleTypeInterface>:$result);
 
   let assemblyFormat = [{ $target attr-dict `:` functional-type(operands, results)}];
@@ -743,6 +744,38 @@ def ApplyPrepareVectorToAMDMMAPatternsOp : Op<Transform_Dialect,
   let arguments = (ins DefaultValuedAttr<BoolAttr, "false">:$useMfma);
   let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
   let assemblyFormat = "attr-dict";
+}
+
+def FoldExtIntoContractionOp :
+  Op<Transform_Dialect, "iree.fold_ext_into_contraction",
+    [FunctionalStyleTransformOpTrait,
+     MemoryEffectsOpInterface,
+     TransformEachOpTrait,
+     TransformOpInterface,
+     ReportTrackingListenerFailuresOpTrait]> {
+  let description = [{
+     Pattern to fold arithmetic extensions on floating point data types into
+     vector contraction operations. linalg.matmul introduces arithmetic
+     extensions on its operands.
+  }];
+
+  let arguments = (ins TransformHandleTypeInterface:$target);
+  let results = (outs TransformHandleTypeInterface:$result);
+
+  let assemblyFormat = [{ $target attr-dict `:` functional-type(operands, results)}];
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+
+  let builders = [
+    OpBuilder<(ins "Value":$target)>
+  ];
+
+  let extraClassDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+        ::mlir::transform::TransformRewriter &rewriter,
+        ::mlir::vector::ContractionOp target,
+        ::mlir::transform::ApplyToEachResultList &results,
+        ::mlir::transform::TransformState &state);
+  }];
 }
 
 #endif // IREE_COMPILER_CODEGEN_LLVMGPU_TRANSFORMEXTENSIONS_LLVMGPUEXTENSIONS
