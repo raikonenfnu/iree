@@ -412,8 +412,14 @@ void addGPUWarpReductionPassPipeline(OpPassManager &pm) {
   nestedModulePM.addNestedPass<func::FuncOp>(createCanonicalizerPass());
 
   // vector -> simt gpu + vector
+//   TODO: Add get Warp Size FN for GPU.
+//   auto getWarpSize = [](func::FuncOp func) {
+//     auto moduleOp = func->getParentOfType<ModuleOp>();
+//     spirv::TargetEnvAttr target = getSPIRVTargetEnvAttr(moduleOp);
+//     return target.getResourceLimits().getSubgroupSize();
+//   };
   nestedModulePM.addNestedPass<func::FuncOp>(
-      createConvertVectorReductionToGPUPass());
+      createConvertVectorReductionToGPUPass(getWarpSize));
   nestedModulePM.addPass(createCanonicalizerPass());
   nestedModulePM.addPass(createCSEPass());
 }
