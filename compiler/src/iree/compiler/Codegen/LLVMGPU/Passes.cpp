@@ -412,8 +412,31 @@ void addGPUWarpReductionPassPipeline(OpPassManager &pm) {
   nestedModulePM.addNestedPass<func::FuncOp>(createCanonicalizerPass());
 
   // vector -> simt gpu + vector
+  auto getWarpSize = [](func::FuncOp func) {
+    int32_t warpSize = 32;
+    if (auto variantOp =
+            func->getParentOfType<IREE::HAL::ExecutableVariantOp>()) {
+        IREE::HAL::ExecutableTargetAttr targetAttr = variantOp.getTarget();
+        if (auto backend = targetAttr.getBackend()) {
+            if(backend.getValue().str() != "rocm") {
+                return warpSize;
+            }
+        }
+        if (auto config = targetAttr.getConfiguration()) {
+            if (auto attr = config.getAs<StringAttr>("target_arch")) {
+                StringRef targetName = attr.getValue();
+                auto version = targetName.substr(3);
+                // GFX90x series have 64 warpSize.
+                if (version.startswith("90")) {
+                    warpSize = 64;
+                }
+            }
+        }
+    }
+    return warpSize;
+  };
   nestedModulePM.addNestedPass<func::FuncOp>(
-      createConvertVectorReductionToGPUPass());
+      createConvertVectorReductionToGPUPass(getWarpSize));
   nestedModulePM.addPass(createCanonicalizerPass());
   nestedModulePM.addPass(createCSEPass());
 }
