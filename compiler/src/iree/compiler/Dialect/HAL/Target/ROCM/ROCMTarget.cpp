@@ -13,10 +13,14 @@
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
 #include "iree/compiler/Utils/FlatbufferUtils.h"
 #include "iree/schemas/rocm_executable_def_builder.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -103,6 +107,40 @@ public:
         context, b.getStringAttr(deviceID()), configAttr);
   }
 
+  static void optimizeModule(llvm::Module &module,
+                             llvm::TargetMachine &targetMachine) {
+    llvm::LoopAnalysisManager lam;
+    llvm::FunctionAnalysisManager fam;
+    llvm::CGSCCAnalysisManager cgam;
+    llvm::ModuleAnalysisManager mam;
+
+    fam.registerPass([&] { return targetMachine.getTargetIRAnalysis(); });
+
+    llvm::PipelineTuningOptions pto;
+    pto.SLPVectorization = false;
+
+    llvm::PassInstrumentationCallbacks pic;
+
+    llvm::StandardInstrumentations si(module.getContext(), false);
+    si.registerCallbacks(pic, &mam);
+
+    llvm::PassBuilder pb(&targetMachine, pto, std::nullopt, &pic);
+    llvm::ModulePassManager mpm;
+    pb.registerModuleAnalyses(mam);
+    pb.registerCGSCCAnalyses(cgam);
+    pb.registerFunctionAnalyses(fam);
+    pb.registerLoopAnalyses(lam);
+    pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+    llvm::OptimizationLevel ol = llvm::OptimizationLevel::O2;
+
+    mpm.addPass(llvm::VerifierPass());
+    mpm.addPass(pb.buildPerModuleDefaultPipeline(ol));
+    mpm.addPass(llvm::VerifierPass());
+
+    mpm.run(module, mam);
+  }
+
   void buildTranslationPassPipeline(IREE::HAL::ExecutableVariantOp variantOp,
                                     OpPassManager &passManager) override {
     // For now we disable translation if the variant has external object files.
@@ -185,7 +223,7 @@ public:
 
     std::unique_ptr<llvm::TargetMachine> targetMachine;
     {
-      llvm::Triple triple("amdgcn--amdhsa-amdgiz");
+      llvm::Triple triple("amdgcn-amd-amdhsa");
       std::string targetChip = clROCMTargetChip;
       std::string error;
       const llvm::Target *target =
@@ -193,14 +231,27 @@ public:
       if (target == nullptr) {
         return variantOp.emitError() << "cannot initialize target triple";
       }
+      llvm::TargetOptions opt;
+      opt.AllowFPOpFusion = llvm::FPOpFusion::Fast;
+      opt.UnsafeFPMath = false;
+      opt.NoInfsFPMath = false;
+      opt.NoNaNsFPMath = true;
+      std::string features{""};
+      if (targetChip == "gfx90a") {
+        features = "+sramecc,-xnack";
+      }
       targetMachine.reset(
-          target->createTargetMachine(triple.str(), targetChip, {}, {}, {}));
+          target->createTargetMachine(triple.str(), targetChip, features, opt,
+                                      llvm::Reloc::Model::PIC_, std::nullopt, llvm::CodeGenOpt::Aggressive));
       if (targetMachine == nullptr) {
         return variantOp.emitError() << "cannot initialize target machine";
       }
     }
 
     llvmModule->setDataLayout(targetMachine->createDataLayout());
+
+    for (llvm::Function &f : llvmModule->functions())
+      f.addFnAttr(llvm::Attribute::AlwaysInline);
 
     iree_compiler::FlatbufferBuilder builder;
     iree_hal_rocm_ExecutableDef_start_as_root(builder);
@@ -210,6 +261,9 @@ public:
       linkROCDLIfNecessary(llvmModule.get(), clROCMTargetChip,
                            clROCMBitcodeDir);
     }
+
+    // Optimize module
+    optimizeModule(*llvmModule, *targetMachine);
 
     // Serialize hsaco kernel into the binary that we will embed in the
     // final FlatBuffer.

@@ -200,6 +200,11 @@ struct RewriteBarriers final
                                 PatternRewriter &rewriter) const override {
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(op);
+    auto prevOp = op->getPrevNode();
+    if (isa<gpu::BarrierOp>(prevOp)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
     rewriter.replaceOpWithNewOp<amdgpu::LDSBarrierOp>(op);
     return success();
   }
