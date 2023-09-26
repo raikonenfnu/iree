@@ -173,6 +173,17 @@ struct LLVMGPUVectorLoweringPass
     {
       // Lower high level vector operations like contract or multidim reduce ops
       // to lower level vector ops.
+      RewritePatternSet gatherLoweringPatterns(funcOp.getContext());
+      vector::populateVectorGatherLoweringPatterns(gatherLoweringPatterns);
+      if (failed(applyPatternsAndFoldGreedily(
+              funcOp, std::move(gatherLoweringPatterns)))) {
+        return signalPassFailure();
+      }
+    }
+
+    {
+      // Lower high level vector operations like contract or multidim reduce ops
+      // to lower level vector ops.
       RewritePatternSet contractLoweringPatterns(funcOp.getContext());
       vector::populateVectorTransferPermutationMapLoweringPatterns(
           contractLoweringPatterns);
