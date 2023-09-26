@@ -162,11 +162,11 @@ std::string createHsaco(const std::string isa, StringRef name) {
 
   // Invoke lld. Expect a true return value from lld.
   // Searching for LLD
-  const SmallVector<std::string> &toolNames{"iree-lld"};
+  const SmallVector<std::string> &toolNames{"lld"};
   std::string lldProgram = findTool(toolNames);
   if (lldProgram.empty()) {
     llvm::WithColor::error(llvm::errs(), name)
-        << "unable to find iree-lld.\n";
+        << "unable to find lld.\n";
     return {};
   }
   // Setting Up LLD Args
@@ -175,9 +175,9 @@ std::string createHsaco(const std::string isa, StringRef name) {
     lldProgram.erase( lldProgram.size() - 1 ); // erase the last character
   }
 #if defined(_WIN32)
-  llvm::StringRef lldName = "iree-lld.exe";
+  llvm::StringRef lldName = "lld.exe";
 #else
-  llvm::StringRef lldName = "iree-lld";
+  llvm::StringRef lldName = "lld";
 #endif // _WIN32
   std::vector<llvm::StringRef> lldArgs{
       lldName,   llvm::StringRef("-flavor"),
@@ -193,7 +193,7 @@ std::string createHsaco(const std::string isa, StringRef name) {
       0, &errorMessage);
   if (lldResult) {
     llvm::WithColor::error(llvm::errs(), name)
-        << "iree-lld execute fail:" << errorMessage << "Error Code:" << lldResult
+        << "lld execute fail:" << errorMessage << "Error Code:" << lldResult
         << "\n";
     return {};
   }
