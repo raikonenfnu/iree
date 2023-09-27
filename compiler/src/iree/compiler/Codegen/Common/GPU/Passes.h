@@ -112,6 +112,16 @@ std::unique_ptr<OperationPass<func::FuncOp>>
 createGPUVectorizationPass(bool generateContract = true,
                            int64_t maxVectorSize = 4096);
 
+
+/// Breaks down large vectors not natively supported by SPIR-V.
+std::unique_ptr<OperationPass<func::FuncOp>>
+createGPUBreakDownLargeVectorPass();
+
+/// Converts memref of scalar to memref of vector of efficent size. This will
+/// allow to convert memory accesses to vector load/store without
+/// having pointer bitcast.
+std::unique_ptr<OperationPass<ModuleOp>> createGPUVectorizeLoadStore();
+
 // Distributes vector ops to all threads/warps in a GPU workgroup.
 // `getWarpSize` is for deciding the warp size to use; it takes the
 // current function containing those vector ops as the argument.

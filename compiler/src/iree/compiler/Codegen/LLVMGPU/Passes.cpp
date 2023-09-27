@@ -399,7 +399,7 @@ void addGPUWarpReductionPassPipeline(OpPassManager &pm) {
   addBufferizePasses(nestedModulePM);
 
   nestedModulePM.addNestedPass<func::FuncOp>(
-      memref::createFoldMemRefAliasOpsPass());
+      memref::createFoldMemRefAliasOpsPass());      
   nestedModulePM.addNestedPass<func::FuncOp>(
       createOptimizeVectorTransferPass());
   nestedModulePM.addNestedPass<func::FuncOp>(
@@ -556,6 +556,20 @@ static void addLowerToLLVMGPUPasses(OpPassManager &pm, bool useROCM) {
   pm.addPass(memref::createFoldMemRefAliasOpsPass());
   pm.addPass(createIREEExpandStridedMetadataPass());
   pm.addPass(createEmulateNarrowTypePass());
+
+  // Turn scalar load/store from memrefs into vectorized ones if possible. This
+  // gives better memory access patterns, which is very important for perf.
+  pm.addPass(createGPUVectorizeLoadStore());
+  // Perform optimizations that need to across the scf.for region boundary.
+  pm.addNestedPass<func::FuncOp>(createForOpCanonicalizationPass());
+  // Perform various vector-level cross-op optimizations like load-store
+  // forwarding, shape casting and casting op cancelling.
+  pm.addNestedPass<func::FuncOp>(createOptimizeVectorTransferPass(false, false));
+  pm.addNestedPass<func::FuncOp>(createGPUBreakDownLargeVectorPass());
+  pm.addPass(createCanonicalizerPass());
+  pm.addPass(createCSEPass());
+
+
   pm.addPass(createLowerAffinePass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());

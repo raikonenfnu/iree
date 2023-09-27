@@ -46,6 +46,7 @@ iree_cc_library(
     "GPUPatterns.h"
     "Passes.h"
   SRCS
+    "GPUBreakDownLargeVector.cpp"
     "GPUCheckResourceUsage.cpp"
     "GPUDistribute.cpp"
     "GPUDistributeSharedMemoryCopy.cpp"
@@ -57,6 +58,7 @@ iree_cc_library(
     "GPUTensorTile.cpp"
     "GPUTileReduction.cpp"
     "GPUVectorization.cpp"
+    "GPUVectorizeLoadStore.cpp"
     "Passes.cpp"
     "VectorReductionToGPU.cpp"
     "WorkGroupSwizzle.cpp"

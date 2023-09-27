@@ -97,6 +97,19 @@ def GPUVectorization :
   ];
 }
 
+def GPUBreakDownLargeVector : Pass<"iree-codegen-gpu-breakdown-large-vector",
+                                     "func::FuncOp"> {
+  let summary = "Break down vectors not natively supported by SPIR-V";
+  let constructor = "mlir::iree_compiler::createGPUBreakDownLargeVectorPass()";
+}
+
+
+def GPUVectorizeLoadStore :
+    Pass<"iree-codegen-gpu-vectorize-load-store", "ModuleOp"> {
+  let summary = "Vectorize load/store of memrefs for better memory access";
+  let constructor = "mlir::iree_compiler::createGPUVectorizeLoadStore()";
+}
+
 def VectorReduceToGPU :
     Pass<"iree-codegen-reduction-to-gpu", "func::FuncOp"> {
   let summary = "Convert vector reduction to gpu ops.";

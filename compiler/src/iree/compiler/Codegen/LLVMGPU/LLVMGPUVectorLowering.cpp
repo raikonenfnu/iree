@@ -9,6 +9,9 @@
 #include "iree/compiler/Codegen/LLVMGPU/Passes.h"
 #include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Hoisting.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
@@ -113,6 +116,57 @@ struct LLVMGPUVectorLoweringPass
   }
   void runOnOperation() override {
     func::FuncOp funcOp = getOperation();
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- Original before anything---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
+    // Special peephole optimizations to clean up IR before further processing.
+    {
+      RewritePatternSet patterns(funcOp.getContext());
+      // Pull in patterns to shuffle broadcast/transpose ops around in order to
+      // cancel them or embed into contract ops. Embedding in the flexible
+      // contract ops will help to sustain the structure through various
+      // transformations.
+      vector::populateVectorReductionToContractPatterns(patterns);
+      // Pull in patterns to canonicalize transfer ops.
+      vector::populateVectorTransferPermutationMapLoweringPatterns(patterns);
+      // Fold consumer add ops into the contraction op itself.
+      vector::ContractionOp::getCanonicalizationPatterns(patterns, funcOp.getContext());
+      // Fold transpose ops if possible as we cannot unroll it later.
+      vector::TransposeOp::getCanonicalizationPatterns(patterns, funcOp.getContext());
+
+      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+        return signalPassFailure();
+      }
+    }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After peephole optimization ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
+    // Fold tensor.extract_slice/insert_slice ops into transfer ops. This helps
+    // to remove those tensor slice ops so that we can enable further vector op
+    // transformations.
+    {
+      RewritePatternSet patterns(funcOp.getContext());
+      vector::TransferReadOp::getCanonicalizationPatterns(patterns, funcOp.getContext());
+      vector::TransferWriteOp::getCanonicalizationPatterns(patterns, funcOp.getContext());
+      populateVectorTransferTensorSliceTransforms(patterns);
+
+      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+        return signalPassFailure();
+      }
+    }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After folding tensor extract/insert slice ops ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
 
     // Then unroll vectors to native vector size. We try to use 128-bit
     // vectors for memory access and 4/2/1 vector sizes for computation.
@@ -170,6 +224,35 @@ struct LLVMGPUVectorLoweringPass
       llvm::dbgs() << "\n\n";
     });
 
+    // Next perform hoisting. This would analyze transfer read/write ops into
+    // tensors and hoist them out of loop nests. So after it we have
+    // loop-carried vectors, not loop-carried tensors anymore.
+    linalg::hoistRedundantVectorTransfersOnTensor(funcOp);
+    linalg::hoistRedundantVectorTransfers(funcOp);
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After hoisting transfers ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
+    // Lower vector transfer permutation map.
+    {
+      RewritePatternSet patterns(funcOp.getContext());
+      vector::ExtractStridedSliceOp::getCanonicalizationPatterns(patterns,
+                                                                 funcOp.getContext());
+      vector::populateVectorTransferPermutationMapLoweringPatterns(patterns);
+      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+        return signalPassFailure();
+      }
+    }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After lowering transfer ops ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
     {
       // Lower high level vector operations like contract or multidim reduce ops
       // to lower level vector ops.
@@ -180,6 +263,12 @@ struct LLVMGPUVectorLoweringPass
         return signalPassFailure();
       }
     }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After gather lowering  ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
 
     {
       // Lower high level vector operations like contract or multidim reduce ops
@@ -204,6 +293,12 @@ struct LLVMGPUVectorLoweringPass
         return signalPassFailure();
       }
     }
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After lowering of various vector ops  ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
 
     RewritePatternSet vectorToLoopsPatterns(&getContext());
     VectorTransferToSCFOptions vectorToSCFOptions;
@@ -211,11 +306,17 @@ struct LLVMGPUVectorLoweringPass
     populateVectorToSCFConversionPatterns(vectorToLoopsPatterns,
                                           vectorToSCFOptions);
     memref::populateFoldMemRefAliasOpPatterns(vectorToLoopsPatterns);
-    vector::populateVectorTransferLoweringPatterns(vectorToLoopsPatterns);
+    // vector::populateVectorTransferLoweringPatterns(vectorToLoopsPatterns);
     if (failed(applyPatternsAndFoldGreedily(
             funcOp, std::move(vectorToLoopsPatterns)))) {
       return signalPassFailure();
     }
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- End of GPU Vectorization  ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
   }
 };
 } // namespace
