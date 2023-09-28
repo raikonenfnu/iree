@@ -30,10 +30,71 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 
+#define DEBUG_TYPE "iree-llvmgpu-convert-to-rocdl"
+
 namespace mlir {
 namespace iree_compiler {
 
 namespace {
+
+struct FastIntToHalfFloat final
+    : public OpRewritePattern<LLVM::UIToFPOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(LLVM::UIToFPOp op,
+                                PatternRewriter &rewriter) const override {
+    auto zextOp = op.getArg().getDefiningOp<LLVM::ZExtOp>();
+    if (!zextOp) return failure();
+    Value source = zextOp.getArg();
+
+    // Check Vector Types.
+    auto sourceVectorType = source.getType().dyn_cast<VectorType>();
+    auto dstVectorType = op.getResult().getType().dyn_cast<VectorType>();
+    if (!sourceVectorType) return failure();
+    if (!dstVectorType) return failure();
+
+    // Check elemType prerequisites.
+    if (!sourceVectorType.getElementType().isIntOrIndex()) return failure();
+    if (!dstVectorType.getElementType().isF16()) return failure();
+    int64_t srcElemBitwidth = sourceVectorType.getElementTypeBitWidth();
+    if (srcElemBitwidth != 4 && srcElemBitwidth != 8)
+      return failure();
+    if (sourceVectorType.getNumElements() != dstVectorType.getNumElements()) return failure();
+
+    // Algorithm based on https://arxiv.org/pdf/2211.10017.pdf:
+    //  a = 1024 | src : vector<8xi4>
+    //  b = zext a : vector<8xi16>
+    //  c = bitcast b : vector<8xi16>
+    //  d = c - 1024 : vector<8xi16>
+
+    // Step 1. zext
+    auto intHalfType = VectorType::get({sourceVectorType.getNumElements()},
+                                    rewriter.getIntegerType(16));
+    Value zextToHalfInt = rewriter.create<LLVM::ZExtOp>(op.getLoc(), intHalfType, source);
+
+    // Step 2. apply or mask.
+    auto maskVals = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), intHalfType,
+        DenseIntElementsAttr::get(intHalfType, IntegerAttr::get(rewriter.getIntegerType(16), 1024).getValue()));
+    Value orVal = rewriter.create<LLVM::OrOp>(op.getLoc(), intHalfType, maskVals, zextToHalfInt);
+
+    // Step 3. Bitcast
+    auto zextToHalfOp = rewriter.create<LLVM::BitcastOp>(op.getLoc(), dstVectorType, orVal);
+
+    // Step 4. Renormalize
+    // auto offsetBufferType = VectorType::get({dstVectorType.getNumElements()},
+    //                             rewriter.getF16Type());
+    // SmallVector<float16_t> offsetArray(dstVectorType.getNumElements());
+    // for (int32_t i = 0; i < dstVectorType.getNumElements(); i++) {
+    //   offsetArray[i] = 1024.0;
+    // }
+    auto offsetVals = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), dstVectorType,
+        DenseFPElementsAttr::get(dstVectorType, FloatAttr::get(dstVectorType.getElementType(), 1024.0).getValue()));
+    rewriter.replaceOpWithNewOp<LLVM::FSubOp>(op, dstVectorType, zextToHalfOp, offsetVals);
+    return success();
+  }
+};
 
 /// A pass that replaces all occurrences of GPU device operations with their
 /// corresponding ROCDL equivalent.
@@ -64,6 +125,13 @@ struct ConvertToROCDLPass : public ConvertToROCDLBase<ConvertToROCDLPass> {
           llvm_unreachable("unknown address space enum value");
           return 0;
         });
+
+      LLVM_DEBUG({
+        llvm::dbgs() << "--- Original ---\n";
+        m.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+        llvm::dbgs() << "\n\n";
+      });
+
     // Apply in-dialect lowering first. In-dialect lowering will replace ops
     // which need to be lowered further, which is not supported by a single
     // conversion pass.
@@ -90,6 +158,14 @@ struct ConvertToROCDLPass : public ConvertToROCDLBase<ConvertToROCDLPass> {
         return signalPassFailure();
       }
     }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After Vector-to-Vector transformation ---\n";
+      m.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
+
     {
       RewritePatternSet patterns(&getContext());
       populateGpuRewritePatterns(patterns);
@@ -97,6 +173,13 @@ struct ConvertToROCDLPass : public ConvertToROCDLBase<ConvertToROCDLPass> {
         return signalPassFailure();
       }
     }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After GPU Rewrite Patterns ---\n";
+      m.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
     {
       RewritePatternSet llvmPatterns(&getContext());
       populateLowerHALInterfaceOp(llvmPatterns);
@@ -117,7 +200,32 @@ struct ConvertToROCDLPass : public ConvertToROCDLBase<ConvertToROCDLPass> {
       if (failed(applyPartialConversion(m, target, std::move(llvmPatterns))))
         signalPassFailure();
     }
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After LLVM Conversion Rewrite Patterns ---\n";
+      m.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
+    // {
+    //   RewritePatternSet patterns(&getContext());
+    //   patterns.add<FastIntToHalfFloat>(&getContext());
+    //   if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns)))) {
+    //     return signalPassFailure();
+    //   }
+    // }
+    // LLVM_DEBUG({
+    //   llvm::dbgs() << "--- After Fast low-P int to half float ---\n";
+    //   m.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+    //   llvm::dbgs() << "\n\n";
+    // });
+
     ConvertToDynamicSharedMemory(m);
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After Converting do dynamic Shared Memory ---\n";
+      m.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
   }
 };
 
