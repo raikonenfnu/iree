@@ -67,6 +67,9 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertToNVVMPass();
 /// Performs the final conversion to ROCDL+LLVM dialect.
 std::unique_ptr<OperationPass<ModuleOp>> createConvertToROCDLPass();
 
+std::unique_ptr<OperationPass<func::FuncOp>>
+createLLVMGPUFastSubbyteExtendPass();
+
 /// Cast address space to generic in CallOp and FuncOp
 std::unique_ptr<OperationPass<ModuleOp>>
 createLLVMGPUCastAddressSpaceFunction();

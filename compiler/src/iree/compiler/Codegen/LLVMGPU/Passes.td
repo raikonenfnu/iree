@@ -47,6 +47,11 @@ def LLVMGPUCastAddressSpaceFunction :
   let constructor = "mlir::iree_compiler::createLLVMGPUCastAddressSpaceFunction()";
 }
 
+def LLVMGPUFastSubbyteExtend : Pass<"iree-llvmgpu-fast-subbyte-extend", "func::FuncOp"> {
+  let summary = "Pass to break down subbyte extui ops.";
+  let constructor = "mlir::iree_compiler::createLLVMGPUFastSubbyteExtendPass()";
+}
+
 // TODO: Bring the argument in line with the names used elsewhere.
 def LLVMGPULowerExecutableTarget :
     Pass<"iree-llvmgpu-lower-executable-target", "mlir::iree_compiler::IREE::HAL::ExecutableVariantOp"> {
