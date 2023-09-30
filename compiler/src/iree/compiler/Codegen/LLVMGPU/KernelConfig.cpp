@@ -33,6 +33,13 @@ static constexpr StringLiteral kCudaTarget = "cuda";
 static constexpr StringLiteral kRocmTarget = "rocm";
 namespace mlir {
 namespace iree_compiler {
+
+llvm::cl::opt<unsigned> clVectorFactor(
+  "iree-codegen-llvmgpu-vector-factor",
+  llvm::cl::desc(
+      "MLIR file containing a transform dialect specification to apply"),
+  llvm::cl::init(1));
+
 llvm::cl::opt<std::string> clGPUCodegenTransformDialectFileName(
     "iree-codegen-llvmgpu-use-transform-dialect",
     llvm::cl::desc(
@@ -861,18 +868,37 @@ static LogicalResult setWarpReductionConfig(func::FuncOp entryPoint,
 
 
   const unsigned largestLoadSizeInBits = 128;
-  unsigned vectorSize = largestLoadSizeInBits / bitWidth;
+  // TODO: Criteria 1: Get max 256 threads min 128 threads.
+  // TODO: dimSize /vectorSize needs to leave vectorSize larger and blockSize smaller.
+  // Ideally initial blockSize < 1024 so we can use single block.
+  // Shared memory: 65536
+  // dimSize / vectorSize % cudaWarpSize == 0
+  // max VectorSize
+  // min BlockSize
+  // Turns out number of inital blockSize doesnt matter, just need smallest blockSize.
+  // 128 -> 256 block Size
+  // blockSize = 256
+  // blockSize = dimSize / VectorSize
+  // VectorSize = dimSize / blockSize
+  // VectorSize = 28672 / blockSize
+  // Need to be power of 2s
+  unsigned vectorSize = clVectorFactor * largestLoadSizeInBits / bitWidth;
+  llvm::outs()<<"[Kernel Config]: original VectorSize:"<<vectorSize<<"\n";
   while ((dimSize / vectorSize) % cudaWarpSize != 0)
     vectorSize /= 2;
+  llvm::outs()<<"[Kernel Config]: VectorSize:"<<vectorSize<<"\n";
+  llvm::outs()<<"[Kernel Config]: dimSize:"<<dimSize<<"\n";
 
   // TODO: Add reduction tiling to handle larger reductions.
   const int64_t maxWorkgroupSize = 1024;
   int64_t groupSize = dimSize / vectorSize;
+  llvm::outs()<<"[Kernel Config]: init group size:"<<groupSize<<"\n";
   if (groupSize > maxWorkgroupSize) {
     groupSize = llvm::APIntOps::GreatestCommonDivisor(
                     {64, uint64_t(groupSize)}, {64, uint64_t(maxWorkgroupSize)})
                     .getZExtValue();
   }
+  llvm::outs()<<"[Kernel Config]: final group size:"<<groupSize<<"\n\n";
   std::array<int64_t, 3> workgroupSize = {groupSize, 1, 1};
   SmallVector<unsigned> partitionedLoops =
       cast<PartitionableLoopsInterface>(op.getOperation())
@@ -892,6 +918,7 @@ static LogicalResult setWarpReductionConfig(func::FuncOp entryPoint,
     reductionTileSizes[dim] = size.getSExtValue();
     if (i == reductionDims.size() - 1)
       reductionTileSizes[dim] *= vectorSize;
+    llvm::outs()<<"dim:"<<bound<<" tile:"<<reductionTileSizes[dim]<<"\n\n";
     remaingGroupSize /= size.getSExtValue();
   }
   TileSizesListType tileSizes;

@@ -48,12 +48,15 @@ static void populateVectorizationPatterns(RewritePatternSet &patterns,
     if (!linalgOp)
       return success();
     int64_t maxFlatVecSize = 1;
+    llvm::outs()<<linalgOp<<"\n";
     for (OpOperand &operand : linalgOp->getOpOperands()) {
       auto type = llvm::dyn_cast<ShapedType>(operand.get().getType());
       if (!type)
         continue;
       if (!type.hasStaticShape())
         return failure();
+      llvm::outs()<<"[GPU Vectorization]: Max flat vec size:"<<maxFlatVecSize<<"\n";
+      llvm::outs()<<"[GPU Vectorization]: Max numel:"<<type.getNumElements()<<"\n\n";
       maxFlatVecSize = std::max(maxFlatVecSize, type.getNumElements());
     }
     return success(maxFlatVecSize <= maxVectorSize);

@@ -166,14 +166,14 @@ struct LLVMGPUFastSubbyteExtendPass final
         return signalPassFailure();
       }
     }
-    {
-      RewritePatternSet patterns(context);
-      patterns.add<FastSubbyteExtend>(context);
-      if (failed(applyPatternsAndFoldGreedily(getOperation(),
-                                              std::move(patterns)))) {
-        return signalPassFailure();
-      }
-    }
+    // {
+    //   RewritePatternSet patterns(context);
+    //   patterns.add<FastSubbyteExtend>(context);
+    //   if (failed(applyPatternsAndFoldGreedily(getOperation(),
+    //                                           std::move(patterns)))) {
+    //     return signalPassFailure();
+    //   }
+    // }
   }
 };
 

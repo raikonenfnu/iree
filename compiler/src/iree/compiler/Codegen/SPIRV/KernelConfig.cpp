@@ -1259,7 +1259,7 @@ static LogicalResult setReductionConfig(const spirv::TargetEnv &targetEnv,
     return failure();
 
   // Let each thread handle `vectorSize` elements.
-  unsigned vectorSize = kMaxVectorNumBits / bitWidth;
+  unsigned vectorSize = 16 * kMaxVectorNumBits / bitWidth;
   while ((dimSize / vectorSize) % subgroupSize != 0)
     vectorSize /= 2;
 

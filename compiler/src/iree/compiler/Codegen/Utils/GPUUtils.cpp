@@ -523,6 +523,7 @@ Value emitGPUGroupReduction(Location loc, OpBuilder &builder, Value input,
   Value laneVal = reduceToSupportedWidth(loc, builder, input, kind);
   laneVal = warpReduction(loc, builder, laneVal, kind, warpSize, warpSize);
   // if we have more than one warp, reduce across warps.
+  llvm::outs()<<"Warp level size:"<<size<<"\n";
   if (size > warpSize) {
     uint32_t numWarp = size / warpSize;
     assert(numWarp <= warpSize &&
