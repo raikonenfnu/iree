@@ -11,6 +11,38 @@
 if(NOT IREE_TARGET_BACKEND_ROCM)
   return()
 endif()
+# Query for list of device libs to build.
+# get_directory_property(AMDGCN_LIB_LIST DIRECTORY ${IREE_SOURCE_DIR}/third_party/ROCm-Device-Libs DEFINITION AMDGCN_LIB_LIST)
+# set_target_properties(
+#   ${AMDGCN_LIB_LIST}
+#   PROPERTIES
+#     LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib/_platform_libs/rocm"
+#     # On Windows, DLLs go to the runtime directory and import
+#     # libraries go to the lib directory.
+#     # TODO: We should really be dumping binaries into bin/ not
+#     # tools/. This must line up with binaries built this way because
+#     # DLLs must be in the same directory as the binary.
+#     # See: https://github.com/openxla/iree/issues/11297
+#     RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/tools/_platform_libs/rocm"
+#     ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib/_platform_libs/rocm"
+# )
+
+# get_target_property(executable_output_dir oclc_abi_version_400 RUNTIME_OUTPUT_DIRECTORY)
+# message("FOUND TARGET IN ${executable_output_dir}")
+
+# get_target_property(target_type oclc_abi_version_400 TYPE)
+# get_target_property(sources_var oclc_abi_version_400 SOURCES)
+# get_target_property(compile_defs_var oclc_abi_version_400 COMPILE_DEFINITIONS)
+# get_property(link_libs_var TARGET oclc_abi_version_400 PROPERTY LOCATION)
+# if (TARGET oclc_abi_version_400)
+#   message("EXIST TARGET")
+#   # Print the retrieved information
+#   message("Source files for my_target: ${sources_var}")
+#   message("Include directories for my_target: ${include_dirs_var}")
+#   message("Compile definitions for my_target: ${compile_defs_var}")
+#   message("Linked libraries for my_target: ${link_libs_var}")
+# endif()
+# message("TARGET TYPE: ${target_Type}")
 
 iree_add_all_subdirs()
 
@@ -22,6 +54,8 @@ iree_cc_library(
   SRCS
     "ROCMTarget.cpp"
     "ROCMTargetUtils.cpp"
+  DATA
+    ${AMDGCN_LIB_LIST}
   DEPS
     LLVMAMDGPUCodeGen
     LLVMCore
