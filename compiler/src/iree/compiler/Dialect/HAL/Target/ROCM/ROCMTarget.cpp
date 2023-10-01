@@ -201,7 +201,7 @@ public:
     // Link module to Device Library
     if (clROCMLinkBC) {
       linkROCDLIfNecessary(llvmModule.get(), clROCMTargetChip,
-                           clROCMBitcodeDir);
+                           "/home/stanley/nod/iree-build-notrace/llvm-external-projects/device-libs/amdgcn/bitcode");
     }
 
     // Serialize hsaco kernel into the binary that we will embed in the
