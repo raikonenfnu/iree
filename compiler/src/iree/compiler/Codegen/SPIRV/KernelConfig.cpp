@@ -1201,6 +1201,10 @@ static LogicalResult setReductionConfig(const spirv::TargetEnv &targetEnv,
   if (reductionDims.empty())
     return failure();
 
+  if (reductionDims.size() != 1 && hasFusedTrailingOp(op)) {
+    return failure();
+  }
+
   // Make sure reduction dimensions are the innermost ones.
   int64_t numParallelDims = op.getNumParallelLoops();
   if (llvm::any_of(reductionDims, [&](int64_t reductionDim) {

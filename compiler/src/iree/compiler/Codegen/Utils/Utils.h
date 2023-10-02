@@ -210,6 +210,9 @@ void eraseDeadAllocAndStores(Operation *parentOp);
 // the inputs.
 bool hasFusedLeadingOp(linalg::LinalgOp rootOp);
 
+// Check if there is a fused linalg op present in the forward slice.
+bool hasFusedTrailingOp(linalg::LinalgOp rootOp);
+
 } // namespace iree_compiler
 } // namespace mlir
 

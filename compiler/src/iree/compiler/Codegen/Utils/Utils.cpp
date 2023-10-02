@@ -986,5 +986,18 @@ bool hasFusedLeadingOp(linalg::LinalgOp rootOp) {
   });
 }
 
+bool hasFusedTrailingOp(linalg::LinalgOp rootOp) {
+  ForwardSliceOptions options;
+  options.inclusive = true;
+
+  // Get the backward slice of each input operand and take the union.
+  SetVector<Operation *> forwardSlice;
+  getForwardSlice(rootOp.getOperation(), &forwardSlice, options);
+  return llvm::any_of(forwardSlice, [](Operation *op) {
+    return llvm::isa<linalg::LinalgOp>(op);
+  });
+}
+
+
 } // namespace iree_compiler
 } // namespace mlir
