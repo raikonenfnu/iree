@@ -39,6 +39,8 @@ void packSharedMemoryAlloc(func::FuncOp funcOp);
 void populatePrepareVectorToAMDMMAPatterns(RewritePatternSet &patterns,
                                            bool useMfma);
 
+void scheduleOperations(func::FuncOp funcOp);
+
 } // namespace iree_compiler
 } // namespace mlir
 

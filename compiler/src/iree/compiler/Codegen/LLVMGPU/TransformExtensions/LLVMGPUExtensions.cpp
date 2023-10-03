@@ -1555,5 +1555,16 @@ DiagnosedSilenceableFailure transform_dialect::FoldExtIntoContractionOp::applyTo
   return DiagnosedSilenceableFailure::success();
 }
 
+//===---------------------------------------------------------------------===//
+// ScheduleOp
+//===---------------------------------------------------------------------===//
+DiagnosedSilenceableFailure transform_dialect::ScheduleOp::applyToOne(
+    transform::TransformRewriter &rewriter, func::FuncOp target,
+    transform::ApplyToEachResultList &results,
+    transform::TransformState &state) {
+  scheduleOperations(target);
+  return DiagnosedSilenceableFailure::success();
+}
+
 #define GET_OP_CLASSES
 #include "iree/compiler/Codegen/LLVMGPU/TransformExtensions/LLVMGPUExtensionsOps.cpp.inc"
