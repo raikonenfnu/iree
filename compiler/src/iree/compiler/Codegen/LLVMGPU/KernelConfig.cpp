@@ -33,6 +33,12 @@ static constexpr StringLiteral kCudaTarget = "cuda";
 static constexpr StringLiteral kRocmTarget = "rocm";
 namespace mlir {
 namespace iree_compiler {
+llvm::cl::opt<unsigned> clGpuVectorFactor(
+"iree-codegen-llvmgpu-vector-factor",
+  llvm::cl::desc(
+      "MLIR file containing a transform dialect specification to apply"),
+  llvm::cl::init(1));
+
 llvm::cl::opt<std::string> clGPUCodegenTransformDialectFileName(
     "iree-codegen-llvmgpu-use-transform-dialect",
     llvm::cl::desc(
@@ -858,7 +864,11 @@ static LogicalResult setWarpReductionConfig(func::FuncOp entryPoint,
     return failure();
 
   const unsigned largestLoadSizeInBits = 128;
-  unsigned vectorSize = largestLoadSizeInBits / bitWidth;
+  unsigned vectorFactor = 1;
+  if (op.getNumReductionLoops() == 2) {
+    vectorFactor = clGpuVectorFactor;
+  }
+  unsigned vectorSize = vectorFactor * largestLoadSizeInBits / bitWidth;
   while ((dimSize / vectorSize) % cudaWarpSize != 0)
     vectorSize /= 2;
 

@@ -44,6 +44,13 @@ constexpr int kMaxVectorNumBits = 128;
 namespace mlir {
 namespace iree_compiler {
 
+llvm::cl::opt<unsigned> clSpirvVectorFactor(
+"iree-codegen-spirv-vector-factor",
+  llvm::cl::desc(
+      "MLIR file containing a transform dialect specification to apply"),
+  llvm::cl::init(1));
+
+
 llvm::cl::opt<std::string> clSPIRVTransformDialectFileName(
     "iree-spirv-use-transform-dialect",
     llvm::cl::desc(
@@ -1260,7 +1267,11 @@ static LogicalResult setReductionConfig(const spirv::TargetEnv &targetEnv,
     return failure();
 
   // Let each thread handle `vectorSize` elements.
-  unsigned vectorSize = kMaxVectorNumBits / bitWidth;
+  unsigned vectorFactor = 1;
+  if (op.getNumReductionLoops() == 2) {
+    vectorFactor = clSpirvVectorFactor;
+  }
+  unsigned vectorSize = vectorFactor * kMaxVectorNumBits / bitWidth;
   while ((dimSize / vectorSize) % subgroupSize != 0)
     vectorSize /= 2;
 
