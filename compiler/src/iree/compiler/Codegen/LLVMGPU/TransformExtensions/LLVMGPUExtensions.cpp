@@ -1566,5 +1566,24 @@ DiagnosedSilenceableFailure transform_dialect::ScheduleOp::applyToOne(
   return DiagnosedSilenceableFailure::success();
 }
 
+//===----------------------------------------------------------------------===//
+// OptimizeSharedMemoryReadsAndWritesOp
+//===----------------------------------------------------------------------===//
+
+DiagnosedSilenceableFailure
+transform_dialect::OptimizeSharedMemoryReadsAndWritesOp::applyToOne(
+    transform::TransformRewriter &rewriter, ::func::FuncOp funcOp,
+    ::mlir::transform::ApplyToEachResultList &results,
+    ::mlir::transform::TransformState &state) {
+  optimizeSharedMemoryReadsAndWrites(funcOp);
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform_dialect::OptimizeSharedMemoryReadsAndWritesOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  transform::onlyReadsHandle(getTarget(), effects);
+  transform::modifiesPayload(effects);
+}
+
 #define GET_OP_CLASSES
 #include "iree/compiler/Codegen/LLVMGPU/TransformExtensions/LLVMGPUExtensionsOps.cpp.inc"

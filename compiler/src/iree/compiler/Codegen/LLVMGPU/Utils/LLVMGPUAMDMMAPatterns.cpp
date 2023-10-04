@@ -191,6 +191,36 @@ struct VectorTransferReadToLoad final
   }
 };
 
+// Transform vector.transfer_writes to vector.extract + vector.store
+struct VectorTransferWriteToStore final
+    : public OpRewritePattern<vector::TransferWriteOp> {
+  using OpRewritePattern<vector::TransferWriteOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::TransferWriteOp op,
+                                PatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    Location loc = op.getLoc();
+    Value vector = op.getVector();
+    VectorType vectorType = dyn_cast<VectorType>(vector.getType());
+    ArrayRef<int64_t> vectorShape = vectorType.getShape();
+    Value source = op.getSource();
+    SmallVector<int64_t> extractionIndices;
+    bool extractionRequired = vectorShape.size() > 1;
+    if (extractionRequired) {
+      for (int i = 0; i < vectorShape.size() - 1; i++) {
+        assert(vectorShape[i] == 1);
+        extractionIndices.push_back(0);
+      }
+      vector = rewriter.create<vector::ExtractOp>(loc, vector, extractionIndices);
+    }
+    SmallVector<Value> indices(op.getIndices().begin(), op.getIndices().end());
+    // TODO: Handle additional transfer read attributes like permutation maps, masks etc.
+    rewriter.replaceOpWithNewOp<vector::StoreOp>(op, vector, source, indices);
+    return success();
+  }
+};
+
 // Transform gpu.barrier -> amdgpu.lds_barrier
 struct RewriteBarriers final
     : public OpRewritePattern<gpu::BarrierOp> {
@@ -214,7 +244,7 @@ struct RewriteBarriers final
 
 void populatePrepareVectorToAMDMMAPatterns(RewritePatternSet &patterns,
                                            bool useMfma) {
-  patterns.add<VectorTransferReadToLoad, RewriteBarriers>(
+  patterns.add<VectorTransferReadToLoad, VectorTransferWriteToStore, RewriteBarriers>(
       patterns.getContext());
 }
 

@@ -833,6 +833,17 @@ void replaceMemrefUsesAndPropagateType(RewriterBase &rewriter, Location loc,
           continue;
         }
 
+        // Special handling for dealloc
+        if (isa<memref::DeallocOp>(user)) {
+          if (auto subviewOp = replacementValue.getDefiningOp<memref::SubViewOp>()) {
+            Value source = subviewOp.getSource();
+            OpBuilder::InsertionGuard guard(rewriter);
+            rewriter.setInsertionPoint(user);
+            rewriter.replaceOpWithNewOp<memref::DeallocOp>(user, source);
+            continue;
+          }
+        }
+
         // Some uses might be replace-able but require creating new versions
         // of the users to pass verification.
         std::optional<SmallVector<Value>> nonTrivialUse =

@@ -41,6 +41,8 @@ void populatePrepareVectorToAMDMMAPatterns(RewritePatternSet &patterns,
 
 void scheduleOperations(func::FuncOp funcOp);
 
+void optimizeSharedMemoryReadsAndWrites(func::FuncOp funcOp);
+
 } // namespace iree_compiler
 } // namespace mlir
 
