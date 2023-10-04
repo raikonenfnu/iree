@@ -21,7 +21,7 @@ namespace mlir::iree_compiler {
 constexpr int64_t kSharedMemoryLineSizeBytes = 64;
 /// We optimize for 64bit accesses, but this can be made an argument in the
 /// future.
-constexpr int64_t kDefaultVectorSizeBits = 64;
+constexpr int64_t kDefaultVectorSizeBits = 128;
 
 static Operation::operand_range getIndices(Operation *op) {
   if (auto loadOp = dyn_cast<memref::LoadOp>(op))
