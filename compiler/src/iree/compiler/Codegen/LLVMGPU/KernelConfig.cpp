@@ -33,6 +33,12 @@ static constexpr StringLiteral kCudaTarget = "cuda";
 static constexpr StringLiteral kRocmTarget = "rocm";
 namespace mlir {
 namespace iree_compiler {
+  llvm::cl::opt<unsigned> clVectorFactor(
+"iree-codegen-llvmgpu-vector-factor",
+  llvm::cl::desc(
+      "MLIR file containing a transform dialect specification to apply"),
+  llvm::cl::init(1));
+
 llvm::cl::opt<std::string> clGPUCodegenTransformDialectFileName(
     "iree-codegen-llvmgpu-use-transform-dialect",
     llvm::cl::desc(
@@ -858,12 +864,32 @@ static LogicalResult setWarpReductionConfig(func::FuncOp entryPoint,
     return failure();
 
   const unsigned largestLoadSizeInBits = 128;
-  unsigned vectorSize = largestLoadSizeInBits / bitWidth;
+  unsigned vectorFactor = 1;
+  const int64_t maxWorkgroupSize = 1024;
+  if (op.getNumReductionLoops() == 2) {
+    unsigned minGroupsizeCandidate = UINT32_MAX;
+    for (int vectorFactorIter = 1; vectorFactorIter <= 32; vectorFactorIter *= 2) {
+      unsigned vectorCandidate = vectorFactorIter * largestLoadSizeInBits / bitWidth;
+      if ((dimSize / vectorCandidate) % cudaWarpSize != 0) continue;
+      int64_t groupSizeCandidate = dimSize / vectorCandidate;
+      if (groupSizeCandidate > maxWorkgroupSize) {
+        groupSizeCandidate = llvm::APIntOps::GreatestCommonDivisor(
+                        {64, uint64_t(groupSizeCandidate)}, {64, uint64_t(maxWorkgroupSize)})
+                        .getZExtValue();
+      }
+      // Skip candidate if not power of 2.
+      if (groupSizeCandidate == 0 || ceil(log2(groupSizeCandidate)) != floor(log2(groupSizeCandidate))) continue;
+      if (groupSizeCandidate < minGroupsizeCandidate) {
+        vectorFactor = vectorFactorIter;
+        minGroupsizeCandidate = groupSizeCandidate;
+      }
+    }
+  }
+  unsigned vectorSize = vectorFactor * largestLoadSizeInBits / bitWidth;
   while ((dimSize / vectorSize) % cudaWarpSize != 0)
     vectorSize /= 2;
 
   // TODO: Add reduction tiling to handle larger reductions.
-  const int64_t maxWorkgroupSize = 1024;
   int64_t groupSize = dimSize / vectorSize;
   if (groupSize > maxWorkgroupSize) {
     groupSize = llvm::APIntOps::GreatestCommonDivisor(

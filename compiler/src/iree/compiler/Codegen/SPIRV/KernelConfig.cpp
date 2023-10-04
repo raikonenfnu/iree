@@ -1260,13 +1260,36 @@ static LogicalResult setReductionConfig(const spirv::TargetEnv &targetEnv,
     return failure();
 
   // Let each thread handle `vectorSize` elements.
+  // unsigned vectorFactor = 1;
+  const int64_t maxWorkgroupSize =
+    targetEnv.getResourceLimits().getMaxComputeWorkgroupInvocations();
+  // if (op.getNumReductionLoops() == 2) {
+  //   unsigned minGroupsizeCandidate = UINT32_MAX;
+  //   for (int vectorFactorIter = 1; vectorFactorIter <= 32; vectorFactorIter *= 2) {
+  //     unsigned vectorCandidate = vectorFactorIter * kMaxVectorNumBits / bitWidth;
+  //     if ((dimSize / vectorCandidate) % subgroupSize != 0) continue;
+  //     int64_t groupSizeCandidate = dimSize / vectorCandidate;
+  //     if (groupSizeCandidate > maxWorkgroupSize) {
+  //       groupSizeCandidate = llvm::APIntOps::GreatestCommonDivisor(
+  //                       {64, uint64_t(groupSizeCandidate)}, {64, uint64_t(maxWorkgroupSize)})
+  //                       .getZExtValue();
+  //     }
+  //     // Skip candidate if not power of 2.
+  //     if (groupSizeCandidate == 0 || ceil(log2(groupSizeCandidate)) != floor(log2(groupSizeCandidate))) continue;
+  //     if (groupSizeCandidate < minGroupsizeCandidate) {
+  //       vectorFactor = vectorFactorIter;
+  //       minGroupsizeCandidate = groupSizeCandidate;
+  //       llvm::outs()<<"vec factor:"<<vectorFactor<<"\n";
+  //       llvm::outs()<<"vec candidate:"<<vectorCandidate<<"\n";
+  //       llvm::outs()<<"groupsize:"<<minGroupsizeCandidate<<"\n";
+  //     }
+  //   }
+  // }
   unsigned vectorSize = kMaxVectorNumBits / bitWidth;
   while ((dimSize / vectorSize) % subgroupSize != 0)
     vectorSize /= 2;
 
   // TODO: Add reduction tiling to handle larger reductions.
-  const int64_t maxWorkgroupSize =
-      targetEnv.getResourceLimits().getMaxComputeWorkgroupInvocations();
   int64_t groupSize = dimSize / vectorSize;
   if (groupSize > maxWorkgroupSize) {
     groupSize = GreatestCommonDivisor(APInt(64, uint64_t(groupSize)),
@@ -1280,6 +1303,8 @@ static LogicalResult setReductionConfig(const spirv::TargetEnv &targetEnv,
   // TODO(raikonenfnu): Add flexible num of warp reduce to handle more configs.
   // TT::CPU and TT::ARM_Valhall is not going through warp reduce.
   const int64_t numSubgroupsUsed = groupSize / subgroupSize;
+  llvm::outs()<<"num subgroupused:"<<numSubgroupsUsed<<"\n";
+  llvm::outs()<<"sg size:"<<subgroupSize<<"\n";
   if (numSubgroupsUsed > subgroupSize) {
     return failure();
   }
