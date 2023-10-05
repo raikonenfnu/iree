@@ -122,10 +122,10 @@ LLVMGPULayout::IterationSpace LLVMGPULayout::getCombinedIterationSpace() {
 }
 
 static LLVMGPULayout::IterationSpace createVectorStridedIterationSpace(LLVMGPULayout::IterationSpace iterationSpace,
-  uint32_t stride) {
+  uint32_t stride, uint32_t dim) {
   LLVMGPULayout::IterationSpace newIterationSpace;
   for (auto [name, iterator] : iterationSpace.iterators) {
-    if (isVectorDimension(name)) {
+    if (name == dim) {
       newIterationSpace.iterators[name] = LLVMGPULayout::Iterator(iterator.begin, iterator.end, stride);
     } else {
       newIterationSpace.iterators[name] = iterator;
@@ -134,13 +134,13 @@ static LLVMGPULayout::IterationSpace createVectorStridedIterationSpace(LLVMGPULa
   return newIterationSpace;
 }
 
-LLVMGPULayout::IterationSpace LLVMGPULayout::getVectorStridedCombinedIterationSpace(uint32_t stride) {
+LLVMGPULayout::IterationSpace LLVMGPULayout::getVectorStridedCombinedIterationSpace(uint32_t stride, uint32_t dim) {
   assert(layout.size() == 2);
   auto isNotLaneDimension = [&](Dimension name) { return !isLaneDimension(name); };
   auto rowIterationSpace = getIterationSpace(0, isNotLaneDimension);
-  rowIterationSpace = createVectorStridedIterationSpace(rowIterationSpace, stride);
+  rowIterationSpace = createVectorStridedIterationSpace(rowIterationSpace, stride, dim);
   auto colIterationSpace = getIterationSpace(1, isNotLaneDimension);
-  colIterationSpace = createVectorStridedIterationSpace(colIterationSpace, stride);
+  colIterationSpace = createVectorStridedIterationSpace(colIterationSpace, stride, dim);
   return rowIterationSpace.combine(colIterationSpace);
 }
 
@@ -176,21 +176,45 @@ SmallVector<int64_t> LLVMGPULayout::getMappedVectorShape() {
   return shape;
 }
 
+// Get the offset into the mapped vector corresponding to the incoming iterator.
+// The returned offsets will always be the same shape as the mapped vector.
 SmallVector<int64_t>
 LLVMGPULayout::getMappedVectorOffset(IterationSpace::iteratorType &iterator) {
-  SmallVector<int64_t> offset(iterator.size(), 0);
+  SmallVector<int64_t> offset(vectorMapping.size(), 0);
   for (int i = 0; i < vectorMapping.size(); i++) {
+    // Vector mappings could consist of multiple labels, for example (vx, vy)
+    // In that case, we map v = vy  * sizeof(vx) + vx
+    int64_t stride{1};
     for (auto label : vectorMapping[i]) {
       for (auto layoutState : layout) {
         for (auto [name, size] : layoutState) {
           if ((name == label) && (iterator.contains(name))) {
-            offset[i] = iterator[name].current + offset[i] * size;
+            offset[i] = iterator[name].current * stride + offset[i];
+            stride = size;
           }
         }
       }
     }
   }
   return offset;
+}
+
+// Get the offset into the mapped vector corresponding to the incoming iterator.
+// The offsets are projected onto the iterator. For example, if we have a vector
+// mapping (batchx, batchy, vecx) and the iterator is (batchx, batchy), then
+// we return an vector containing the offsets for (batchx, batchy).
+SmallVector<int64_t>
+LLVMGPULayout::getIteratorProjectedMappedVectorOffset(IterationSpace::iteratorType &iterator) {
+  SmallVector<int64_t> offset = getMappedVectorOffset(iterator);
+  SmallVector<int64_t> projectedOffset;
+  for (int i = 0; i < vectorMapping.size(); i++) {
+    for (auto label : vectorMapping[i]) {
+      if (iterator.contains(label)) {
+        projectedOffset.push_back(offset[i]);
+      }
+    }
+  }
+  return projectedOffset;
 }
 
 // Moves the iterator forward.

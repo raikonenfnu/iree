@@ -187,7 +187,7 @@ distributeTransferReads(vector::TransferReadOp readOp, layoutMapType &layoutMap,
             loc, element, vector, layout.getMappedVectorOffset(iterator),
             SmallVector<int64_t>{1});
     };
-    rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(numElements);
+    rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(numElements, Dim::VECTORX);
   } else {
     loadFromMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -237,7 +237,7 @@ static LogicalResult distributeTransferWrites(
                        writeOp.getPermutationMap(), loc, rewriter);
         rewriter.create<vector::StoreOp>(loc, result, source, indices);
     };
-    rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(numElements);
+    rowColIterationSpace = layout.getVectorStridedCombinedIterationSpace(numElements, Dim::VECTORX);
   } else {
     storeToMemref =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
@@ -297,7 +297,7 @@ static LogicalResult distributeContracts(vector::ContractionOp contractOp,
   auto createContract =
       [&](LLVMGPULayout::IterationSpace::iteratorType &iterator) {
         SmallVector<int64_t> offset =
-            resultLayout.getMappedVectorOffset(iterator);
+            resultLayout.getIteratorProjectedMappedVectorOffset(iterator);
         Value dMatrix = rewriter.create<vector::ExtractOp>(
             loc, valueMapping.at(acc), offset);
         if (resultLayout.encodeFn) {
@@ -533,7 +533,7 @@ LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
   layoutMapType layoutMap;
   std::shared_ptr<LLVMGPUHWConfig> hwConfig;
   if (useAMDMFMA) {
-    hwConfig = std::make_shared<AMDMFMAConfig>(AMDMFMAConfig::MFMAType::F32_16X16X16_F16, LLVMGPULayout::ContractType::MMT, 64);
+    hwConfig = std::make_shared<AMDMFMAConfig>(AMDMFMAConfig::MFMAType::F32_32x32x8_F16, LLVMGPULayout::ContractType::MMT, 64);
   } else {
     hwConfig = std::make_shared<AMDWMMAConfig>(AMDWMMAConfig::WMMAType::F16_16X16X16_F16, LLVMGPULayout::ContractType::MMT, 32);
   }

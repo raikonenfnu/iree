@@ -50,7 +50,8 @@ struct AMDWMMAConfig : public LLVMGPUHWConfig {
 // https://gpuopen.com/learn/amd-lab-notes/amd-lab-notes-matrix-cores-readme/
 struct AMDMFMAConfig : public LLVMGPUHWConfig {
   enum class MFMAType {
-    F32_16X16X16_F16
+    F32_16X16X16_F16,
+    F32_32x32x8_F16
   };
   AMDMFMAConfig(MFMAType mfmaType, LLVMGPULayout::ContractType contractType, uint32_t warpSize) :
     LLVMGPUHWConfig(contractType), mfmaType(mfmaType), warpSize(warpSize) {}

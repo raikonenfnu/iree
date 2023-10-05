@@ -194,6 +194,7 @@ Value AMDWMMAConfig::computeMMA(Value a, Value b, Value c, Location loc, OpBuild
 bool AMDMFMAConfig::verifyOperandTypes(Value a, Value b, Value c, Value d) {
   switch (mfmaType) {
     case MFMAType::F32_16X16X16_F16:
+    case MFMAType::F32_32x32x8_F16:
         return hasF16Type(a) && hasF16Type(b) && hasF32Type(c) && hasF32Type(d);
   }
   return false;
@@ -204,15 +205,47 @@ LLVMGPULayout AMDMFMAConfig::getLayout(MatrixType matrixType, Value matrix) {
   ArrayRef<int64_t> matrixShape = type.getShape();
   switch (mfmaType) {
     case MFMAType::F32_16X16X16_F16:
+    case MFMAType::F32_32x32x8_F16:
         return createMFMALayout(matrixType, matrixShape);
     default:
         return LLVMGPULayout();
   }
 }
 
+static std::tuple<uint32_t, uint32_t, uint32_t> getCanonicalDims(AMDMFMAConfig::MFMAType type) {
+  switch (type) {
+    case AMDMFMAConfig::MFMAType::F32_16X16X16_F16:
+      return {16, 16, 16};
+    case AMDMFMAConfig::MFMAType::F32_32x32x8_F16:
+      return {32, 32, 8};
+    default:
+      return {0, 0, 0};
+  }
+}
+
+static SmallVector<uint32_t> getCanonicalShape(uint32_t M, uint32_t N, uint32_t K, MatrixType matrixType,
+                                               LLVMGPULayout::ContractType contractType) {
+  SmallVector<uint32_t> shape;
+  switch (matrixType) {
+    case MatrixType::A:
+      shape = contractType == LLVMGPULayout::ContractType::MTM ? SmallVector<uint32_t>{K, M}
+                                                               : SmallVector<uint32_t>{M, K};
+      break;
+    case MatrixType::B:
+      shape = contractType == LLVMGPULayout::ContractType::MMT ? SmallVector<uint32_t>{N, K}
+                                                               : SmallVector<uint32_t>{K, N};
+      break;
+    default:
+      shape = {M, N};
+  }
+  return shape;
+}
+
 LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<int64_t> matrixShape) {
-  uint32_t batchRow = matrixShape[0] / 16;
-  uint32_t batchCol = matrixShape[1] / 16;
+  auto [M, N, K] = getCanonicalDims(mfmaType);
+  SmallVector<uint32_t> canonicalShape = getCanonicalShape(M, N, K, matrixType, contractType);
+  uint32_t batchRow = matrixShape[0] / canonicalShape[0];
+  uint32_t batchCol = matrixShape[1] / canonicalShape[1];
   LLVMGPULayout::layoutState colLayout, rowLayout;
   LLVMGPULayout::layoutType layout;
   DenseMap<uint32_t, SmallVector<Dimension>> vectorMapping{
@@ -236,14 +269,33 @@ LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<in
       matrixType = MatrixType::B;
     }
   }
-  if (matrixType == MatrixType::A) {
-    rowLayout[Dim::LANEX] = 16;
-    colLayout[Dim::LANEY] = 4;
-    colLayout[Dim::VECTORX] = 4;
-  } else {
-    colLayout[Dim::LANEX] = 16;
-    rowLayout[Dim::LANEY] = 4;
-    rowLayout[Dim::VECTORX] = 4;
+  if (mfmaType == AMDMFMAConfig::MFMAType::F32_16X16X16_F16) {
+    if (matrixType == MatrixType::A) {
+      rowLayout[Dim::LANEX] = 16;
+      colLayout[Dim::LANEY] = 4;
+      colLayout[Dim::VECTORX] = 4;
+    } else {
+      colLayout[Dim::LANEX] = 16;
+      rowLayout[Dim::LANEY] = 4;
+      rowLayout[Dim::VECTORX] = 4;
+    }
+  }
+  if (mfmaType == AMDMFMAConfig::MFMAType::F32_32x32x8_F16) {
+    if (matrixType == MatrixType::A) {
+      rowLayout[Dim::LANEX] = 32;
+      colLayout[Dim::LANEY] = 2;
+      colLayout[Dim::VECTORX] = 4;
+    } else if (matrixType == MatrixType::B) {
+      colLayout[Dim::LANEX] = 32;
+      rowLayout[Dim::LANEY] = 2;
+      rowLayout[Dim::VECTORX] = 4;
+    } else {
+      colLayout[Dim::LANEX] = 32;
+      rowLayout[Dim::VECTORY] = 4;
+      rowLayout[Dim::LANEY] = 2;
+      rowLayout[Dim::VECTORX] = 4;
+      vectorMapping = {{0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX, Dim::VECTORY}}};
+    }
   }
   layout = {rowLayout, colLayout};
   return createLayout(matrixType, layout, vectorMapping, contractType, maxTransferElements);
@@ -251,7 +303,12 @@ LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<in
 
 Value AMDMFMAConfig::computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) {
   uint32_t m, n, k, blks;
-  m = n = k = 16;
+  if (mfmaType == AMDMFMAConfig::MFMAType::F32_16X16X16_F16) {
+    m = n = k = 16;
+  } else if (mfmaType == AMDMFMAConfig::MFMAType::F32_32x32x8_F16) {
+    m = n = 32;
+    k = 8;
+  }
   blks = 1;
   return rewriter.create<amdgpu::MFMAOp>(loc, c.getType(), m, n, k, blks, a, b, c);
 }

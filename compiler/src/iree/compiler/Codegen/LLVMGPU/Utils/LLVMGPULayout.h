@@ -80,7 +80,7 @@ struct LLVMGPULayout {
 
   // Returns the column iteration space nested inside the row iteration space.
   IterationSpace getCombinedIterationSpace();
-  IterationSpace getVectorStridedCombinedIterationSpace(uint32_t stride);
+  IterationSpace getVectorStridedCombinedIterationSpace(uint32_t stride, uint32_t dim);
 
   // Returns the iteration space spanned by the batch dimensions of the rows and
   // cols.
@@ -102,6 +102,8 @@ struct LLVMGPULayout {
   SmallVector<int64_t> getMappedVectorShape();
   SmallVector<int64_t>
   getMappedVectorOffset(IterationSpace::iteratorType &iterator);
+  SmallVector<int64_t>
+  getIteratorProjectedMappedVectorOffset(IterationSpace::iteratorType &iterator);
 
   layoutType layout;
   // Where this layout is being derived from. If null, layout comes from
