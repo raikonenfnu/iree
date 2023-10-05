@@ -50,7 +50,7 @@ struct ConvertToROCDLPass : public ConvertToROCDLBase<ConvertToROCDLPass> {
 
     /// Customize the bitwidth used for the device side index computations.
     LowerToLLVMOptions options(m.getContext(), DataLayout(m));
-    options.overrideIndexBitwidth(64);
+    options.overrideIndexBitwidth(32);
     LLVMTypeConverter converter(m.getContext(), options);
     populateGpuMemorySpaceAttributeConversions(
         converter, [](gpu::AddressSpace space) {

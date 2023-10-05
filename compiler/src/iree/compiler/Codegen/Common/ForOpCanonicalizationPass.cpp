@@ -8,6 +8,7 @@
 #include "iree/compiler/Codegen/Common/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -155,15 +156,20 @@ struct PackForOpInductionVarVector final : public OpRewritePattern<scf::ForOp> {
 
   LogicalResult matchAndRewrite(scf::ForOp forOp,
                                 PatternRewriter &rewriter) const override {
-    VectorType v8f16Type = VectorType::get({8}, rewriter.getF16Type());
-    VectorType v4f32Type = VectorType::get({4}, rewriter.getF32Type());
 
     SmallVector<unsigned, 8> ivIndices;
+    VectorType inpUnpackedType, outPackedType;
     for (auto [index, iterArg] : llvm::enumerate(forOp.getRegionIterArgs())) {
-      if (iterArg.getType() == v8f16Type)
+      auto vecIterArgType = iterArg.getType().dyn_cast<VectorType>();
+      if (!vecIterArgType) continue;
+      const int64_t kPackedVectorSize = vecIterArgType.getNumElements();
+      if (vecIterArgType.getRank() != 1 || vecIterArgType.getElementType() != rewriter.getF16Type() || kPackedVectorSize > 32 || kPackedVectorSize % 8 != 0) continue;
+      inpUnpackedType = vecIterArgType;
+      outPackedType = VectorType::get({kPackedVectorSize / 2}, rewriter.getF32Type());
+      if (iterArg.getType() == inpUnpackedType)
         ivIndices.push_back(index);
     }
-    if (ivIndices.empty())
+    if (ivIndices.empty() || !inpUnpackedType || !outPackedType)
       return failure();
 
     // Bit cast all init values from v8f16 to v4f32.
@@ -171,7 +177,7 @@ struct PackForOpInductionVarVector final : public OpRewritePattern<scf::ForOp> {
     for (unsigned index : ivIndices) {
       Value oldValue = ivInitValues[index];
       ivInitValues[index] = rewriter.create<vector::BitCastOp>(
-          oldValue.getLoc(), v4f32Type, oldValue);
+          oldValue.getLoc(), outPackedType, oldValue);
     }
 
     // Create a new loop with the casted init values. This also creates
@@ -190,7 +196,7 @@ struct PackForOpInductionVarVector final : public OpRewritePattern<scf::ForOp> {
     for (unsigned index : ivIndices) {
       Value newIv = newLoop.getRegionIterArgs()[index];
       auto bitcastOp =
-          rewriter.create<vector::BitCastOp>(newIv.getLoc(), v8f16Type, newIv);
+          rewriter.create<vector::BitCastOp>(newIv.getLoc(), inpUnpackedType, newIv);
       // Replace all uses of the new induction variable with a bitcast. We need
       // to exclude the bitcast op itself given it also uses the induction
       // variable.
@@ -206,7 +212,7 @@ struct PackForOpInductionVarVector final : public OpRewritePattern<scf::ForOp> {
     for (unsigned index : ivIndices) {
       Value oldRet = ivRetValues[index];
       ivRetValues[index] = rewriter.create<vector::BitCastOp>(
-          oldRet.getLoc(), v4f32Type, oldRet);
+          oldRet.getLoc(), outPackedType, oldRet);
     }
     yieldOp->setOperands(ivRetValues);
 
@@ -219,7 +225,7 @@ struct PackForOpInductionVarVector final : public OpRewritePattern<scf::ForOp> {
     for (unsigned index : ivIndices) {
       Value oldRet = forRetValues[index];
       forRetValues[index] = rewriter.create<vector::BitCastOp>(
-          oldRet.getLoc(), v8f16Type, oldRet);
+          oldRet.getLoc(), inpUnpackedType, oldRet);
     }
 
     rewriter.replaceOp(forOp, forRetValues);
@@ -236,6 +242,8 @@ struct ForOpCanonicalizationPass
   void runOnOperation() override {
     func::FuncOp fn = getOperation();
     RewritePatternSet patterns(&getContext());
+    // vector::populateCastAwayVectorLeadingOneDimPatterns(patterns);
+    // vector::populateVectorInsertExtractStridedSliceDecompositionPatterns(patterns);
     patterns.insert<CanonicalizeForOpInductionVarShape,
                     PackForOpInductionVarVector>(fn.getContext());
     if (failed(applyPatternsAndFoldGreedily(fn, std::move(patterns)))) {
