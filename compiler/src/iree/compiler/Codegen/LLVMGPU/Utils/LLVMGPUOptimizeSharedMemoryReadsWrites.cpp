@@ -16,9 +16,8 @@
 
 namespace mlir::iree_compiler {
 
-/// The size of a shared memory line according to AMD documentation.
-/// https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/instinct-mi200-cdna2-instruction-set-architecture.pdf
-constexpr int64_t kSharedMemoryLineSizeBytes = 64;
+/// The size of a shared memory line according to AMD.
+constexpr int64_t kSharedMemoryLineSizeBytes = 128;
 /// We optimize for 64bit accesses, but this can be made an argument in the
 /// future.
 constexpr int64_t kDefaultVectorSizeBits = 128;
