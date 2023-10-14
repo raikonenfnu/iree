@@ -61,6 +61,26 @@ bool LLVMGPULayout::supportsVectorLoadsStores(uint32_t numElements) {
   return true;
 }
 
+bool LLVMGPULayout::hasLaneConflict(LLVMGPULayout &rhs) const {
+  DenseMap<Dimension, uint32_t> laneShapes;
+  for (auto perDimLayout : layout) {
+    for (auto [name, size] : perDimLayout) {
+      if (isLaneDimension(name)) {
+        laneShapes[name] = size;
+      }
+    }
+  }
+  for (auto perDimLayout : rhs.layout) {
+    for (auto [name, size] : laneShapes) {
+      if (perDimLayout.contains(name)) {
+        if (perDimLayout[name] != size)
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
 int32_t LLVMGPULayout::getDimension(int dim, Dimension name) {
   if (layout[dim].contains(name))
     return layout[dim][name];

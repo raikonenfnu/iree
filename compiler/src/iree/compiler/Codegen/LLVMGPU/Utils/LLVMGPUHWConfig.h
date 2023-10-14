@@ -17,6 +17,9 @@ struct LLVMGPUHWConfig {
   virtual LLVMGPULayout getLayout(MatrixType matrixType, Value matrix) {
     return LLVMGPULayout();
   }
+  virtual LLVMGPULayout getReadLayout(MatrixType matrixType, Value matrix) {
+    return LLVMGPULayout();
+  }
   virtual bool verifyOperandTypes(Value a, Value b, Value c, Value d) { return false; }
   bool verifyContract(vector::ContractionOp contractOp);
   SmallVector<int64_t> getIndices(MatrixType matrixType, int i, int j);
@@ -57,10 +60,12 @@ struct AMDMFMAConfig : public LLVMGPUHWConfig {
     LLVMGPUHWConfig(contractType), mfmaType(mfmaType), warpSize(warpSize) {}
 
   LLVMGPULayout getLayout(MatrixType matrixType, Value matrix) override;
+  LLVMGPULayout getReadLayout(MatrixType matrixType, Value matrix) override;
   bool verifyOperandTypes(Value a, Value b, Value c, Value d) override;
 
   LLVMGPULayout createMFMALayout(MatrixType matrixType,
-                                 ArrayRef<int64_t> matrixShape);
+                                 ArrayRef<int64_t> matrixShape,
+                                 int multiplier = 1);
   Value computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) override;
 
   MFMAType mfmaType;

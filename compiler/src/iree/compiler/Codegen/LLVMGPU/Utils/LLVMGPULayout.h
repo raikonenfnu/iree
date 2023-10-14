@@ -46,6 +46,25 @@ struct LLVMGPULayout {
   void print(llvm::StringRef str);
   bool supportsVectorLoadsStores(uint32_t numElements);
 
+  // TODO: This check does not enforce the ordering of the layout
+  bool operator==(LLVMGPULayout &rhs) const {
+    bool sameSize = layout.size() == rhs.layout.size();
+    if (!sameSize) return false;
+    for (int i = 0; i < layout.size(); i++) {
+      for (auto [key, value] : layout[i]) {
+        if (!rhs.layout[i].contains(key)) return false;
+        if (rhs.layout[i][key] != value) return false;
+      }
+    }
+    return true;
+  }
+
+  bool operator!=(LLVMGPULayout &rhs) const {
+    return !operator==(rhs);
+  }
+
+  bool hasLaneConflict(LLVMGPULayout &rhs) const;
+
   // Iterator-class that is used to represent the induction variable
   // for a single dimension.
   struct Iterator {

@@ -212,6 +212,19 @@ LLVMGPULayout AMDMFMAConfig::getLayout(MatrixType matrixType, Value matrix) {
   }
 }
 
+LLVMGPULayout AMDMFMAConfig::getReadLayout(MatrixType matrixType,
+                                           Value matrix) {
+  auto type = llvm::cast<ShapedType>(matrix.getType());
+  ArrayRef<int64_t> matrixShape = type.getShape();
+  switch (mfmaType) {
+    case MFMAType::F32_16X16X16_F16:
+    case MFMAType::F32_32x32x8_F16:
+        return createMFMALayout(matrixType, matrixShape, 2);
+    default:
+        return LLVMGPULayout();
+  }
+}
+
 static std::tuple<uint32_t, uint32_t, uint32_t> getCanonicalDims(AMDMFMAConfig::MFMAType type) {
   switch (type) {
     case AMDMFMAConfig::MFMAType::F32_16X16X16_F16:
@@ -241,18 +254,18 @@ static SmallVector<uint32_t> getCanonicalShape(uint32_t M, uint32_t N, uint32_t 
   return shape;
 }
 
-LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<int64_t> matrixShape) {
+// The multiplier allows for wider reads than what is possible just from the layout spec.
+// Right now the multiplier is only applied to the A and B matrices.
+LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<int64_t> matrixShape,
+                                              int multiplier) {
   auto [M, N, K] = getCanonicalDims(mfmaType);
   SmallVector<uint32_t> canonicalShape = getCanonicalShape(M, N, K, matrixType, contractType);
   uint32_t batchRow = matrixShape[0] / canonicalShape[0];
   uint32_t batchCol = matrixShape[1] / canonicalShape[1];
-  LLVMGPULayout::layoutState colLayout, rowLayout;
   LLVMGPULayout::layoutType layout;
   DenseMap<uint32_t, SmallVector<Dimension>> vectorMapping{
       {0, {Dim::BATCHY}}, {1, {Dim::BATCHX}}, {2, {Dim::VECTORX}}};
   // Layout is specified in reverse here, starting from batch.
-  colLayout[Dim::BATCHX] = batchCol;
-  rowLayout[Dim::BATCHY] = batchRow;
   uint32_t maxTransferElements{1};
   if (contractType == LLVMGPULayout::ContractType::MMT) {
     // B has a transposed layout, so should be the same as A
@@ -260,9 +273,12 @@ LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<in
       matrixType = MatrixType::A;
     }
     if ((matrixType == MatrixType::A) || (matrixType == MatrixType::B)) {
-      maxTransferElements = 4;
+      maxTransferElements = 4 * multiplier;
     }
   }
+  LLVMGPULayout::layoutState colLayout, rowLayout;
+  colLayout[Dim::BATCHX] = batchCol / multiplier;
+  rowLayout[Dim::BATCHY] = batchRow;
   if (contractType == LLVMGPULayout::ContractType::MTM) {
     // A has a transposed layout, so should be the same as B
     if (matrixType == MatrixType::A) {
@@ -273,7 +289,11 @@ LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<in
     if (matrixType == MatrixType::A) {
       rowLayout[Dim::LANEX] = 16;
       colLayout[Dim::LANEY] = 4;
-      colLayout[Dim::VECTORX] = 4;
+      colLayout[Dim::VECTORX] = maxTransferElements;
+    } else if (matrixType == MatrixType::B) {
+      colLayout[Dim::LANEX] = 16;
+      rowLayout[Dim::LANEY] = 4;
+      rowLayout[Dim::VECTORX] = maxTransferElements;
     } else {
       colLayout[Dim::LANEX] = 16;
       rowLayout[Dim::LANEY] = 4;
@@ -284,11 +304,11 @@ LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<in
     if (matrixType == MatrixType::A) {
       rowLayout[Dim::LANEX] = 32;
       colLayout[Dim::LANEY] = 2;
-      colLayout[Dim::VECTORX] = 4;
+      colLayout[Dim::VECTORX] = maxTransferElements;
     } else if (matrixType == MatrixType::B) {
       colLayout[Dim::LANEX] = 32;
       rowLayout[Dim::LANEY] = 2;
-      rowLayout[Dim::VECTORX] = 4;
+      rowLayout[Dim::VECTORX] = maxTransferElements;
     } else {
       colLayout[Dim::LANEX] = 32;
       rowLayout[Dim::VECTORY] = 4;

@@ -9,6 +9,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
+#include <numeric>
 
 #define DEBUG_TYPE "iree-llvmgpu-layout-vector-to-gpu"
 
@@ -34,6 +35,22 @@ static LLVMGPULayout &getLayout(layoutMapType &layoutMap, Value value) {
   return layoutMap[value][0];
 }
 
+// The value needs to have the target layout before op, so
+// we create a layout conflict op that resolves the layout differences
+// before the op.
+static void createLayoutConflictOp(Value value, LLVMGPULayout &targetLayout,
+                                   layoutMapType &layoutMap,
+                                   Operation *op) {
+  OpBuilder rewriter(op->getContext());
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(op);
+  vector::ShapeCastOp conflictOp = rewriter.create<vector::ShapeCastOp>(
+      op->getLoc(), value.getType(), value);
+  Value resolvedValue = conflictOp.getResult();
+  addToLayoutMap(resolvedValue, layoutMap, targetLayout);
+  value.replaceAllUsesExcept(resolvedValue, conflictOp);
+}
+
 LogicalResult setMMALayout(vector::ContractionOp contractOp,
                            layoutMapType &layoutMap, std::shared_ptr<LLVMGPUHWConfig> hwConfig) {
   Value a = contractOp.getLhs();
@@ -46,15 +63,47 @@ LogicalResult setMMALayout(vector::ContractionOp contractOp,
   SmallVector<Value> values{a, b, c, d};
   SmallVector<MatrixType> names{MatrixType::A, MatrixType::B, MatrixType::C, MatrixType::D};
   for (auto [name, value] : llvm::zip(names, values)) {
-    auto layout = hwConfig->getLayout(name, value);
-    addToLayoutMap(value, layoutMap, layout);
+    auto newLayout = hwConfig->getLayout(name, value);
+    if (!layoutMap.contains(value)) {
+      addToLayoutMap(value, layoutMap, newLayout);
+      continue;
+    }
+    auto existingLayout = getLayout(layoutMap, value);
+    if (newLayout != existingLayout) {
+      createLayoutConflictOp(value, newLayout, layoutMap, contractOp);
+    }
   }
+  return success();
+}
+
+LogicalResult setReadLayout(vector::TransferReadOp readOp, layoutMapType &layoutMap,
+                            std::shared_ptr<LLVMGPUHWConfig> hwConfig) {
+  Value vector = readOp.getVector();
+  MatrixType name{MatrixType::C};
+  for (Operation *user : vector.getUsers()) {
+    if (auto contractOp = dyn_cast<vector::ContractionOp>(user)) {
+      if (vector == contractOp.getLhs()) {
+        name = MatrixType::A;
+        break;
+      }
+      if (vector == contractOp.getRhs()) {
+        name = MatrixType::B;
+        break;
+      }
+    }
+  }
+  auto layout = hwConfig->getReadLayout(name, vector);
+  addToLayoutMap(vector, layoutMap, layout);
   return success();
 }
 
 LogicalResult setLayouts(layoutMapType &layoutMap, func::FuncOp funcOp,
                          std::shared_ptr<LLVMGPUHWConfig> hwConfig) {
   WalkResult result = funcOp.walk([&](Operation *op) {
+    if (auto readOp = dyn_cast<vector::TransferReadOp>(op)) {
+      if (failed(setReadLayout(readOp, layoutMap, hwConfig)))
+        return WalkResult::interrupt();
+    }
     if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
       if (failed(setMMALayout(contractOp, layoutMap, hwConfig)))
         return WalkResult::interrupt();
@@ -450,6 +499,73 @@ static LogicalResult distributeYield(scf::YieldOp yieldOp,
   return success();
 }
 
+// Given an input vector of shape B1 x B2 x ... x V1 x V2 x ...
+// we need to reshape it to B3 x B4 x ... x V3 x V4 x ...
+// where B* are the batch dimensions, V* are the vector dimensions
+static Value reshapeVector(Value src, LLVMGPULayout &currentLayout,
+                          LLVMGPULayout &targetLayout, Type elementType,
+                          Location loc, RewriterBase &rewriter) {
+  auto targetShape = targetLayout.getMappedVectorShape();
+  auto newVectorType = VectorType::get(targetShape, elementType);
+  Value newVector = rewriter.create<arith::ConstantOp>(loc, newVectorType,
+    rewriter.getZeroAttr(newVectorType));
+
+  auto currentShape = currentLayout.getMappedVectorShape();
+  int64_t innermostDim = targetShape.size() - 1;
+  int64_t step = std::min(targetShape[innermostDim], currentShape[innermostDim]);
+  // TODO: Assumes VECTORX is the innermost dim
+  auto srcIterator = currentLayout.getVectorStridedCombinedIterationSpace(step, Dim::VECTORX);
+  auto targetIterator = targetLayout.getVectorStridedCombinedIterationSpace(step, Dim::VECTORX);
+  do {
+    auto srcOffset = currentLayout.getMappedVectorOffset(srcIterator.iterators);
+    SmallVector<int64_t> sliceSize(srcOffset.size(), 1);
+    SmallVector<int64_t> sliceStride(srcOffset.size(), 1);
+    sliceSize[sliceSize.size() - 1] = step;
+    Value slice = rewriter.create<vector::ExtractStridedSliceOp>(loc, src, srcOffset, sliceSize, sliceStride);
+    auto targetOffset = targetLayout.getMappedVectorOffset(targetIterator.iterators);
+    newVector = rewriter.create<vector::InsertStridedSliceOp>(loc, slice, newVector, targetOffset, sliceStride);
+  } while (!srcIterator.next() && !targetIterator.next());
+  return newVector;
+}
+
+static LogicalResult distributeLayoutConflicts(vector::ShapeCastOp conflictOp,
+                                               layoutMapType &layoutMap,
+                                               DenseMap<Value, Value> &valueMapping,
+                                               RewriterBase &rewriter) {
+  OpBuilder::InsertionGuard g(rewriter);
+  rewriter.setInsertionPoint(conflictOp);
+  Value source = conflictOp.getSource();
+  if (!layoutMap.contains(source) || !valueMapping.contains(source))
+    return failure();
+  auto currentLayout = getLayout(layoutMap, source);
+
+  Value result = conflictOp.getResult();
+  if (!layoutMap.contains(result))
+    return failure();
+  auto targetLayout = getLayout(layoutMap, result);
+
+  // Determine if there is a lane conflict (not supported right now)
+  if (currentLayout.hasLaneConflict(targetLayout))
+    return failure();
+
+  auto currentVectorShape = currentLayout.getMappedVectorShape();
+  auto targetVectorShape = targetLayout.getMappedVectorShape();
+  if (currentVectorShape.size() != targetVectorShape.size())
+    return failure();
+  auto numElements = [](ArrayRef<int64_t> vector) {
+    return std::reduce(vector.begin(), vector.end(), 1, std::multiplies<int64_t>());
+  };
+  // Need the same number of elements so we can do a reshape
+  if (numElements(currentVectorShape) != numElements(targetVectorShape))
+    return failure();
+  Type elementType = llvm::cast<VectorType>(result.getType()).getElementType();
+  Value newVector = reshapeVector(valueMapping.at(source), currentLayout, targetLayout,
+                                  elementType, conflictOp.getLoc(), rewriter);
+  valueMapping.try_emplace(result, newVector);
+
+  return success();
+}
+
 LogicalResult doVectorDistribution(layoutMapType &layoutMap,
                                    SmallVector<Operation *> &operations,
                                    DenseMap<Value, Value> &valueMapping,
@@ -488,6 +604,10 @@ LogicalResult doVectorDistribution(layoutMapType &layoutMap,
       if (failed(distributeYield(yieldOp, layoutMap, valueMapping, rewriter)))
         return failure();
     }
+    if (auto conflictOp = dyn_cast<vector::ShapeCastOp>(op)) {
+      if (failed(distributeLayoutConflicts(conflictOp, layoutMap, valueMapping, rewriter)))
+        return failure();
+    }
   }
   return success();
 }
@@ -495,7 +615,7 @@ LogicalResult doVectorDistribution(layoutMapType &layoutMap,
 LogicalResult eraseOps(SmallVector<Operation *> opsToErase,
                        RewriterBase &rewriter) {
   for (int i = opsToErase.size() - 1; i >= 0; i--) {
-    if (isa<vector::TransferReadOp, vector::TransferWriteOp,
+    if (isa<vector::TransferReadOp, vector::TransferWriteOp, vector::ShapeCastOp,
             vector::ContractionOp, scf::ForOp, scf::YieldOp>(opsToErase[i])) {
       LLVM_DEBUG({
         llvm::dbgs() << "Erasing op = ";
@@ -537,12 +657,12 @@ LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
   } else {
     hwConfig = std::make_shared<AMDWMMAConfig>(AMDWMMAConfig::WMMAType::F16_16X16X16_F16, LLVMGPULayout::ContractType::MMT, 32);
   }
-  SmallVector<Operation *> operationsToLower;
-  collectOperations(funcOp, operationsToLower);
   if (failed(setLayouts(layoutMap, funcOp, hwConfig))) {
     llvm::dbgs() << "Failed to set layouts ...\n";
     return failure();
   }
+  SmallVector<Operation *> operationsToLower;
+  collectOperations(funcOp, operationsToLower);
   if (failed(propagateLayouts(layoutMap, funcOp))) {
     llvm::dbgs() << "Failed to propagate layouts ...\n";
     return failure();
