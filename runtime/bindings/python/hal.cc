@@ -33,6 +33,17 @@ Returns:
   HalBuffer.
 )";
 
+static const char kHalDeviceQueueBarrier[] =
+    R"(Enqueues a barrier on queue. Waits for wait_semaphores, and
+       signals signal_semaphores when reached.
+
+Args:
+  wait_semaphores: `List[Tuple[HalSemaphore, int]]` of semaphore values or
+    a HalFence. The allocation will be made once these semaphores are
+    satisfied.
+  signal_semaphores: Semaphores/Fence to signal.
+)";
+
 static const char kHalDeviceQueueDealloca[] =
     R"(Deallocates a queue-ordered transient buffer.
 
@@ -418,6 +429,59 @@ HalBuffer HalDevice::QueueAlloca(uint64_t allocation_size,
                      allocation_size, &out_buffer),
                  "allocating memory on queue");
   return HalBuffer::StealFromRawPtr(out_buffer);
+}
+
+void HalDevice::QueueBarrier(py::handle wait_semaphores,
+                             py::handle signal_semaphores) {
+  iree_hal_semaphore_list_t wait_list;
+  iree_hal_semaphore_list_t signal_list;
+
+  // Wait list.
+  if (py::isinstance<HalFence>(wait_semaphores)) {
+    wait_list = iree_hal_fence_semaphore_list(
+        py::cast<HalFence*>(wait_semaphores)->raw_ptr());
+  } else {
+    size_t wait_count = py::len(wait_semaphores);
+    wait_list = {
+        wait_count,
+        /*semaphores=*/
+        static_cast<iree_hal_semaphore_t**>(
+            alloca(sizeof(iree_hal_semaphore_t*) * wait_count)),
+        /*payload_values=*/
+        static_cast<uint64_t*>(alloca(sizeof(uint64_t) * wait_count)),
+    };
+    for (size_t i = 0; i < wait_count; ++i) {
+      py::tuple pair = wait_semaphores[i];
+      wait_list.semaphores[i] = py::cast<HalSemaphore*>(pair[0])->raw_ptr();
+      wait_list.payload_values[i] = py::cast<uint64_t>(pair[1]);
+    }
+  }
+
+  // Signal list.
+  if (py::isinstance<HalFence>(signal_semaphores)) {
+    signal_list = iree_hal_fence_semaphore_list(
+        py::cast<HalFence*>(signal_semaphores)->raw_ptr());
+  } else {
+    size_t signal_count = py::len(signal_semaphores);
+    signal_list = {
+        signal_count,
+        /*semaphores=*/
+        static_cast<iree_hal_semaphore_t**>(
+            alloca(sizeof(iree_hal_semaphore_t*) * signal_count)),
+        /*payload_values=*/
+        static_cast<uint64_t*>(alloca(sizeof(uint64_t) * signal_count)),
+    };
+    for (size_t i = 0; i < signal_count; ++i) {
+      py::tuple pair = signal_semaphores[i];
+      signal_list.semaphores[i] = py::cast<HalSemaphore*>(pair[0])->raw_ptr();
+      signal_list.payload_values[i] = py::cast<uint64_t>(pair[1]);
+    }
+  }
+
+  CheckApiStatus(
+      iree_hal_device_queue_barrier(raw_ptr(), IREE_HAL_QUEUE_AFFINITY_ANY,
+                                    wait_list, signal_list),
+      "Enqueues a barrier on queue");
 }
 
 void HalDevice::QueueDealloca(HalBuffer& buffer, py::handle wait_semaphores,
@@ -930,6 +994,9 @@ void SetupHalBindings(nanobind::module_ m) {
       .def("queue_alloca", &HalDevice::QueueAlloca, py::arg("allocation_size"),
            py::arg("wait_semaphores"), py::arg("signal_semaphores"),
            kHalDeviceQueueAlloca)
+      .def("queue_barrier", &HalDevice::QueueBarrier,
+           py::arg("wait_semaphores"), py::arg("signal_semaphores"),
+           kHalDeviceQueueBarrier)
       .def("queue_dealloca", &HalDevice::QueueDealloca, py::arg("buffer"),
            py::arg("wait_semaphores"), py::arg("signal_semaphores"),
            kHalDeviceQueueDealloca)
@@ -1109,7 +1176,11 @@ void SetupHalBindings(nanobind::module_ m) {
                        "signaling semaphore");
       });
 
-  py::class_<HalFence>(m, "HalFence")
+  auto hal_fence = py::class_<HalFence>(m, "HalFence");
+  VmRef::BindRefProtocol(hal_fence, iree_hal_fence_type,
+                         iree_hal_fence_retain_ref, iree_hal_fence_deref,
+                         iree_hal_fence_isa);
+  hal_fence
       .def(
           "__init__",
           [](HalFence* new_fence, iree_host_size_t capacity) {

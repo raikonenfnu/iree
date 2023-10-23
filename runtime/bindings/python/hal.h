@@ -124,6 +124,7 @@ class HalDevice : public ApiRefCounted<HalDevice, iree_hal_device_t> {
   HalSemaphore CreateSemaphore(uint64_t initial_value);
   HalBuffer QueueAlloca(uint64_t allocation_size, py::handle wait_semaphores,
                         py::handle signal_semaphores);
+  void QueueBarrier(py::handle wait_semaphores, py::handle signal_semaphores);
   void QueueDealloca(HalBuffer& buffer, py::handle wait_semaphores,
                      py::handle signal_semaphores);
   void QueueExecute(py::handle command_buffers, py::handle wait_semaphores,
