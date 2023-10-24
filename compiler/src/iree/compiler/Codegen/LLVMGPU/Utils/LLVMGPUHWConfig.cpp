@@ -260,6 +260,8 @@ LLVMGPULayout AMDMFMAConfig::createMFMALayout(MatrixType matrixType, ArrayRef<in
                                               int multiplier) {
   auto [M, N, K] = getCanonicalDims(mfmaType);
   SmallVector<uint32_t> canonicalShape = getCanonicalShape(M, N, K, matrixType, contractType);
+  llvm::outs()<<"OG matrix shape"<<matrixShape[0]<<","<<matrixShape[1]<<"\n";
+  llvm::outs()<<"canon matrix shape"<<canonicalShape[0]<<","<<canonicalShape[1]<<"\n\n";
   uint32_t batchRow = matrixShape[0] / canonicalShape[0];
   uint32_t batchCol = matrixShape[1] / canonicalShape[1];
   LLVMGPULayout::layoutType layout;

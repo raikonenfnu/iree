@@ -650,10 +650,17 @@ static void collectOperations(Operation *rootOp,
 LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
                                             func::FuncOp funcOp,
                                             bool useAMDMFMA) {
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- Initial IR ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
   layoutMapType layoutMap;
   std::shared_ptr<LLVMGPUHWConfig> hwConfig;
   if (useAMDMFMA) {
-    hwConfig = std::make_shared<AMDMFMAConfig>(AMDMFMAConfig::MFMAType::F32_32x32x8_F16, LLVMGPULayout::ContractType::MMT, 64);
+    hwConfig = std::make_shared<AMDMFMAConfig>(AMDMFMAConfig::MFMAType::F32_16X16X16_F16, LLVMGPULayout::ContractType::MMT, 64);
   } else {
     hwConfig = std::make_shared<AMDWMMAConfig>(AMDWMMAConfig::WMMAType::F16_16X16X16_F16, LLVMGPULayout::ContractType::MMT, 32);
   }
@@ -661,22 +668,50 @@ LogicalResult convertVectorToGPUUsingLayout(RewriterBase &rewriter,
     llvm::dbgs() << "Failed to set layouts ...\n";
     return failure();
   }
+  LLVM_DEBUG({
+    llvm::dbgs() << "--- After Setting layouts ---\n";
+    funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+    llvm::dbgs() << "\n\n";
+  });
+
   SmallVector<Operation *> operationsToLower;
   collectOperations(funcOp, operationsToLower);
   if (failed(propagateLayouts(layoutMap, funcOp))) {
     llvm::dbgs() << "Failed to propagate layouts ...\n";
     return failure();
   }
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "--- After propagating layouts ---\n";
+    funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+    llvm::dbgs() << "\n\n";
+  });
+
   DenseMap<Value, Value> valueMapping;
   if (failed(doVectorDistribution(layoutMap, operationsToLower, valueMapping,
                                   hwConfig, rewriter))) {
     llvm::dbgs() << "Failed to do vector distribution ...\n";
     return failure();
   }
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "--- After vector distribution ---\n";
+    funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+    llvm::dbgs() << "\n\n";
+  });
+
+
   if (failed(eraseOps(operationsToLower, rewriter))) {
     llvm::dbgs() << "Failed to erase ops ...\n";
     return failure();
   }
+
+  LLVM_DEBUG({
+    llvm::dbgs() << "--- After Erase Ops ---\n";
+    funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+    llvm::dbgs() << "\n\n";
+  });
+
   return success();
 }
 

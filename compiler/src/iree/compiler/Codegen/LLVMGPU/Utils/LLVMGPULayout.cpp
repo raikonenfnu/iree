@@ -61,6 +61,7 @@ bool LLVMGPULayout::supportsVectorLoadsStores(uint32_t numElements) {
   return true;
 }
 
+// e,g 4 Lanes have 8 elements, but want 8 lanes to have 8 elements.
 bool LLVMGPULayout::hasLaneConflict(LLVMGPULayout &rhs) const {
   DenseMap<Dimension, uint32_t> laneShapes;
   for (auto perDimLayout : layout) {
