@@ -362,6 +362,14 @@ struct FusionOfTensorOpsPass
               return false;
             }
 
+            // Do not fuse producer collapse_shape op if src is from a global.
+            if (auto producerCollapseShapeOp =
+                    dyn_cast<tensor::CollapseShapeOp>(producer)) {
+              auto producerSrcOp =
+                  producerCollapseShapeOp.getSrc().getDefiningOp();
+              return producerSrcOp && !isa<Util::GlobalLoadOp>(producerSrcOp);
+            }
+
             // Do not fuse producer generic op if it has more than one user.
             if (auto producerGenericOp =
                     dyn_cast<linalg::GenericOp>(producer)) {

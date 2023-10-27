@@ -243,6 +243,44 @@ static bool isUnpackLikeOpViaExtractSliceOps(Operation *op) {
   return false;
 }
 
+/// Returns true if the operation is an generic op that represents dequant.
+/// In most cases we'd like to fuse dequant with it's producer, since it's
+/// mostly not usefuly by itself.
+//  Dequant variance: Has 2 (weights, scales) or 3 (weights, scales, zero
+//  points) Scale and init needs to be f16 or f32. While weight needs to be i4
+//  or i8.
+static bool isDequantLikeOp(Operation *op) {
+  auto genericOp = dyn_cast<linalg::GenericOp>(op);
+  if (!genericOp)
+    return false;
+  if (genericOp.getNumDpsInits() != 1)
+    return false;
+  if (genericOp.getNumDpsInputs() != 2 && genericOp.getNumDpsInputs() != 3)
+    return false;
+  auto inputs = genericOp.getInputs();
+  auto weight = inputs[0];
+  auto scales = inputs[1];
+  auto init = genericOp.getDpsInits()[0];
+  Type weightElType = getElementTypeOrSelf(weight.getType());
+  Type scaleElType = getElementTypeOrSelf(scales.getType());
+  Type initElType = getElementTypeOrSelf(init.getType());
+
+  // Scale and init needs to be of same element type.
+  if (scaleElType != initElType)
+    return false;
+  // Check weight is i4 or i8.
+  if (!weightElType.isInteger(4) && !weightElType.isInteger(8)) {
+    return false;
+  }
+  // Check scales is f16 or f32.
+  Type f32Type = Float32Type::get(op->getContext());
+  Type f16Type = Float16Type::get(op->getContext());
+  if (scaleElType != f32Type && scaleElType != f16Type) {
+    return false;
+  }
+  return true;
+}
+
 /// Since `iree_linalg_ext.set_encoding` doesnt have padding semantics a
 /// `tensor.pad` is introduced to get the shapes of the input and output to
 /// match. The `tensor.pad` -> `set_encoding` can be folded later on into a
@@ -510,6 +548,11 @@ isFusableWithConsumer(OpOperand &fusedOperand,
     return false;
   }
 
+  if (isDequantLikeOp(producer)) {
+    // TODO: Maybe check that consumer is gemv.
+    return true;
+  }
+
   if (isPackLikeOp(consumer)) {
     return isa<linalg::LinalgOp, tensor::PadOp>(producer);
   }
@@ -650,6 +693,11 @@ isFusableWithProducer(OpOperand &operand,
 
   if (!isa<linalg::LinalgOp>(consumer) || !isa<linalg::LinalgOp>(producer)) {
     return false;
+  }
+
+  if (isDequantLikeOp(producer)) {
+    // TODO: Maybe check that consumer is gemv.
+    return true;
   }
 
   auto consumerLinalgOp = cast<linalg::LinalgOp>(consumer);
