@@ -367,6 +367,7 @@ static iree_status_t iree_hal_rocm_direct_command_buffer_dispatch(
 
   // TODO(raikonenfnu): Currently using NULL stream, need to figure out way to
   // access proper stream from command buffer
+  printf("dispatching:%s\n", kernel_params.dispatch_name);
   ROCM_RETURN_IF_ERROR(
       command_buffer->context->syms,
       hipModuleLaunchKernel(
@@ -376,6 +377,11 @@ static iree_status_t iree_hal_rocm_direct_command_buffer_dispatch(
           command_buffer->current_descriptor, NULL),
       "hipModuleLaunchKernel");
 
+  printf("dispatch done\n");
+  printf("syncing start!\n");
+  ROCM_RETURN_IF_ERROR(command_buffer->context->syms, hipStreamSynchronize(0),
+                      "hipStreamSynchronize");
+  printf("syncing done!\n");
   IREE_ROCM_TRACE_ZONE_END(command_buffer->tracing_context, 0);
   return iree_ok_status();
 }

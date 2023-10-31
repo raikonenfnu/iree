@@ -140,6 +140,38 @@ static OpOperand *getFirstUseInConsumer(Operation *producer,
   return nullptr;
 }
 
+static bool isDequantLikeOp(Operation *op) {
+  auto genericOp = dyn_cast<linalg::GenericOp>(op);
+  if (!genericOp)
+    return false;
+  if (genericOp.getNumDpsInits() != 1)
+    return false;
+  if (genericOp.getNumDpsInputs() != 2 && genericOp.getNumDpsInputs() != 3)
+    return false;
+  auto inputs = genericOp.getInputs();
+  auto weight = inputs[0];
+  auto scales = inputs[1];
+  auto init = genericOp.getDpsInits()[0];
+  Type weightElType = getElementTypeOrSelf(weight.getType());
+  Type scaleElType = getElementTypeOrSelf(scales.getType());
+  Type initElType = getElementTypeOrSelf(init.getType());
+
+  // Scale and init needs to be of same element type.
+  if (scaleElType != initElType)
+    return false;
+  // Check weight is i4 or i8.
+  if (!weightElType.isInteger(4) && !weightElType.isInteger(8)) {
+    return false;
+  }
+  // Check scales is f16 or f32.
+  Type f32Type = Float32Type::get(op->getContext());
+  Type f16Type = Float16Type::get(op->getContext());
+  if (scaleElType != f32Type && scaleElType != f16Type) {
+    return false;
+  }
+  return true;
+}
+
 static SmallVector<OpOperand *> getAllUsesInConsumer(Operation *producer,
                                                      Operation *consumer) {
   SmallVector<OpOperand *> allUses;
@@ -362,12 +394,10 @@ struct FusionOfTensorOpsPass
               return false;
             }
 
-            // Do not fuse producer collapse_shape op if src is from a global.
-            if (auto producerCollapseShapeOp =
-                    dyn_cast<tensor::CollapseShapeOp>(producer)) {
-              auto producerSrcOp =
-                  producerCollapseShapeOp.getSrc().getDefiningOp();
-              return producerSrcOp && !isa<Util::GlobalLoadOp>(producerSrcOp);
+            // Do not fuse producer op if src is from a global.
+            for (auto srcOperand : producer->getOperands()) {
+              auto producerSrcOp = srcOperand.getDefiningOp();
+              if (producerSrcOp && isa<Util::GlobalLoadOp>(producerSrcOp)) return false;
             }
 
             // Do not fuse producer generic op if it has more than one user.
@@ -436,6 +466,12 @@ struct FusionOfTensorOpsPass
             Operation *consumer = fusedOperand->getOwner();
             if (!isNonNullAndOutsideDispatch({producer, consumer})) {
               return false;
+            }
+
+            // Do not fuse producer op if src is from a global.
+            for (auto srcOperand : producer->getOperands()) {
+              auto producerSrcOp = srcOperand.getDefiningOp();
+              if (producerSrcOp && isa<Util::GlobalLoadOp>(producerSrcOp)) return false;
             }
 
             auto reshapeOp = dyn_cast<tensor::ExpandShapeOp>(producer);
