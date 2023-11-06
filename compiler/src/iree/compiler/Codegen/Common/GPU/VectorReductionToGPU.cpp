@@ -232,7 +232,7 @@ public:
     // 4. Distribute transfer write operations and propagate vector
     // distribution.
     {
-      int warpSize = this->getWarpSize ? this->getWarpSize(funcOp) : 32;
+      int warpSize = this->getWarpSize ? this->getWarpSize(funcOp) : 64;
       auto groupReductionFn = [&](Location loc, OpBuilder &builder, Value input,
                                   vector::CombiningKind kind, uint32_t size) {
         return emitGPUGroupReduction(loc, builder, input, kind, size, warpSize);

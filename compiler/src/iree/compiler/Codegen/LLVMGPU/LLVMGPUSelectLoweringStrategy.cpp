@@ -74,6 +74,8 @@ verifyLoweringConfiguration(ModuleOp module,
     IREE::Codegen::LoweringConfigAttr loweringConfig = getLoweringConfig(op);
     if (!loweringConfig)
       return WalkResult::advance();
+    llvm::outs()<<"lower:"<<loweringConfig<<"\n";
+    llvm::outs()<<"Op:"<<*op<<"\n";
     return verificationFn(op, loweringConfig, translationInfo, workgroupSize);
   });
   return failure(walkResult.wasInterrupted());

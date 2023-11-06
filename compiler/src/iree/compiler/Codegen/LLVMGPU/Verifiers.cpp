@@ -77,6 +77,9 @@ verifyGPUMatmulPipeline(Operation *op,
                         IREE::Codegen::LoweringConfigAttr loweringConfig,
                         IREE::Codegen::TranslationInfoAttr translationInfo,
                         ArrayRef<int64_t> workgroupSize) {
+  if (translationInfo.getDispatchLoweringPassPipeline() == IREE::Codegen::DispatchLoweringPassPipeline::LLVMGPUWarpReduction) {
+    return success();
+  }
   // Only verify batched and unbatched matmul.
   if (!isa<linalg::MatmulOp, linalg::BatchMatmulOp>(op)) {
     return success();

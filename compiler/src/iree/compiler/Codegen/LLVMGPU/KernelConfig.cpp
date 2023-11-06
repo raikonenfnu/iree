@@ -27,7 +27,7 @@
 using namespace mlir;
 using namespace mlir::iree_compiler;
 
-static constexpr unsigned cudaWarpSize = 32;
+static constexpr unsigned cudaWarpSize = 64;
 static constexpr StringLiteral kCudaTarget = "cuda";
 static constexpr StringLiteral kRocmTarget = "rocm";
 namespace mlir {
@@ -283,7 +283,12 @@ static LogicalResult setContractConfig(func::FuncOp entryPoint,
     if (kind == utils::IteratorType::parallel)
       nonUnitParallelDimCount += bound != 1;
   }
-  if (!isa<linalg::MatmulOp, linalg::BatchMatmulOp>(op) &&
+  // Switch between this: (let matvec go through simt pipeline)
+  // if (!isa<linalg::MatmulOp, linalg::BatchMatmulOp>(op) &&
+  // Or this: (let matvec go through warp reduce pipeline.)
+  // TODO: Should port tile heuristic on Harh's toolbox to use
+  //       enable good UserConfig.
+  if (!isa<linalg::BatchMatmulOp>(op) &&
       nonUnitParallelDimCount == 1)
     return failure();
 
@@ -754,7 +759,7 @@ static LogicalResult setWarpReductionConfig(func::FuncOp entryPoint,
                                             const TargetInfo &targetInfo) {
   if (!targetInfo.hasWarpShuffle)
     return failure();
-  if (!isa<linalg::GenericOp>(op))
+  if (!isa<linalg::GenericOp, linalg::MatmulOp>(op))
     return failure();
 
   SmallVector<unsigned> parallelDims;
@@ -828,6 +833,8 @@ static LogicalResult setWarpReductionConfig(func::FuncOp entryPoint,
   // workgroup processes all elements in reduction dimensions. Need to make sure
   // the workgroup size we use can divide the total reduction size, and it's
   // also within hardware limitations.
+  // workgroupSize * vectorSize
+  // reductionSize / (groupSize * vectorSize * numVector)
   const int64_t maxWorkgroupSize = 1024;
   int64_t groupSize = reductionSize / vectorSize;
   if (groupSize > maxWorkgroupSize) {
@@ -856,7 +863,7 @@ static LogicalResult setWarpReductionConfig(func::FuncOp entryPoint,
   // TODO: query from the target device; roughly 2x hardware compute unit.
   int parallelThreshold = 256;
   // How many 128-bit vectors each thread should at least read.
-  const int targetVectorCount = 8;
+  const int targetVectorCount = 8; // This is tunable.
   while (parallelSize && *parallelSize > parallelThreshold &&
          (groupSize / 2) % cudaWarpSize == 0 &&
          reductionSize / (groupSize * vectorSize) < targetVectorCount) {
