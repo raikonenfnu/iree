@@ -4,18 +4,33 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include <cstdint>
+#include <optional>
 #include "iree/compiler/Codegen/Common/GPU/PassDetail.h"
 #include "iree/compiler/Codegen/Common/GPU/Passes.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorDistribution.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Location.h"
+#include "mlir/IR/Matchers.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/VectorInterfaces.h"
+#include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #define DEBUG_TYPE "iree-codegen-vector-reduction-to-gpu"
@@ -173,6 +188,63 @@ class WarpOpBarrier : public OpRewritePattern<vector::WarpExecuteOnLane0Op> {
   }
 };
 
+struct ReduceZero final : OpRewritePattern<vector::ReductionOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::ReductionOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getKind() != vector::CombiningKind::ADD)
+      return failure();
+
+    if (!isa<FloatType>(op.getVector().getType().getElementType()))
+      return failure();
+
+    auto vAdd = op.getVector().getDefiningOp<arith::AddFOp>();
+    if (!vAdd)
+      return failure();
+    auto addLhs = vAdd.getLhs().getDefiningOp<arith::AddFOp>();
+    if (!addLhs)
+      return failure();
+
+    if (!matchPattern(addLhs.getRhs(), m_AnyZeroFloat()))
+      return failure();
+
+    llvm::errs() << "\tZERO found!\n";
+
+    auto newAdd = rewriter.create<arith::AddFOp>(vAdd.getLoc(), addLhs.getLhs(),
+                                                 vAdd.getRhs());
+    rewriter.replaceOpWithNewOp<vector::ReductionOp>(op, op.getKind(), newAdd,
+                                                     op.getAcc());
+    return success();
+  }
+};
+
+/// Pattern to convert chained to reduction to a series of vector additions and
+/// a final reductions. This form should require fewer subgroup operations.
+struct ChainedReduction final : OpRewritePattern<vector::ReductionOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(vector::ReductionOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getKind() != vector::CombiningKind::ADD)
+      return failure();
+
+    if (!isa<FloatType>(op.getAcc().getType()))
+      return failure();
+
+    auto parentReduction = op.getAcc().getDefiningOp<vector::ReductionOp>();
+    if (!parentReduction)
+      return failure();
+
+    Location loc = op.getLoc();
+    auto vAdd = rewriter.create<arith::AddFOp>(loc, parentReduction.getVector(),
+                                               op.getVector());
+    rewriter.replaceOpWithNewOp<vector::ReductionOp>(op, op.getKind(), vAdd,
+                                                     parentReduction.getAcc());
+    return success();
+  }
+};
+
 static Value simpleWarpShuffleFunction(Location loc, OpBuilder &builder,
                                        Value val, Value srcIdx,
                                        int64_t warpSz) {
@@ -187,6 +259,63 @@ static Value simpleWarpShuffleFunction(Location loc, OpBuilder &builder,
                                              gpu::ShuffleMode::IDX)
                      .getResult(0);
   return result;
+}
+
+static std::optional<SmallVector<int64_t>>
+getNativeVectorShapeImpl(VectorType type) {
+  if (type.isScalable())
+    return std::nullopt;
+
+  Type elementType = type.getElementType();
+  ArrayRef<int64_t> shape = type.getShape();
+
+  if (shape.empty() || ShapedType::isDynamicShape(shape))
+    return std::nullopt;
+
+  if (!elementType.isSignlessIntOrFloat())
+    return std::nullopt;
+
+  constexpr int64_t kTargetPreferredSIMDWidthBits = 64 * 4 * 32;
+  int64_t bitwidth = elementType.getIntOrFloatBitWidth();
+  int64_t preferredVectorWidth = kTargetPreferredSIMDWidthBits / bitwidth;
+  if (preferredVectorWidth >= shape.back())
+    return std::nullopt;
+
+  llvm::errs() << "Transfer op with elem type: " << elementType
+               << ", preferred width: " << preferredVectorWidth << "\n";
+  auto res = llvm::to_vector(shape);
+  res.back() = preferredVectorWidth;
+  return res;
+}
+
+static std::optional<SmallVector<int64_t>>
+getNativeVectorShape(Operation *op) {
+  llvm::errs() << "Get native vector sharpe for: " << *op << "\n";
+  // return std::nullopt;
+  if (OpTrait::hasElementwiseMappableTraits(op) && op->getNumResults() == 1) {
+    if (auto vecType = llvm::dyn_cast<VectorType>(op->getResultTypes()[0])) {
+      return getNativeVectorShapeImpl(vecType);
+    }
+  }
+
+  return TypeSwitch<Operation *, std::optional<SmallVector<int64_t>>>(op)
+      .Case<VectorTransferOpInterface>([](VectorTransferOpInterface op) {
+        return getNativeVectorShapeImpl(op.getVectorType());
+      })
+      .Case<vector::MultiDimReductionOp>([](vector::MultiDimReductionOp op) {
+        return getNativeVectorShapeImpl(op.getSourceVectorType());
+      })
+      .Case<vector::BroadcastOp>([](vector::BroadcastOp op) {
+        return getNativeVectorShapeImpl(op.getResultVectorType());
+      })
+      .Default([](Operation *) { return std::nullopt; });
+}
+
+/// Adds patterns to unroll vector ops to SPIR-V native vector size.
+static void populateVectorUnrollPatterns(RewritePatternSet &patterns) {
+  auto options =
+      vector::UnrollVectorOptions().setNativeShapeFn(getNativeVectorShape);
+  vector::populateVectorUnrollPatterns(patterns, options);
 }
 
 class VectorReductionToGPUPass
@@ -209,6 +338,23 @@ public:
 
     debugPrint(funcOp, "after step #0: before vector reduction to gpu");
 
+    {
+      RewritePatternSet patterns(ctx);
+      populateVectorUnrollPatterns(patterns);
+      vector::ExtractStridedSliceOp::getCanonicalizationPatterns(patterns, ctx);
+      vector::InsertStridedSliceOp::getCanonicalizationPatterns(patterns, ctx);
+      vector::ExtractOp::getCanonicalizationPatterns(patterns, ctx);
+      vector::InsertOp::getCanonicalizationPatterns(patterns, ctx);
+      vector::MultiDimReductionOp::getCanonicalizationPatterns(patterns, ctx);
+      vector::ReductionOp::getCanonicalizationPatterns(patterns, ctx);
+      vector::BroadcastOp::getCanonicalizationPatterns(patterns, ctx);
+      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+        return signalPassFailure();
+      }
+    }
+
+    debugPrint(funcOp, "after unrolling vector ops");
+
     // 1. Pre-process multiDimReductions.
     // TODO: Remove once MultiDimReduce is supported by distribute patterns.
     {
@@ -220,6 +366,8 @@ public:
       vector::ShapeCastOp::getCanonicalizationPatterns(patterns, ctx);
       vector::BroadcastOp::getCanonicalizationPatterns(patterns, ctx);
       vector::ExtractOp::getCanonicalizationPatterns(patterns, ctx);
+      patterns.add<ReduceZero>(ctx, PatternBenefit(2));
+      patterns.add<ChainedReduction>(ctx);
       (void)applyPatternsAndFoldGreedily(getOperation(), std::move(patterns));
     }
 
@@ -303,6 +451,16 @@ public:
     }
 
     debugPrint(funcOp, "after step #5: lowering remaining ops");
+
+    /*
+    getOperation()->walk([&](scf::ForOp loop) {
+      llvm::errs() << "JAKUB: For loop:\n" << loop << "\n";
+      if (failed(loopUnrollByFactor(loop, 8)))
+        llvm::errs() << "Failed to unroll\n";
+      else llvm::errs() << "Unrolling succeeded\n";
+    });
+    debugPrint(funcOp, "after step #6: unroll and hide load latency");
+    */
   }
 
 private:
