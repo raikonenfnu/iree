@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Codegen/SPIRV/KernelConfig.h"
+#include <cstdint>
 
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "iree/compiler/Codegen/Dialect/IREECodegenAttrs.h"
@@ -14,6 +15,7 @@
 #include "iree/compiler/Dialect/Flow/IR/FlowOps.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
@@ -1281,6 +1283,28 @@ static LogicalResult setReductionConfig(const spirv::TargetEnv &targetEnv,
   if (bitWidth != 32 && bitWidth != 16 && bitWidth != 8)
     return failure();
 
+  if (elementType.isF16() &&
+      bounds == llvm::to_vector_of<int64_t>(
+                    std::initializer_list<int>{1, 32000, 4096})) {
+    llvm::errs() << "JAKUB: matvec tile config\n";
+    TileSizesListType tileSizes;
+    tileSizes.push_back({1, 1});
+    tileSizes.push_back({0, 0, 4096});
+    if (failed(setOpConfigAndEntryPointFnTranslation(
+            op->getParentOfType<func::FuncOp>(), op, tileSizes,
+            CodeGenPipeline::SPIRVSubgroupReduce, {64, 1, 1}))) {
+      return failure();
+    }
+
+    // Set lowering configuration to drive tiling for other Linalg ops too---the
+    // pipeline expects it.
+    op->getParentOfType<FunctionOpInterface>().walk([&](linalg::LinalgOp op) {
+      setLoweringConfig(op, IREE::Codegen::LoweringConfigAttr::get(
+                                op.getContext(), tileSizes));
+    });
+    return success();
+  }
+
   // Let each thread handle `vectorSize` elements.
   unsigned vectorSize = kMaxVectorNumBits / bitWidth;
   while ((reductionSize / vectorSize) % subgroupSize != 0)
@@ -1349,6 +1373,16 @@ static LogicalResult setReductionConfig(const spirv::TargetEnv &targetEnv,
       reductionTileSizes[dim] *= vectorSize;
     remaingGroupSize /= size.getSExtValue();
   }
+
+  llvm::errs() << "JAKUB: bounds: ";
+  llvm::interleaveComma(bounds, llvm::errs());
+  llvm::errs() << "\n";
+  llvm::errs() << "JAKUB: workgroupTileSize: ";
+  llvm::interleaveComma(workgroupTileSizes, llvm::errs());
+  llvm::errs() << "\n";
+  llvm::errs() << "JAKUB: reductionTileSz: ";
+  llvm::interleaveComma(reductionTileSizes, llvm::errs());
+  llvm::errs() << "\n";
 
   TileSizesListType tileSizes;
   tileSizes.emplace_back(std::move(workgroupTileSizes)); // Workgroup level

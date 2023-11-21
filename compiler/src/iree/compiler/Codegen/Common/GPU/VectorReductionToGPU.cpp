@@ -288,8 +288,7 @@ getNativeVectorShapeImpl(VectorType type) {
   return res;
 }
 
-static std::optional<SmallVector<int64_t>>
-getNativeVectorShape(Operation *op) {
+static std::optional<SmallVector<int64_t>> getNativeVectorShape(Operation *op) {
   llvm::errs() << "Get native vector sharpe for: " << *op << "\n";
   // return std::nullopt;
   if (OpTrait::hasElementwiseMappableTraits(op) && op->getNumResults() == 1) {

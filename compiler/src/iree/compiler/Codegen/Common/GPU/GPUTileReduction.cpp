@@ -22,6 +22,7 @@ namespace iree_compiler {
 namespace {
 
 static LogicalResult tileReduction(linalg::GenericOp op) {
+  llvm::errs() << "JAKUB: tileReduction on:\n" << op << "\n";
   SmallVector<unsigned> dims;
   op.getReductionDims(dims);
   SmallVector<int64_t> tileSize = getTileSizes(op, 1);
@@ -33,7 +34,7 @@ static LogicalResult tileReduction(linalg::GenericOp op) {
       return success();
   }
 
-  tileSize.back() *= 8;
+  // tileSize.back() *= 4;
   llvm::interleaveComma(tileSize, llvm::errs() << "JAKUB: tiling sizes: ");
   llvm::errs() << "\n";
 
@@ -52,6 +53,7 @@ static LogicalResult tileReduction(linalg::GenericOp op) {
 }
 
 static LogicalResult tileFusedOps(linalg::GenericOp op) {
+  llvm::errs() << "JAKUB: tileFusedOps on:\n" << op << "\n";
   IRRewriter rewriter(op.getContext());
   rewriter.setInsertionPoint(op);
   SmallVector<int64_t> tileSizes = getTileSizes(op, 1);

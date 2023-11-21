@@ -432,6 +432,7 @@ SmallVector<int64_t> getTileSizes(Operation *op, unsigned level) {
   IREE::Codegen::LoweringConfigAttr configAttr = getLoweringConfig(op);
   if (!configAttr)
     return {};
+  llvm::errs() << "JAKUB: lowering config attr: " << configAttr << "\n";
   return configAttr.getTileSizeVals(level);
 }
 SmallVector<Value> getTileSizes(OpBuilder &b, Operation *op, unsigned level) {
