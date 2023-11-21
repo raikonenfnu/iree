@@ -1,0 +1,605 @@
+figuring configuration for generic op
+trying to deduce config as reduction...
+JAKUB: matvec tile config
+/home/jakub/iree/bench/vmt.mlir:0:0: remark: Executable benchmarks were requested but none were generated. Run with --debug-only=iree-dump-executable-benchmarks for more details.
+
+JAKUB: GPU tile reduction on:
+%7 = linalg.generic {indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>, affine_map<(d0, d1, d2) -> (d1, d2)>, affine_map<(d0, d1, d2) -> (d0, d1)>], iterator_types = ["parallel", "parallel", "reduction"]} ins(%4, %5 : tensor<1x4096xf16>, tensor<1x4096xf16>) outs(%6 : tensor<1x1xf16>) attrs =  {lowering_config = #iree_codegen.lowering_config<tile_sizes = [[1, 1], [0, 0, 4096]]>} {
+^bb0(%in: f16, %in_0: f16, %out: f16):
+  %8 = arith.mulf %in, %in_0 : f16
+  %9 = arith.addf %out, %8 : f16
+  linalg.yield %9 : f16
+} -> tensor<1x1xf16>
+JAKUB: tileReduction on:
+%7 = linalg.generic {indexing_maps = [affine_map<(d0, d1, d2) -> (d0, d2)>, affine_map<(d0, d1, d2) -> (d1, d2)>, affine_map<(d0, d1, d2) -> (d0, d1)>], iterator_types = ["parallel", "parallel", "reduction"]} ins(%4, %5 : tensor<1x4096xf16>, tensor<1x4096xf16>) outs(%6 : tensor<1x1xf16>) attrs =  {lowering_config = #iree_codegen.lowering_config<tile_sizes = [[1, 1], [0, 0, 4096]]>} {
+^bb0(%in: f16, %in_0: f16, %out: f16):
+  %8 = arith.mulf %in, %in_0 : f16
+  %9 = arith.addf %out, %8 : f16
+  linalg.yield %9 : f16
+} -> tensor<1x1xf16>
+JAKUB: lowering config attr: #iree_codegen.lowering_config<tile_sizes = [[1, 1], [0, 0, 4096]]>
+JAKUB: tiling sizes: 0, 0, 4096
+JAKUB: Tiling succeeded
+//--- after step #0: before vector reduction to gpu ---//
+func.func @_main_dispatch_0_matmul_transpose_b_1x32000x4096_f16() {
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant dense<0.000000e+00> : vector<4096xf16>
+  %cst_0 = arith.constant dense<0.000000e+00> : vector<1x1xf16>
+  %cst_1 = arith.constant 0.000000e+00 : f16
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %0, 64 : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %1, 64 : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %2 = hal.interface.binding.subspan set(0) binding(2) type(storage_buffer) alignment(64) offset(%c0) : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %2, 64 : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  %workgroup_id_x = hal.interface.workgroup.id[0] : index
+  %3 = vector.transfer_read %0[%c0, %c0], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<4096xf16>
+  %4 = vector.transfer_read %1[%workgroup_id_x, %c0], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<4096xf16>
+  %5 = arith.mulf %3, %4 : vector<4096xf16>
+  %6 = arith.addf %5, %cst : vector<4096xf16>
+  %7 = vector.broadcast %6 : vector<4096xf16> to vector<1x1x4096xf16>
+  %8 = vector.multi_reduction <add>, %7, %cst_0 [2] : vector<1x1x4096xf16> to vector<1x1xf16>
+  %9 = vector.extract %8[0] : vector<1xf16> from vector<1x1xf16>
+  vector.transfer_write %9, %2[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  return
+}
+
+Get native vector sharpe for: vector.transfer_write %9, %2[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+Get native vector sharpe for: %8 = vector.multi_reduction <add>, %7, %cst_0 [2] : vector<1x1x4096xf16> to vector<1x1xf16>
+Transfer op with elem type: f16, preferred width: 512
+Get native vector sharpe for: %24 = vector.multi_reduction <add>, %23, %22 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %25 = vector.multi_reduction <add>, %24, %22 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %22 = vector.multi_reduction <add>, %21, %20 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %23 = vector.multi_reduction <add>, %22, %20 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %20 = vector.multi_reduction <add>, %19, %18 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %21 = vector.multi_reduction <add>, %20, %18 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %18 = vector.multi_reduction <add>, %17, %16 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %19 = vector.multi_reduction <add>, %18, %16 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %16 = vector.multi_reduction <add>, %15, %14 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %17 = vector.multi_reduction <add>, %16, %14 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %14 = vector.multi_reduction <add>, %13, %12 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %15 = vector.multi_reduction <add>, %14, %12 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %12 = vector.multi_reduction <add>, %11, %10 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %13 = vector.multi_reduction <add>, %12, %10 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %10 = vector.multi_reduction <add>, %8, %9 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %9 = vector.multi_reduction <add>, %8, %cst_0 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %10 = vector.multi_reduction <add>, %9, %cst_0 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %6 = arith.addf %5, %cst : vector<4096xf16>
+Transfer op with elem type: f16, preferred width: 512
+Get native vector sharpe for: %36 = arith.addf %34, %35 : vector<512xf16>
+Get native vector sharpe for: %35 = arith.addf %34, %cst_3 : vector<512xf16>
+Get native vector sharpe for: %35 = arith.addf %34, %cst : vector<512xf16>
+Get native vector sharpe for: %32 = arith.addf %30, %31 : vector<512xf16>
+Get native vector sharpe for: %31 = arith.addf %30, %cst_4 : vector<512xf16>
+Get native vector sharpe for: %31 = arith.addf %30, %cst : vector<512xf16>
+Get native vector sharpe for: %28 = arith.addf %26, %27 : vector<512xf16>
+Get native vector sharpe for: %27 = arith.addf %26, %cst_4 : vector<512xf16>
+Get native vector sharpe for: %27 = arith.addf %26, %cst : vector<512xf16>
+Get native vector sharpe for: %24 = arith.addf %22, %23 : vector<512xf16>
+Get native vector sharpe for: %23 = arith.addf %22, %cst_4 : vector<512xf16>
+Get native vector sharpe for: %23 = arith.addf %22, %cst : vector<512xf16>
+Get native vector sharpe for: %20 = arith.addf %18, %19 : vector<512xf16>
+Get native vector sharpe for: %19 = arith.addf %18, %cst_4 : vector<512xf16>
+Get native vector sharpe for: %19 = arith.addf %18, %cst : vector<512xf16>
+Get native vector sharpe for: %16 = arith.addf %14, %15 : vector<512xf16>
+Get native vector sharpe for: %15 = arith.addf %14, %cst_4 : vector<512xf16>
+Get native vector sharpe for: %15 = arith.addf %14, %cst : vector<512xf16>
+Get native vector sharpe for: %12 = arith.addf %10, %11 : vector<512xf16>
+Get native vector sharpe for: %11 = arith.addf %10, %cst_4 : vector<512xf16>
+Get native vector sharpe for: %11 = arith.addf %10, %cst : vector<512xf16>
+Get native vector sharpe for: %8 = arith.addf %6, %7 : vector<512xf16>
+Get native vector sharpe for: %7 = arith.addf %6, %cst_4 : vector<512xf16>
+Get native vector sharpe for: %7 = arith.addf %6, %cst : vector<512xf16>
+Get native vector sharpe for: %5 = arith.mulf %3, %4 : vector<4096xf16>
+Transfer op with elem type: f16, preferred width: 512
+Get native vector sharpe for: %37 = arith.addf %7, %cst : vector<512xf16>
+Get native vector sharpe for: %38 = arith.addf %11, %cst : vector<512xf16>
+Get native vector sharpe for: %39 = arith.addf %15, %cst : vector<512xf16>
+Get native vector sharpe for: %40 = arith.addf %19, %cst : vector<512xf16>
+Get native vector sharpe for: %41 = arith.addf %23, %cst : vector<512xf16>
+Get native vector sharpe for: %42 = arith.addf %27, %cst : vector<512xf16>
+Get native vector sharpe for: %43 = arith.addf %31, %cst : vector<512xf16>
+Get native vector sharpe for: %44 = arith.addf %35, %cst : vector<512xf16>
+Get native vector sharpe for: %35 = arith.mulf %33, %34 : vector<512xf16>
+Get native vector sharpe for: %31 = arith.mulf %29, %30 : vector<512xf16>
+Get native vector sharpe for: %27 = arith.mulf %25, %26 : vector<512xf16>
+Get native vector sharpe for: %23 = arith.mulf %21, %22 : vector<512xf16>
+Get native vector sharpe for: %19 = arith.mulf %17, %18 : vector<512xf16>
+Get native vector sharpe for: %15 = arith.mulf %13, %14 : vector<512xf16>
+Get native vector sharpe for: %11 = arith.mulf %9, %10 : vector<512xf16>
+Get native vector sharpe for: %7 = arith.mulf %5, %6 : vector<512xf16>
+Get native vector sharpe for: %4 = vector.transfer_read %1[%workgroup_id_x, %c0], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<4096xf16>
+Transfer op with elem type: f16, preferred width: 512
+Get native vector sharpe for: %29 = arith.mulf %28, %5 : vector<512xf16>
+Get native vector sharpe for: %31 = arith.mulf %30, %8 : vector<512xf16>
+Get native vector sharpe for: %33 = arith.mulf %32, %11 : vector<512xf16>
+Get native vector sharpe for: %35 = arith.mulf %34, %14 : vector<512xf16>
+Get native vector sharpe for: %37 = arith.mulf %36, %17 : vector<512xf16>
+Get native vector sharpe for: %39 = arith.mulf %38, %20 : vector<512xf16>
+Get native vector sharpe for: %41 = arith.mulf %40, %23 : vector<512xf16>
+Get native vector sharpe for: %43 = arith.mulf %42, %26 : vector<512xf16>
+Get native vector sharpe for: %26 = vector.transfer_read %1[%workgroup_id_x, %25], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %25 = vector.transfer_read %1[%workgroup_id_x, %c3584], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %23 = vector.transfer_read %1[%workgroup_id_x, %22], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %22 = vector.transfer_read %1[%workgroup_id_x, %c3072], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %20 = vector.transfer_read %1[%workgroup_id_x, %19], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %19 = vector.transfer_read %1[%workgroup_id_x, %c2560], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %17 = vector.transfer_read %1[%workgroup_id_x, %16], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %16 = vector.transfer_read %1[%workgroup_id_x, %c2048], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %14 = vector.transfer_read %1[%workgroup_id_x, %13], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %13 = vector.transfer_read %1[%workgroup_id_x, %c1536], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %11 = vector.transfer_read %1[%workgroup_id_x, %10], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %10 = vector.transfer_read %1[%workgroup_id_x, %c1024], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %8 = vector.transfer_read %1[%workgroup_id_x, %7], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %7 = vector.transfer_read %1[%workgroup_id_x, %c512], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %5 = vector.transfer_read %1[%workgroup_id_x, %4], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %4 = vector.transfer_read %1[%workgroup_id_x, %c0], %cst_2 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %3 = vector.transfer_read %0[%c0, %c0], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<4096xf16>
+Transfer op with elem type: f16, preferred width: 512
+Get native vector sharpe for: %35 = arith.mulf %4, %27 : vector<512xf16>
+Get native vector sharpe for: %36 = arith.mulf %7, %28 : vector<512xf16>
+Get native vector sharpe for: %37 = arith.mulf %10, %29 : vector<512xf16>
+Get native vector sharpe for: %38 = arith.mulf %13, %30 : vector<512xf16>
+Get native vector sharpe for: %39 = arith.mulf %16, %31 : vector<512xf16>
+Get native vector sharpe for: %40 = arith.mulf %19, %32 : vector<512xf16>
+Get native vector sharpe for: %41 = arith.mulf %22, %33 : vector<512xf16>
+Get native vector sharpe for: %42 = arith.mulf %25, %34 : vector<512xf16>
+Get native vector sharpe for: %25 = vector.transfer_read %0[%c0, %24], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %24 = vector.transfer_read %0[%c0, %c3584], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %22 = vector.transfer_read %0[%c0, %21], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %21 = vector.transfer_read %0[%c0, %c3072], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %19 = vector.transfer_read %0[%c0, %18], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %18 = vector.transfer_read %0[%c0, %c2560], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %16 = vector.transfer_read %0[%c0, %15], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %15 = vector.transfer_read %0[%c0, %c2048], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %13 = vector.transfer_read %0[%c0, %12], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %12 = vector.transfer_read %0[%c0, %c1536], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %10 = vector.transfer_read %0[%c0, %9], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %9 = vector.transfer_read %0[%c0, %c1024], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %7 = vector.transfer_read %0[%c0, %6], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %6 = vector.transfer_read %0[%c0, %c512], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %4 = vector.transfer_read %0[%c0, %3], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %3 = vector.transfer_read %0[%c0, %c0], %cst_2 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: vector.transfer_write %51, %2[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+Get native vector sharpe for: %50 = vector.multi_reduction <add>, %49, %48 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %48 = vector.multi_reduction <add>, %47, %46 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %46 = vector.multi_reduction <add>, %45, %44 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %44 = vector.multi_reduction <add>, %43, %42 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %42 = vector.multi_reduction <add>, %41, %40 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %40 = vector.multi_reduction <add>, %39, %38 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %38 = vector.multi_reduction <add>, %37, %36 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %36 = vector.multi_reduction <add>, %35, %cst_0 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+Get native vector sharpe for: %34 = arith.addf %26, %cst : vector<512xf16>
+Get native vector sharpe for: %33 = arith.addf %25, %cst : vector<512xf16>
+Get native vector sharpe for: %32 = arith.addf %24, %cst : vector<512xf16>
+Get native vector sharpe for: %31 = arith.addf %23, %cst : vector<512xf16>
+Get native vector sharpe for: %30 = arith.addf %22, %cst : vector<512xf16>
+Get native vector sharpe for: %29 = arith.addf %21, %cst : vector<512xf16>
+Get native vector sharpe for: %28 = arith.addf %20, %cst : vector<512xf16>
+Get native vector sharpe for: %27 = arith.addf %19, %cst : vector<512xf16>
+Get native vector sharpe for: %26 = arith.mulf %10, %18 : vector<512xf16>
+Get native vector sharpe for: %25 = arith.mulf %9, %17 : vector<512xf16>
+Get native vector sharpe for: %24 = arith.mulf %8, %16 : vector<512xf16>
+Get native vector sharpe for: %23 = arith.mulf %7, %15 : vector<512xf16>
+Get native vector sharpe for: %22 = arith.mulf %6, %14 : vector<512xf16>
+Get native vector sharpe for: %21 = arith.mulf %5, %13 : vector<512xf16>
+Get native vector sharpe for: %20 = arith.mulf %4, %12 : vector<512xf16>
+Get native vector sharpe for: %19 = arith.mulf %3, %11 : vector<512xf16>
+Get native vector sharpe for: %18 = vector.transfer_read %1[%workgroup_id_x, %c3584], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %17 = vector.transfer_read %1[%workgroup_id_x, %c3072], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %16 = vector.transfer_read %1[%workgroup_id_x, %c2560], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %15 = vector.transfer_read %1[%workgroup_id_x, %c2048], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %14 = vector.transfer_read %1[%workgroup_id_x, %c1536], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %13 = vector.transfer_read %1[%workgroup_id_x, %c1024], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %12 = vector.transfer_read %1[%workgroup_id_x, %c512], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %11 = vector.transfer_read %1[%workgroup_id_x, %c0], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %10 = vector.transfer_read %0[%c0, %c3584], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %9 = vector.transfer_read %0[%c0, %c3072], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %8 = vector.transfer_read %0[%c0, %c2560], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %7 = vector.transfer_read %0[%c0, %c2048], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %6 = vector.transfer_read %0[%c0, %c1536], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %5 = vector.transfer_read %0[%c0, %c1024], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %4 = vector.transfer_read %0[%c0, %c512], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+Get native vector sharpe for: %3 = vector.transfer_read %0[%c0, %c0], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+//--- after unrolling vector ops ---//
+func.func @_main_dispatch_0_matmul_transpose_b_1x32000x4096_f16() {
+  %c512 = arith.constant 512 : index
+  %c1024 = arith.constant 1024 : index
+  %c1536 = arith.constant 1536 : index
+  %c2048 = arith.constant 2048 : index
+  %c2560 = arith.constant 2560 : index
+  %c3072 = arith.constant 3072 : index
+  %c3584 = arith.constant 3584 : index
+  %cst = arith.constant dense<0.000000e+00> : vector<512xf16>
+  %c0 = arith.constant 0 : index
+  %cst_0 = arith.constant dense<0.000000e+00> : vector<1x1xf16>
+  %cst_1 = arith.constant 0.000000e+00 : f16
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %0, 64 : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %1, 64 : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %2 = hal.interface.binding.subspan set(0) binding(2) type(storage_buffer) alignment(64) offset(%c0) : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %2, 64 : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  %workgroup_id_x = hal.interface.workgroup.id[0] : index
+  %3 = vector.transfer_read %0[%c0, %c0], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %4 = vector.transfer_read %0[%c0, %c512], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %5 = vector.transfer_read %0[%c0, %c1024], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %6 = vector.transfer_read %0[%c0, %c1536], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %7 = vector.transfer_read %0[%c0, %c2048], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %8 = vector.transfer_read %0[%c0, %c2560], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %9 = vector.transfer_read %0[%c0, %c3072], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %10 = vector.transfer_read %0[%c0, %c3584], %cst_1 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %11 = vector.transfer_read %1[%workgroup_id_x, %c0], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %12 = vector.transfer_read %1[%workgroup_id_x, %c512], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %13 = vector.transfer_read %1[%workgroup_id_x, %c1024], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %14 = vector.transfer_read %1[%workgroup_id_x, %c1536], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %15 = vector.transfer_read %1[%workgroup_id_x, %c2048], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %16 = vector.transfer_read %1[%workgroup_id_x, %c2560], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %17 = vector.transfer_read %1[%workgroup_id_x, %c3072], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %18 = vector.transfer_read %1[%workgroup_id_x, %c3584], %cst_1 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %19 = arith.mulf %3, %11 : vector<512xf16>
+  %20 = arith.mulf %4, %12 : vector<512xf16>
+  %21 = arith.mulf %5, %13 : vector<512xf16>
+  %22 = arith.mulf %6, %14 : vector<512xf16>
+  %23 = arith.mulf %7, %15 : vector<512xf16>
+  %24 = arith.mulf %8, %16 : vector<512xf16>
+  %25 = arith.mulf %9, %17 : vector<512xf16>
+  %26 = arith.mulf %10, %18 : vector<512xf16>
+  %27 = arith.addf %19, %cst : vector<512xf16>
+  %28 = arith.addf %20, %cst : vector<512xf16>
+  %29 = arith.addf %21, %cst : vector<512xf16>
+  %30 = arith.addf %22, %cst : vector<512xf16>
+  %31 = arith.addf %23, %cst : vector<512xf16>
+  %32 = arith.addf %24, %cst : vector<512xf16>
+  %33 = arith.addf %25, %cst : vector<512xf16>
+  %34 = arith.addf %26, %cst : vector<512xf16>
+  %35 = vector.broadcast %27 : vector<512xf16> to vector<1x1x512xf16>
+  %36 = vector.multi_reduction <add>, %35, %cst_0 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+  %37 = vector.broadcast %28 : vector<512xf16> to vector<1x1x512xf16>
+  %38 = vector.multi_reduction <add>, %37, %36 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+  %39 = vector.broadcast %29 : vector<512xf16> to vector<1x1x512xf16>
+  %40 = vector.multi_reduction <add>, %39, %38 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+  %41 = vector.broadcast %30 : vector<512xf16> to vector<1x1x512xf16>
+  %42 = vector.multi_reduction <add>, %41, %40 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+  %43 = vector.broadcast %31 : vector<512xf16> to vector<1x1x512xf16>
+  %44 = vector.multi_reduction <add>, %43, %42 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+  %45 = vector.broadcast %32 : vector<512xf16> to vector<1x1x512xf16>
+  %46 = vector.multi_reduction <add>, %45, %44 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+  %47 = vector.broadcast %33 : vector<512xf16> to vector<1x1x512xf16>
+  %48 = vector.multi_reduction <add>, %47, %46 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+  %49 = vector.broadcast %34 : vector<512xf16> to vector<1x1x512xf16>
+  %50 = vector.multi_reduction <add>, %49, %48 [2] : vector<1x1x512xf16> to vector<1x1xf16>
+  %51 = vector.extract %50[0] : vector<1xf16> from vector<1x1xf16>
+  vector.transfer_write %51, %2[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  return
+}
+
+	ZERO found!
+	ZERO found!
+	ZERO found!
+	ZERO found!
+	ZERO found!
+	ZERO found!
+	ZERO found!
+//--- after step #1: preprocessing reduction ops ---//
+func.func @_main_dispatch_0_matmul_transpose_b_1x32000x4096_f16() {
+  %cst = arith.constant 0.000000e+00 : f16
+  %c512 = arith.constant 512 : index
+  %c1024 = arith.constant 1024 : index
+  %c1536 = arith.constant 1536 : index
+  %c2048 = arith.constant 2048 : index
+  %c2560 = arith.constant 2560 : index
+  %c3072 = arith.constant 3072 : index
+  %c3584 = arith.constant 3584 : index
+  %cst_0 = arith.constant dense<0.000000e+00> : vector<512xf16>
+  %c0 = arith.constant 0 : index
+  %0 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %0, 64 : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %1, 64 : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %2 = hal.interface.binding.subspan set(0) binding(2) type(storage_buffer) alignment(64) offset(%c0) : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %2, 64 : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  %workgroup_id_x = hal.interface.workgroup.id[0] : index
+  %3 = vector.transfer_read %0[%c0, %c0], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %4 = vector.transfer_read %0[%c0, %c512], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %5 = vector.transfer_read %0[%c0, %c1024], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %6 = vector.transfer_read %0[%c0, %c1536], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %7 = vector.transfer_read %0[%c0, %c2048], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %8 = vector.transfer_read %0[%c0, %c2560], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %9 = vector.transfer_read %0[%c0, %c3072], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %10 = vector.transfer_read %0[%c0, %c3584], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %11 = vector.transfer_read %1[%workgroup_id_x, %c0], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %12 = vector.transfer_read %1[%workgroup_id_x, %c512], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %13 = vector.transfer_read %1[%workgroup_id_x, %c1024], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %14 = vector.transfer_read %1[%workgroup_id_x, %c1536], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %15 = vector.transfer_read %1[%workgroup_id_x, %c2048], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %16 = vector.transfer_read %1[%workgroup_id_x, %c2560], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %17 = vector.transfer_read %1[%workgroup_id_x, %c3072], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %18 = vector.transfer_read %1[%workgroup_id_x, %c3584], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+  %19 = arith.mulf %3, %11 : vector<512xf16>
+  %20 = arith.mulf %4, %12 : vector<512xf16>
+  %21 = arith.mulf %5, %13 : vector<512xf16>
+  %22 = arith.mulf %6, %14 : vector<512xf16>
+  %23 = arith.mulf %7, %15 : vector<512xf16>
+  %24 = arith.mulf %8, %16 : vector<512xf16>
+  %25 = arith.mulf %9, %17 : vector<512xf16>
+  %26 = arith.mulf %10, %18 : vector<512xf16>
+  %27 = arith.addf %26, %cst_0 : vector<512xf16>
+  %28 = arith.addf %25, %27 : vector<512xf16>
+  %29 = arith.addf %24, %28 : vector<512xf16>
+  %30 = arith.addf %23, %29 : vector<512xf16>
+  %31 = arith.addf %22, %30 : vector<512xf16>
+  %32 = arith.addf %21, %31 : vector<512xf16>
+  %33 = arith.addf %20, %32 : vector<512xf16>
+  %34 = arith.addf %19, %33 : vector<512xf16>
+  %35 = vector.reduction <add>, %34, %cst : vector<512xf16> into f16
+  %36 = vector.broadcast %35 : f16 to vector<1xf16>
+  vector.transfer_write %36, %2[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  return
+}
+
+//--- after step #2: wrapping code with the warp execute op ---//
+func.func @_main_dispatch_0_matmul_transpose_b_1x32000x4096_f16() {
+  %0 = gpu.thread_id  x
+  %c64 = arith.constant 64 : index
+  vector.warp_execute_on_lane_0(%0)[64] {
+    %cst = arith.constant 0.000000e+00 : f16
+    %c512 = arith.constant 512 : index
+    %c1024 = arith.constant 1024 : index
+    %c1536 = arith.constant 1536 : index
+    %c2048 = arith.constant 2048 : index
+    %c2560 = arith.constant 2560 : index
+    %c3072 = arith.constant 3072 : index
+    %c3584 = arith.constant 3584 : index
+    %cst_0 = arith.constant dense<0.000000e+00> : vector<512xf16>
+    %c0 = arith.constant 0 : index
+    %1 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+    memref.assume_alignment %1, 64 : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+    %2 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+    memref.assume_alignment %2, 64 : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+    %3 = hal.interface.binding.subspan set(0) binding(2) type(storage_buffer) alignment(64) offset(%c0) : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+    memref.assume_alignment %3, 64 : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+    %workgroup_id_x = hal.interface.workgroup.id[0] : index
+    %4 = vector.transfer_read %1[%c0, %c0], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %5 = vector.transfer_read %1[%c0, %c512], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %6 = vector.transfer_read %1[%c0, %c1024], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %7 = vector.transfer_read %1[%c0, %c1536], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %8 = vector.transfer_read %1[%c0, %c2048], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %9 = vector.transfer_read %1[%c0, %c2560], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %10 = vector.transfer_read %1[%c0, %c3072], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %11 = vector.transfer_read %1[%c0, %c3584], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %12 = vector.transfer_read %2[%workgroup_id_x, %c0], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %13 = vector.transfer_read %2[%workgroup_id_x, %c512], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %14 = vector.transfer_read %2[%workgroup_id_x, %c1024], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %15 = vector.transfer_read %2[%workgroup_id_x, %c1536], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %16 = vector.transfer_read %2[%workgroup_id_x, %c2048], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %17 = vector.transfer_read %2[%workgroup_id_x, %c2560], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %18 = vector.transfer_read %2[%workgroup_id_x, %c3072], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %19 = vector.transfer_read %2[%workgroup_id_x, %c3584], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %20 = arith.mulf %4, %12 : vector<512xf16>
+    %21 = arith.mulf %5, %13 : vector<512xf16>
+    %22 = arith.mulf %6, %14 : vector<512xf16>
+    %23 = arith.mulf %7, %15 : vector<512xf16>
+    %24 = arith.mulf %8, %16 : vector<512xf16>
+    %25 = arith.mulf %9, %17 : vector<512xf16>
+    %26 = arith.mulf %10, %18 : vector<512xf16>
+    %27 = arith.mulf %11, %19 : vector<512xf16>
+    %28 = arith.addf %27, %cst_0 : vector<512xf16>
+    %29 = arith.addf %26, %28 : vector<512xf16>
+    %30 = arith.addf %25, %29 : vector<512xf16>
+    %31 = arith.addf %24, %30 : vector<512xf16>
+    %32 = arith.addf %23, %31 : vector<512xf16>
+    %33 = arith.addf %22, %32 : vector<512xf16>
+    %34 = arith.addf %21, %33 : vector<512xf16>
+    %35 = arith.addf %20, %34 : vector<512xf16>
+    %36 = vector.reduction <add>, %35, %cst : vector<512xf16> into f16
+    %37 = vector.broadcast %36 : f16 to vector<1xf16>
+    vector.transfer_write %37, %3[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  }
+  return
+}
+
+//--- after step #3: hosting uniform code ---//
+func.func @_main_dispatch_0_matmul_transpose_b_1x32000x4096_f16() {
+  %0 = gpu.thread_id  x
+  %c64 = arith.constant 64 : index
+  %cst = arith.constant 0.000000e+00 : f16
+  %c512 = arith.constant 512 : index
+  %c1024 = arith.constant 1024 : index
+  %c1536 = arith.constant 1536 : index
+  %c2048 = arith.constant 2048 : index
+  %c2560 = arith.constant 2560 : index
+  %c3072 = arith.constant 3072 : index
+  %c3584 = arith.constant 3584 : index
+  %c0 = arith.constant 0 : index
+  %1 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %1, 64 : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %2 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %2, 64 : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %3 = hal.interface.binding.subspan set(0) binding(2) type(storage_buffer) alignment(64) offset(%c0) : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %3, 64 : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  %workgroup_id_x = hal.interface.workgroup.id[0] : index
+  vector.warp_execute_on_lane_0(%0)[64] {
+    %cst_0 = arith.constant dense<0.000000e+00> : vector<512xf16>
+    %4 = vector.transfer_read %1[%c0, %c0], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %5 = vector.transfer_read %1[%c0, %c512], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %6 = vector.transfer_read %1[%c0, %c1024], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %7 = vector.transfer_read %1[%c0, %c1536], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %8 = vector.transfer_read %1[%c0, %c2048], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %9 = vector.transfer_read %1[%c0, %c2560], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %10 = vector.transfer_read %1[%c0, %c3072], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %11 = vector.transfer_read %1[%c0, %c3584], %cst {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %12 = vector.transfer_read %2[%workgroup_id_x, %c0], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %13 = vector.transfer_read %2[%workgroup_id_x, %c512], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %14 = vector.transfer_read %2[%workgroup_id_x, %c1024], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %15 = vector.transfer_read %2[%workgroup_id_x, %c1536], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %16 = vector.transfer_read %2[%workgroup_id_x, %c2048], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %17 = vector.transfer_read %2[%workgroup_id_x, %c2560], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %18 = vector.transfer_read %2[%workgroup_id_x, %c3072], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %19 = vector.transfer_read %2[%workgroup_id_x, %c3584], %cst {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<512xf16>
+    %20 = arith.mulf %4, %12 : vector<512xf16>
+    %21 = arith.mulf %5, %13 : vector<512xf16>
+    %22 = arith.mulf %6, %14 : vector<512xf16>
+    %23 = arith.mulf %7, %15 : vector<512xf16>
+    %24 = arith.mulf %8, %16 : vector<512xf16>
+    %25 = arith.mulf %9, %17 : vector<512xf16>
+    %26 = arith.mulf %10, %18 : vector<512xf16>
+    %27 = arith.mulf %11, %19 : vector<512xf16>
+    %28 = arith.addf %27, %cst_0 : vector<512xf16>
+    %29 = arith.addf %26, %28 : vector<512xf16>
+    %30 = arith.addf %25, %29 : vector<512xf16>
+    %31 = arith.addf %24, %30 : vector<512xf16>
+    %32 = arith.addf %23, %31 : vector<512xf16>
+    %33 = arith.addf %22, %32 : vector<512xf16>
+    %34 = arith.addf %21, %33 : vector<512xf16>
+    %35 = arith.addf %20, %34 : vector<512xf16>
+    %36 = vector.reduction <add>, %35, %cst : vector<512xf16> into f16
+    %37 = vector.broadcast %36 : f16 to vector<1xf16>
+    vector.transfer_write %37, %3[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  }
+  return
+}
+
+//--- after step #4: propagating distribution ---//
+func.func @_main_dispatch_0_matmul_transpose_b_1x32000x4096_f16() {
+  %cst = arith.constant dense<0.000000e+00> : vector<8xf16>
+  %c0 = arith.constant 0 : index
+  %cst_0 = arith.constant 0.000000e+00 : f16
+  %0 = gpu.thread_id  x
+  %1 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %1, 64 : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %2 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %2, 64 : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %3 = hal.interface.binding.subspan set(0) binding(2) type(storage_buffer) alignment(64) offset(%c0) : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %3, 64 : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  %workgroup_id_x = hal.interface.workgroup.id[0] : index
+  %4 = affine.apply affine_map<()[s0] -> (s0 * 8 + 3584)>()[%0]
+  %5 = vector.transfer_read %2[%workgroup_id_x, %4], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %6 = affine.apply affine_map<()[s0] -> (s0 * 8 + 3584)>()[%0]
+  %7 = vector.transfer_read %1[%c0, %6], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %8 = affine.apply affine_map<()[s0] -> (s0 * 8 + 3072)>()[%0]
+  %9 = vector.transfer_read %2[%workgroup_id_x, %8], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %10 = affine.apply affine_map<()[s0] -> (s0 * 8 + 3072)>()[%0]
+  %11 = vector.transfer_read %1[%c0, %10], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %12 = affine.apply affine_map<()[s0] -> (s0 * 8 + 2560)>()[%0]
+  %13 = vector.transfer_read %2[%workgroup_id_x, %12], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %14 = affine.apply affine_map<()[s0] -> (s0 * 8 + 2560)>()[%0]
+  %15 = vector.transfer_read %1[%c0, %14], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %16 = affine.apply affine_map<()[s0] -> (s0 * 8 + 2048)>()[%0]
+  %17 = vector.transfer_read %2[%workgroup_id_x, %16], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %18 = affine.apply affine_map<()[s0] -> (s0 * 8 + 2048)>()[%0]
+  %19 = vector.transfer_read %1[%c0, %18], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %20 = affine.apply affine_map<()[s0] -> (s0 * 8 + 1536)>()[%0]
+  %21 = vector.transfer_read %2[%workgroup_id_x, %20], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %22 = affine.apply affine_map<()[s0] -> (s0 * 8 + 1536)>()[%0]
+  %23 = vector.transfer_read %1[%c0, %22], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %24 = affine.apply affine_map<()[s0] -> (s0 * 8 + 1024)>()[%0]
+  %25 = vector.transfer_read %2[%workgroup_id_x, %24], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %26 = affine.apply affine_map<()[s0] -> (s0 * 8 + 1024)>()[%0]
+  %27 = vector.transfer_read %1[%c0, %26], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %28 = affine.apply affine_map<()[s0] -> (s0 * 8 + 512)>()[%0]
+  %29 = vector.transfer_read %2[%workgroup_id_x, %28], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %30 = affine.apply affine_map<()[s0] -> (s0 * 8 + 512)>()[%0]
+  %31 = vector.transfer_read %1[%c0, %30], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %32 = affine.apply affine_map<()[s0] -> (s0 * 8)>()[%0]
+  %33 = vector.transfer_read %2[%workgroup_id_x, %32], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %34 = affine.apply affine_map<()[s0] -> (s0 * 8)>()[%0]
+  %35 = vector.transfer_read %1[%c0, %34], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %36 = arith.mulf %7, %5 : vector<8xf16>
+  %37 = arith.addf %36, %cst : vector<8xf16>
+  %38 = arith.mulf %11, %9 : vector<8xf16>
+  %39 = arith.addf %38, %37 : vector<8xf16>
+  %40 = arith.mulf %15, %13 : vector<8xf16>
+  %41 = arith.addf %40, %39 : vector<8xf16>
+  %42 = arith.mulf %19, %17 : vector<8xf16>
+  %43 = arith.addf %42, %41 : vector<8xf16>
+  %44 = arith.mulf %23, %21 : vector<8xf16>
+  %45 = arith.addf %44, %43 : vector<8xf16>
+  %46 = arith.mulf %27, %25 : vector<8xf16>
+  %47 = arith.addf %46, %45 : vector<8xf16>
+  %48 = arith.mulf %31, %29 : vector<8xf16>
+  %49 = arith.addf %48, %47 : vector<8xf16>
+  %50 = arith.mulf %35, %33 : vector<8xf16>
+  %51 = arith.addf %50, %49 : vector<8xf16>
+  %52 = vector.reduction <add>, %51 : vector<8xf16> into f16
+  %53 = gpu.subgroup_reduce  add %52 : (f16) -> f16
+  %54 = arith.addf %53, %cst_0 : f16
+  %55 = vector.broadcast %54 : f16 to vector<1xf16>
+  vector.warp_execute_on_lane_0(%0)[64] {
+    vector.transfer_write %55, %3[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  }
+  return
+}
+
+//--- after step #5: lowering remaining ops ---//
+func.func @_main_dispatch_0_matmul_transpose_b_1x32000x4096_f16() {
+  %c0 = arith.constant 0 : index
+  %cst = arith.constant dense<0.000000e+00> : vector<8xf16>
+  %cst_0 = arith.constant 0.000000e+00 : f16
+  %0 = gpu.thread_id  x
+  %1 = hal.interface.binding.subspan set(0) binding(0) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %1, 64 : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %2 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) flags(ReadOnly) : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %2, 64 : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>
+  %3 = hal.interface.binding.subspan set(0) binding(2) type(storage_buffer) alignment(64) offset(%c0) : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  memref.assume_alignment %3, 64 : memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  %workgroup_id_x = hal.interface.workgroup.id[0] : index
+  %4 = affine.apply affine_map<()[s0] -> (s0 * 8 + 3584)>()[%0]
+  %5 = vector.transfer_read %2[%workgroup_id_x, %4], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %6 = affine.apply affine_map<()[s0] -> (s0 * 8 + 3584)>()[%0]
+  %7 = vector.transfer_read %1[%c0, %6], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %8 = affine.apply affine_map<()[s0] -> (s0 * 8 + 3072)>()[%0]
+  %9 = vector.transfer_read %2[%workgroup_id_x, %8], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %10 = affine.apply affine_map<()[s0] -> (s0 * 8 + 3072)>()[%0]
+  %11 = vector.transfer_read %1[%c0, %10], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %12 = affine.apply affine_map<()[s0] -> (s0 * 8 + 2560)>()[%0]
+  %13 = vector.transfer_read %2[%workgroup_id_x, %12], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %14 = affine.apply affine_map<()[s0] -> (s0 * 8 + 2560)>()[%0]
+  %15 = vector.transfer_read %1[%c0, %14], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %16 = affine.apply affine_map<()[s0] -> (s0 * 8 + 2048)>()[%0]
+  %17 = vector.transfer_read %2[%workgroup_id_x, %16], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %18 = affine.apply affine_map<()[s0] -> (s0 * 8 + 2048)>()[%0]
+  %19 = vector.transfer_read %1[%c0, %18], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %20 = affine.apply affine_map<()[s0] -> (s0 * 8 + 1536)>()[%0]
+  %21 = vector.transfer_read %2[%workgroup_id_x, %20], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %22 = affine.apply affine_map<()[s0] -> (s0 * 8 + 1536)>()[%0]
+  %23 = vector.transfer_read %1[%c0, %22], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %24 = affine.apply affine_map<()[s0] -> (s0 * 8 + 1024)>()[%0]
+  %25 = vector.transfer_read %2[%workgroup_id_x, %24], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %26 = affine.apply affine_map<()[s0] -> (s0 * 8 + 1024)>()[%0]
+  %27 = vector.transfer_read %1[%c0, %26], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %28 = affine.apply affine_map<()[s0] -> (s0 * 8 + 512)>()[%0]
+  %29 = vector.transfer_read %2[%workgroup_id_x, %28], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %30 = affine.apply affine_map<()[s0] -> (s0 * 8 + 512)>()[%0]
+  %31 = vector.transfer_read %1[%c0, %30], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %32 = affine.apply affine_map<()[s0] -> (s0 * 8)>()[%0]
+  %33 = vector.transfer_read %2[%workgroup_id_x, %32], %cst_0 {in_bounds = [true]} : memref<32000x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %34 = affine.apply affine_map<()[s0] -> (s0 * 8)>()[%0]
+  %35 = vector.transfer_read %1[%c0, %34], %cst_0 {in_bounds = [true]} : memref<1x4096xf16, #hal.descriptor_type<storage_buffer>>, vector<8xf16>
+  %36 = arith.mulf %7, %5 : vector<8xf16>
+  %37 = arith.addf %36, %cst : vector<8xf16>
+  %38 = arith.mulf %11, %9 : vector<8xf16>
+  %39 = arith.addf %38, %37 : vector<8xf16>
+  %40 = arith.mulf %15, %13 : vector<8xf16>
+  %41 = arith.addf %40, %39 : vector<8xf16>
+  %42 = arith.mulf %19, %17 : vector<8xf16>
+  %43 = arith.addf %42, %41 : vector<8xf16>
+  %44 = arith.mulf %23, %21 : vector<8xf16>
+  %45 = arith.addf %44, %43 : vector<8xf16>
+  %46 = arith.mulf %27, %25 : vector<8xf16>
+  %47 = arith.addf %46, %45 : vector<8xf16>
+  %48 = arith.mulf %31, %29 : vector<8xf16>
+  %49 = arith.addf %48, %47 : vector<8xf16>
+  %50 = arith.mulf %35, %33 : vector<8xf16>
+  %51 = arith.addf %50, %49 : vector<8xf16>
+  %52 = vector.reduction <add>, %51 : vector<8xf16> into f16
+  %53 = gpu.subgroup_reduce  add %52 : (f16) -> f16
+  %54 = arith.addf %53, %cst_0 : f16
+  %55 = vector.broadcast %54 : f16 to vector<1xf16>
+  %56 = arith.cmpi eq, %0, %c0 : index
+  scf.if %56 {
+    vector.transfer_write %55, %3[%c0, %workgroup_id_x] {in_bounds = [true]} : vector<1xf16>, memref<1x32000xf16, #hal.descriptor_type<storage_buffer>>
+  }
+  return
+}
+
