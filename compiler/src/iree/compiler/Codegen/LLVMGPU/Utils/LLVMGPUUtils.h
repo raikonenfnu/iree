@@ -21,6 +21,10 @@ void createAsyncGroups(RewriterBase &rewriter, func::FuncOp funcOp,
 void doLayoutAnalysisAndDistribution(RewriterBase &rewriter,
                                      func::FuncOp funcOp);
 
+/// Function to do layout analysis and distribution. This is a rewrite of
+/// doLayoutAnalysisAndDistribution.
+void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp);
+
 /// Function to reorder transposes and elementwise ops.
 void reorderTranspose(RewriterBase &rewriter, func::FuncOp funcOp);
 

@@ -15,9 +15,12 @@ iree_cc_library(
     Utils
   HDRS
     "LLVMGPUUtils.h"
+    "VectorLayoutProvider.h"
   SRCS
     "LLVMGPULayoutAnalysisAndDistribution.cpp"
     "LLVMGPUUtils.cpp"
+    "LLVMGPUVectorDistribution.cpp"
+    "VectorLayoutProvider.cpp"
   DEPS
     LLVMSupport
     MLIRAffineDialect

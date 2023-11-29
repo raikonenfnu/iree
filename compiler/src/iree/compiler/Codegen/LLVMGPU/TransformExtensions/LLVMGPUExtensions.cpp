@@ -861,6 +861,19 @@ transform_dialect::LayoutAnalysisAndDistributionOp::applyToOne(
 }
 
 //===---------------------------------------------------------------------===//
+// SIMTVectorDistributionOp.
+//===---------------------------------------------------------------------===//
+DiagnosedSilenceableFailure
+transform_dialect::SIMTVectorDistributionOp::applyToOne(
+    transform::TransformRewriter &rewriter, func::FuncOp target,
+    transform::ApplyToEachResultList &results,
+    transform::TransformState &state) {
+  iree_compiler::distributeVectors(rewriter, cast<func::FuncOp>(target));
+  results.push_back(target);
+  return DiagnosedSilenceableFailure::success();
+}
+
+//===---------------------------------------------------------------------===//
 // ReorderTransposeOp
 //===---------------------------------------------------------------------===//
 DiagnosedSilenceableFailure transform_dialect::ReorderTransposeOp::applyToOne(

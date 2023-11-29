@@ -6,6 +6,7 @@
 
 #include "iree-dialects/Dialect/VectorExt/IR/VectorExtOps.h"
 #include "iree/compiler/Codegen/Common/VectorLayoutAnalysis.h"
+#include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
 #include "iree/compiler/Codegen/LLVMGPU/Utils/VectorLayoutProvider.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -31,15 +32,29 @@ public:
     provider->setAnchorOps();
     if (failed(analysis.run()))
       return;
+
+    // Anotate ops for debugging for now.
+    root->walk([&](Operation *op) {
+      if (op->getNumResults() != 1)
+        return;
+      Attribute layout = analysis.getLayout<Attribute>(op->getResult(0));
+      if (!layout)
+        return;
+      op->setAttr("layout", layout);
+    });
   }
 
   void distribute() {
+    // TODO: We are returning for now, to just see the affect of layout
+    // analysis. Later, this should be removed.
+    return;
+
     root->walk([&](Operation *op) {
       rewriter.setInsertionPoint(op);
 
-      if (provider->specializedDistribution(op)) {
-        return;
-      }
+      // if (provider->specializedDistribution(op)) {
+      //   return;
+      // }
 
       TypeSwitch<Operation *, void>(op)
           .Case<vector::ContractionOp>([&](auto contractOp) {
