@@ -24,12 +24,12 @@ void AMDGPULayoutProvider::setAnchorOps() {
 
         SmallVector<LayoutDimensionAttr> labelsRow = {
             LayoutDimensionAttr::get(ctx, LayoutDimension::VECTORY)};
-        SmallVector<int64_t> sizesRow = {shape[1]};
+        SmallVector<int64_t> sizesRow = {shape[0]};
         PerDimLayoutAttr row = PerDimLayoutAttr::get(ctx, labelsRow, sizesRow);
 
         SmallVector<LayoutDimensionAttr> labelsCol = {
             LayoutDimensionAttr::get(ctx, LayoutDimension::VECTORY)};
-        SmallVector<int64_t> sizesCol = {shape[0]};
+        SmallVector<int64_t> sizesCol = {shape[1]};
         PerDimLayoutAttr col = PerDimLayoutAttr::get(ctx, labelsCol, sizesCol);
 
         SmallVector<PerDimLayoutAttr> layouts = {row, col};
