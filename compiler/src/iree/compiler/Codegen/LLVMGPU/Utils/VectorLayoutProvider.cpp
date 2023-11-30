@@ -10,42 +10,72 @@ using namespace mlir::iree_compiler::IREE::VectorExt;
 using namespace mlir::iree_compiler;
 using namespace mlir;
 
-void AMDGPULayoutProvider::setAnchorOps() {
-  MLIRContext *ctx = root->getContext();
+static std::tuple<uint32_t, uint32_t, uint32_t> getCanonicalDims(AMDCDNAGPULayoutProvider::MFMAType type) {
+  switch (type) {
+    case AMDCDNAGPULayoutProvider::MFMAType::F16_16x16x16_F32:
+      return {16, 16, 16};
+    default:
+      return {0, 0, 0};
+  }
+}
 
-  // TODO: This is a fake layout, just to test the analysis.
+static SmallVector<uint32_t> getCanonicalShape(uint32_t M, uint32_t N, uint32_t K,
+                                               ContractMatrixType matrixType,
+                                               ContractType contractType) {
+  SmallVector<uint32_t> shape;
+  switch (matrixType) {
+    case ContractMatrixType::A:
+      shape = contractType == ContractType::MTM ? SmallVector<uint32_t>{K, M}
+                                                : SmallVector<uint32_t>{M, K};
+      break;
+    case ContractMatrixType::B:
+      shape = contractType == ContractType::MMT ? SmallVector<uint32_t>{N, K}
+                                                : SmallVector<uint32_t>{K, N};
+      break;
+    default:
+      shape = {M, N};
+  }
+  return shape;
+}
+
+static PerDimLayoutAttr createPerDimLayout(MLIRContext *ctx, ArrayRef<LayoutDimension> dims,
+                                           ArrayRef<int64_t> shapes) {
+  SmallVector<LayoutDimensionAttr> dimAttrs;
+  for (auto dim : dims)
+    dimAttrs.push_back(LayoutDimensionAttr::get(ctx, dim));
+  return PerDimLayoutAttr::get(ctx, dimAttrs, shapes);
+}
+
+void AMDCDNAGPULayoutProvider::setAnchorOps() {
+  MLIRContext *ctx = root->getContext();
   root->walk([&](Operation *op) {
     if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
-
-      auto setLayout = [&](TypedValue<VectorType> val) {
-        // Get shape of value.
-        ArrayRef<int64_t> shape = val.getType().getShape();
-        assert(shape.size() == 2 && "Only support 2D contraction for now.");
-
-        SmallVector<LayoutDimensionAttr> labelsRow = {
-            LayoutDimensionAttr::get(ctx, LayoutDimension::VECTORY)};
-        SmallVector<int64_t> sizesRow = {shape[0]};
-        PerDimLayoutAttr row = PerDimLayoutAttr::get(ctx, labelsRow, sizesRow);
-
-        SmallVector<LayoutDimensionAttr> labelsCol = {
-            LayoutDimensionAttr::get(ctx, LayoutDimension::VECTORY)};
-        SmallVector<int64_t> sizesCol = {shape[1]};
-        PerDimLayoutAttr col = PerDimLayoutAttr::get(ctx, labelsCol, sizesCol);
-
-        SmallVector<PerDimLayoutAttr> layouts = {row, col};
-        LayoutAttr layout = LayoutAttr::get(ctx, layouts);
-
-        analysis.setAnchor(val, layout);
+      uint32_t M, N, K;
+      std::tie(M, N, K) = getCanonicalDims(mfmaType);
+      auto setLayout = [&](Value value, ContractMatrixType matrixType, int64_t numElements) {
+        ArrayRef<int64_t> matrixShape = cast<VectorType>(value.getType()).getShape();
+        SmallVector<uint32_t> canonicalShape = getCanonicalShape(M, N, K, matrixType, contractType);
+        uint32_t batchRow = matrixShape[0] / canonicalShape[0];
+        uint32_t batchCol = matrixShape[1] / canonicalShape[1];
+        PerDimLayoutAttr rowLayout = createPerDimLayout(ctx, {LayoutDimension::BATCHX, LayoutDimension::LANEX}, {batchRow, 16});
+        auto colLayout = [&] (int64_t numElements) -> PerDimLayoutAttr {
+          return createPerDimLayout(ctx, {LayoutDimension::BATCHY, LayoutDimension::LANEY, LayoutDimension::VECTORX},
+                                    {batchCol, 4, numElements});
+        };
+        LayoutAttr layout;
+        if (matrixType == ContractMatrixType::A) {
+          layout = LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
+        } else if (matrixType == ContractMatrixType::B) {
+          layout = LayoutAttr::get(ctx, {colLayout(numElements), rowLayout});
+        } else {
+          layout = LayoutAttr::get(ctx, {colLayout(4), rowLayout});
+        }
+        analysis.setAnchor(value, layout);
       };
-
-      setLayout(contractOp.getLhs());
-      setLayout(contractOp.getRhs());
-
-      Value result = contractOp.getResult();
-      assert(isa<VectorType>(result.getType()) &&
-             "Only support vector result for now.");
-      TypedValue<VectorType> resultVal = cast<TypedValue<VectorType>>(result);
-      setLayout(resultVal);
+      setLayout(contractOp.getLhs(), ContractMatrixType::A, 4);
+      setLayout(contractOp.getRhs(), ContractMatrixType::B, 4);
+      setLayout(contractOp.getAcc(), ContractMatrixType::C, 4);
+      setLayout(contractOp.getResult(), ContractMatrixType::D, 4);
     }
   });
 }

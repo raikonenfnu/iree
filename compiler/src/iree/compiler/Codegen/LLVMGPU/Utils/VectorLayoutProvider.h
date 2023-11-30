@@ -16,6 +16,17 @@
 namespace mlir {
 namespace iree_compiler {
 
+enum class ContractMatrixType {
+  A, B, C, D
+};
+
+// Adding support for just these contract types for now
+enum class ContractType {
+  MMT,
+  MTM,
+  MM
+};
+
 class LayoutProvider {
 public:
   LayoutProvider(VectorLayoutAnalysis &analysis, Operation *root)
@@ -54,12 +65,23 @@ protected:
   Operation *root;
 };
 
-class AMDGPULayoutProvider : public LayoutProvider {
+// This is specific for MI-series GPUs.
+class AMDCDNAGPULayoutProvider : public LayoutProvider {
 public:
-  AMDGPULayoutProvider(VectorLayoutAnalysis &analysis, Operation *root)
-      : LayoutProvider(analysis, root) {}
+  // Format is INPUTTYPE_MxNxK_OUTPUTTYPE.
+  enum class MFMAType {
+    F16_16x16x16_F32,
+  };
+  // Default format for MFMA is MMT.
+  // The mfmaType is a parameter that can be tuned.
+  AMDCDNAGPULayoutProvider(VectorLayoutAnalysis &analysis, Operation *root,
+                           MFMAType mfmaType = MFMAType::F16_16x16x16_F32,
+                           ContractType contractType = ContractType::MMT)
+      : LayoutProvider(analysis, root), mfmaType(mfmaType), contractType(contractType) {}
 
   virtual void setAnchorOps() override;
+  MFMAType mfmaType;
+  ContractType contractType;
 };
 
 // class NVIDIAGPULayoutProvider : public LayoutProvider {

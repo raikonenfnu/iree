@@ -96,7 +96,7 @@ private:
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
   VectorLayoutAnalysis analysis(funcOp);
-  AMDGPULayoutProvider layoutProvider(analysis, funcOp);
+  AMDCDNAGPULayoutProvider layoutProvider(analysis, funcOp);
   VectorDistribution distribution(funcOp, rewriter, &layoutProvider, analysis);
   distribution.distribute();
 }
