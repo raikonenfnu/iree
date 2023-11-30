@@ -36,22 +36,23 @@ public:
   virtual SmallVector<int64_t>
   getDistributedShape(TypedValue<VectorType> val) = 0;
 
-  /// Given a value, iterate over all elements assigned to a single thread in
-  /// distribution, for that particular value.
-  virtual void
-  forAllElementsInThread(TypedValue<VectorType> val,
-                         std::function<void(ArrayRef<int64_t>)> callback) = 0;
+  // /// Given a value, iterate over all elements assigned to a single thread in
+  // /// distribution, for that particular value.
+  // virtual void
+  // forAllElementsInThread(TypedValue<VectorType> val,
+  //                        std::function<void(ArrayRef<int64_t>)> callback) =
+  //                        0;
 
-  /// Given a index of an element in a single thread, get the index of this
-  /// thread in the distributed layout, i.e. parameterized by thread
-  /// indexes.
-  /// TODO: What should be the return value?
-  virtual void getDistributedIndex(ArrayRef<int64_t> index) = 0;
+  // /// Given a index of an element in a single thread, get the index of this
+  // /// thread in the distributed layout, i.e. parameterized by thread
+  // /// indexes.
+  // /// TODO: What should be the return value?
+  // virtual void getDistributedIndex(ArrayRef<int64_t> index) = 0;
 
-  /// Given an operation, do specialized distribution for it. Return true if
-  /// the operation if a specialized distribution is done.
-  /// Return false if the operation is not specialized.
-  virtual bool specializedDistribution(Operation *op) = 0;
+  // /// Given an operation, do specialized distribution for it. Return true if
+  // /// the operation if a specialized distribution is done.
+  // /// Return false if the operation is not specialized.
+  // virtual bool specializedDistribution(Operation *op) = 0;
 
 protected:
   VectorLayoutAnalysis &analysis;
@@ -74,6 +75,7 @@ public:
         contractType(contractType) {}
 
   virtual void setAnchorOps() override;
+
   /// Given a Value of type VectorType, return the distributed shape of the
   /// value, based on it's layout in the analysis.
   virtual SmallVector<int64_t>
@@ -97,6 +99,7 @@ public:
   // /// Return false if the operation is not specialized.
   // virtual bool specializedDistribution(Operation *op) override;
 
+private:
   MFMAType mfmaType;
   ContractType contractType;
 };
