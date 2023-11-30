@@ -16,16 +16,10 @@
 namespace mlir {
 namespace iree_compiler {
 
-enum class ContractMatrixType {
-  A, B, C, D
-};
+enum class ContractMatrixType { A, B, C, D };
 
 // Adding support for just these contract types for now
-enum class ContractType {
-  MMT,
-  MTM,
-  MM
-};
+enum class ContractType { MMT, MTM, MM };
 
 class LayoutProvider {
 public:
@@ -46,8 +40,7 @@ public:
   /// distribution, for that particular value.
   virtual void
   forAllElementsInThread(TypedValue<VectorType> val,
-                         std::function<void(ArrayRef<int64_t>)> callback) =
-                         0;
+                         std::function<void(ArrayRef<int64_t>)> callback) = 0;
 
   /// Given a index of an element in a single thread, get the index of this
   /// thread in the distributed layout, i.e. parameterized by thread
@@ -77,7 +70,8 @@ public:
   AMDCDNAGPULayoutProvider(VectorLayoutAnalysis &analysis, Operation *root,
                            MFMAType mfmaType = MFMAType::F16_16x16x16_F32,
                            ContractType contractType = ContractType::MMT)
-      : LayoutProvider(analysis, root), mfmaType(mfmaType), contractType(contractType) {}
+      : LayoutProvider(analysis, root), mfmaType(mfmaType),
+        contractType(contractType) {}
 
   virtual void setAnchorOps() override;
   /// Given a Value of type VectorType, return the distributed shape of the

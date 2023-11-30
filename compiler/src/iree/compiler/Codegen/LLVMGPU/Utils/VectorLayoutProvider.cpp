@@ -10,35 +10,38 @@ using namespace mlir::iree_compiler::IREE::VectorExt;
 using namespace mlir::iree_compiler;
 using namespace mlir;
 
-static std::tuple<uint32_t, uint32_t, uint32_t> getCanonicalDims(AMDCDNAGPULayoutProvider::MFMAType type) {
+static std::tuple<uint32_t, uint32_t, uint32_t>
+getCanonicalDims(AMDCDNAGPULayoutProvider::MFMAType type) {
   switch (type) {
-    case AMDCDNAGPULayoutProvider::MFMAType::F16_16x16x16_F32:
-      return {16, 16, 16};
-    default:
-      return {0, 0, 0};
+  case AMDCDNAGPULayoutProvider::MFMAType::F16_16x16x16_F32:
+    return {16, 16, 16};
+  default:
+    return {0, 0, 0};
   }
 }
 
-static SmallVector<uint32_t> getCanonicalShape(uint32_t M, uint32_t N, uint32_t K,
+static SmallVector<uint32_t> getCanonicalShape(uint32_t M, uint32_t N,
+                                               uint32_t K,
                                                ContractMatrixType matrixType,
                                                ContractType contractType) {
   SmallVector<uint32_t> shape;
   switch (matrixType) {
-    case ContractMatrixType::A:
-      shape = contractType == ContractType::MTM ? SmallVector<uint32_t>{K, M}
-                                                : SmallVector<uint32_t>{M, K};
-      break;
-    case ContractMatrixType::B:
-      shape = contractType == ContractType::MMT ? SmallVector<uint32_t>{N, K}
-                                                : SmallVector<uint32_t>{K, N};
-      break;
-    default:
-      shape = {M, N};
+  case ContractMatrixType::A:
+    shape = contractType == ContractType::MTM ? SmallVector<uint32_t>{K, M}
+                                              : SmallVector<uint32_t>{M, K};
+    break;
+  case ContractMatrixType::B:
+    shape = contractType == ContractType::MMT ? SmallVector<uint32_t>{N, K}
+                                              : SmallVector<uint32_t>{K, N};
+    break;
+  default:
+    shape = {M, N};
   }
   return shape;
 }
 
-static PerDimLayoutAttr createPerDimLayout(MLIRContext *ctx, ArrayRef<LayoutDimension> dims,
+static PerDimLayoutAttr createPerDimLayout(MLIRContext *ctx,
+                                           ArrayRef<LayoutDimension> dims,
                                            ArrayRef<int64_t> shapes) {
   SmallVector<LayoutDimensionAttr> dimAttrs;
   for (auto dim : dims)
@@ -52,14 +55,22 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
     if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
       uint32_t M, N, K;
       std::tie(M, N, K) = getCanonicalDims(mfmaType);
-      auto setLayout = [&](Value value, ContractMatrixType matrixType, int64_t numElements) {
-        ArrayRef<int64_t> matrixShape = cast<VectorType>(value.getType()).getShape();
-        SmallVector<uint32_t> canonicalShape = getCanonicalShape(M, N, K, matrixType, contractType);
+      auto setLayout = [&](Value value, ContractMatrixType matrixType,
+                           int64_t numElements) {
+        ArrayRef<int64_t> matrixShape =
+            cast<VectorType>(value.getType()).getShape();
+        SmallVector<uint32_t> canonicalShape =
+            getCanonicalShape(M, N, K, matrixType, contractType);
         uint32_t batchRow = matrixShape[0] / canonicalShape[0];
         uint32_t batchCol = matrixShape[1] / canonicalShape[1];
-        PerDimLayoutAttr rowLayout = createPerDimLayout(ctx, {LayoutDimension::BATCHX, LayoutDimension::LANEX}, {batchRow, 16});
-        auto colLayout = [&] (int64_t numElements) -> PerDimLayoutAttr {
-          return createPerDimLayout(ctx, {LayoutDimension::BATCHY, LayoutDimension::LANEY, LayoutDimension::VECTORX},
+        PerDimLayoutAttr rowLayout = createPerDimLayout(
+            ctx, {LayoutDimension::BATCHX, LayoutDimension::LANEX},
+            {batchRow, 16});
+        auto colLayout = [&](int64_t numElements) -> PerDimLayoutAttr {
+          return createPerDimLayout(ctx,
+                                    {LayoutDimension::BATCHY,
+                                     LayoutDimension::LANEY,
+                                     LayoutDimension::VECTORX},
                                     {batchCol, 4, numElements});
         };
         LayoutAttr layout;
@@ -80,8 +91,11 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
   });
 }
 
-SmallVector<int64_t> AMDCDNAGPULayoutProvider::getDistributedShape(TypedValue<VectorType> value) {
-  SmallVector<LayoutDimension> dims{LayoutDimension::BATCHX, LayoutDimension::BATCHY, LayoutDimension::VECTORX};
+SmallVector<int64_t>
+AMDCDNAGPULayoutProvider::getDistributedShape(TypedValue<VectorType> value) {
+  SmallVector<LayoutDimension> dims{LayoutDimension::BATCHX,
+                                    LayoutDimension::BATCHY,
+                                    LayoutDimension::VECTORX};
   auto layout = analysis.getLayout<LayoutAttr>(value);
   return layout.getSIMTVectorShape(dims);
 }
