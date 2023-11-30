@@ -79,3 +79,9 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
     }
   });
 }
+
+SmallVector<int64_t> AMDCDNAGPULayoutProvider::getDistributedShape(TypedValue<VectorType> value) {
+  SmallVector<LayoutDimension> dims{LayoutDimension::BATCHX, LayoutDimension::BATCHY, LayoutDimension::VECTORX};
+  auto layout = analysis.getLayout<LayoutAttr>(value);
+  return layout.getSIMTVectorShape(dims);
+}
