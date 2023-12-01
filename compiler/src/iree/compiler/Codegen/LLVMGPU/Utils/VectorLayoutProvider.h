@@ -37,14 +37,11 @@ public:
   virtual SmallVector<int64_t>
   getDistributedShape(TypedValue<VectorType> val) = 0;
 
-  /// For a given value, return a list of AffineMaps that represents the
-  /// function: Given a index of an element in a single thread, get the index
-  /// of this thread in the distributed layout, i.e. parameterized by thread
-  /// indexes.
-  ///
-  /// (distributedIndex)[gpux, gpuy, gpuz] -> (simdIndex)
+  /// For a given value, return the distributed index for the value.
+  /// (index)[threadx, thready, threadz] -> (distributedIndex)
   virtual SmallVector<AffineMap>
-  getSIMDIndexFromDistributedIndex(TypedValue<VectorType> val) = 0;
+  getDistributedIndex(TypedValue<VectorType> val,
+                      ArrayRef<int64_t> iterate) = 0;
 
   virtual int64_t getLoadWidth(TypedValue<VectorType> val,
                                ArrayRef<int64_t> iterate) {
@@ -94,7 +91,8 @@ public:
   getDistributedShape(TypedValue<VectorType> val) override;
 
   virtual SmallVector<AffineMap>
-  getSIMDIndexFromDistributedIndex(TypedValue<VectorType> val) override;
+  getDistributedIndex(TypedValue<VectorType> val,
+                      ArrayRef<int64_t> iterate) override;
 
   // /// Given an operation, do specialized distribution for it. Return true if
   // /// the operation if a specialized distribution is done.

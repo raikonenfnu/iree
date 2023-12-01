@@ -72,6 +72,12 @@ private:
 
   void distributeConstants(arith::ConstantOp constantOp) {}
 
+  SmallVector<Value> getThreadIds() {
+    return {rewriter.create<gpu::ThreadIdOp>(root.getLoc(), gpu::Dimension::x),
+            rewriter.create<gpu::ThreadIdOp>(root.getLoc(), gpu::Dimension::y),
+            rewriter.create<gpu::ThreadIdOp>(root.getLoc(), gpu::Dimension::z)};
+  }
+
   func::FuncOp root;
   VectorLayoutAnalysis &analysis;
   LayoutProvider *provider;
@@ -108,86 +114,69 @@ iterateOverShape(ArrayRef<int64_t> shape,
 void VectorDistribution::distributeTransferReads(
     vector::TransferReadOp transferReadOp) {
   TypedValue<VectorType> result = transferReadOp.getResult();
-
-  // Get GPU Thread IDs.
-  SmallVector<Value> gpuThreadIds = {
-      rewriter.create<gpu::ThreadIdOp>(transferReadOp.getLoc(),
-                                       gpu::Dimension::x),
-      rewriter.create<gpu::ThreadIdOp>(transferReadOp.getLoc(),
-                                       gpu::Dimension::y),
-      rewriter.create<gpu::ThreadIdOp>(transferReadOp.getLoc(),
-                                       gpu::Dimension::z)};
-
-  // Ask the provider for the distributed shape.
+  SmallVector<Value> gpuThreadIds = getThreadIds();
   SmallVector<int64_t> distributedShape = provider->getDistributedShape(result);
-  // Ask the provider for distribution maps.
-  SmallVector<AffineMap> simdIndices =
-      provider->getSIMDIndexFromDistributedIndex(result);
+  for (auto it : distributedShape) {
+    llvm::errs() << it << "x";
+  }
+  llvm::errs() << "\n";
+  analysis.getLayout<Attribute>(result).dump();
+
   // Iterate over the given shape with a stride of 1.
   iterateOverShape(distributedShape, [&](ArrayRef<int64_t> iterate) -> int64_t {
+    SmallVector<AffineMap> indexMaps =
+        provider->getDistributedIndex(result, iterate);
     // Get the indices for the load.
     SmallVector<Value> loadIndices;
-    for (auto [index, indice] : enumerate(iterate)) {
-      Value indiceVal = rewriter.create<arith::ConstantIndexOp>(
-          transferReadOp.getLoc(), indice);
-
-      // (indice)[threadx, thready, threadz]
-      SmallVector<Value> applyOperands;
-      applyOperands.push_back(indiceVal);
-      for (auto gpuThreadId : gpuThreadIds) {
-        applyOperands.push_back(gpuThreadId);
+    // Iterate on the indices in the permutation order.
+    for (auto index : transferReadOp.getPermutationMap().getResults()) {
+      auto dimExpr = dyn_cast<AffineDimExpr>(index);
+      if (!dimExpr) {
+        emitError(transferReadOp.getLoc())
+            << "Non-dim expr in permutation map\n";
+        continue;
       }
 
-      Value loadIndex = rewriter.create<affine::AffineApplyOp>(
-          transferReadOp.getLoc(), applyOperands);
-
-      loadIndices.push_back(loadIndex);
+      int64_t dim = dimExpr.getPosition();
+      llvm::errs() << indexMaps[dim] << "\n";
     }
 
-    // Load from loadIndices with a width provided by the provider.
-    int64_t loadWidth = provider->getLoadWidth(result, iterate);
+    // Store from loadIndices with a width provided by the provider.
+    int64_t storeWidth = provider->getStoreWidth(result, iterate);
 
-    return loadWidth;
+    return storeWidth;
   });
 }
 
 void VectorDistribution::distributeTransferWrites(
     vector::TransferWriteOp transferWriteOp) {
   TypedValue<VectorType> vector = transferWriteOp.getVector();
-
-  // Get GPU Thread IDs.
-  SmallVector<Value> gpuThreadIds = {
-      rewriter.create<gpu::ThreadIdOp>(transferWriteOp.getLoc(),
-                                       gpu::Dimension::x),
-      rewriter.create<gpu::ThreadIdOp>(transferWriteOp.getLoc(),
-                                       gpu::Dimension::y),
-      rewriter.create<gpu::ThreadIdOp>(transferWriteOp.getLoc(),
-                                       gpu::Dimension::z)};
-
-  // Ask the provider for the distributed shape.
+  SmallVector<Value> gpuThreadIds = getThreadIds();
   SmallVector<int64_t> distributedShape = provider->getDistributedShape(vector);
-  // Ask the provider for distribution maps.
-  SmallVector<AffineMap> simdIndices =
-      provider->getSIMDIndexFromDistributedIndex(vector);
+
+  for (auto it : distributedShape) {
+    llvm::errs() << it << "x";
+  }
+  llvm::errs() << "\n";
+  analysis.getLayout<Attribute>(vector).dump();
+
   // Iterate over the given shape with a stride of 1.
   iterateOverShape(distributedShape, [&](ArrayRef<int64_t> iterate) -> int64_t {
+    SmallVector<AffineMap> indexMaps =
+        provider->getDistributedIndex(vector, iterate);
     // Get the indices for the load.
     SmallVector<Value> loadIndices;
-    for (auto [index, indice] : enumerate(iterate)) {
-      Value indiceVal = rewriter.create<arith::ConstantIndexOp>(
-          transferWriteOp.getLoc(), indice);
-
-      // (indice)[threadx, thready, threadz]
-      SmallVector<Value> applyOperands;
-      applyOperands.push_back(indiceVal);
-      for (auto gpuThreadId : gpuThreadIds) {
-        applyOperands.push_back(gpuThreadId);
+    // Iterate on the indices in the permutation order.
+    for (auto index : transferWriteOp.getPermutationMap().getResults()) {
+      auto dimExpr = dyn_cast<AffineDimExpr>(index);
+      if (!dimExpr) {
+        emitError(transferWriteOp.getLoc())
+            << "Non-dim expr in permutation map\n";
+        continue;
       }
 
-      Value loadIndex = rewriter.create<affine::AffineApplyOp>(
-          transferWriteOp.getLoc(), applyOperands);
-
-      loadIndices.push_back(loadIndex);
+      int64_t dim = dimExpr.getPosition();
+      llvm::errs() << indexMaps[dim] << "\n";
     }
 
     // Store from loadIndices with a width provided by the provider.
