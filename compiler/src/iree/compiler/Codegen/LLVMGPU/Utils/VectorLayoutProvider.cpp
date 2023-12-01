@@ -99,3 +99,9 @@ AMDCDNAGPULayoutProvider::getDistributedShape(TypedValue<VectorType> value) {
   auto layout = analysis.getLayout<LayoutAttr>(value);
   return layout.getSIMTVectorShape(dims);
 }
+
+SmallVector<AffineMap>
+AMDCDNAGPULayoutProvider::getSIMDIndexFromDistributedIndex(
+    TypedValue<VectorType> val) {
+  return {};
+}

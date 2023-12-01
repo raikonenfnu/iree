@@ -32,29 +32,15 @@ public:
     provider->setAnchorOps();
     if (failed(analysis.run()))
       return;
-
-    // Anotate ops for debugging for now.
-    root->walk([&](Operation *op) {
-      if (op->getNumResults() != 1)
-        return;
-      Attribute layout = analysis.getLayout<Attribute>(op->getResult(0));
-      if (!layout)
-        return;
-      op->setAttr("layout", layout);
-    });
   }
 
   void distribute() {
-    // TODO: We are returning for now, to just see the affect of layout
-    // analysis. Later, this should be removed.
-    return;
-
     root->walk([&](Operation *op) {
       rewriter.setInsertionPoint(op);
 
-      // if (provider->specializedDistribution(op)) {
-      //   return;
-      // }
+      if (provider->specializedDistribution(op)) {
+        return;
+      }
 
       TypeSwitch<Operation *, void>(op)
           .Case<vector::ContractionOp>([&](auto contractOp) {
@@ -67,6 +53,7 @@ public:
           })
           .Case<vector::TransferWriteOp>([&](auto transferWriteOp) {
             distributeTransferWrites(transferWriteOp);
+            return;
           })
           .Case<arith::ConstantOp>([&](auto constantOp) {
             distributeConstants(constantOp);
@@ -77,9 +64,9 @@ public:
   }
 
 private:
-  void distributeTransferWrites(vector::TransferWriteOp transferWriteOp) {}
+  void distributeTransferWrites(vector::TransferWriteOp transferWriteOp);
 
-  void distributeTransferReads(vector::TransferReadOp transferReadOp) {}
+  void distributeTransferReads(vector::TransferReadOp transferReadOp);
 
   void distributeContractions(vector::ContractionOp contractionOp) {}
 
@@ -93,6 +80,122 @@ private:
 }; // namespace
 
 } // namespace
+
+/// Iterate over all indices of the given shape, and call the callback with the
+/// indices. The callback returns a stride to move by.
+static void
+iterateOverShape(ArrayRef<int64_t> shape,
+                 std::function<int64_t(ArrayRef<int64_t>)> callback) {
+  SmallVector<int64_t> indices(shape.size(), 0);
+  while (true) {
+    int64_t stride = callback(indices);
+    // Move by the given stride.
+    int64_t remaining = stride;
+    for (int64_t i = indices.size() - 1; i >= 0; --i) {
+      indices[i] += remaining;
+      remaining = indices[i] / shape[i];
+      indices[i] %= shape[i];
+
+      if (remaining == 0)
+        break;
+    }
+
+    if (remaining != 0)
+      break;
+  }
+}
+
+void VectorDistribution::distributeTransferReads(
+    vector::TransferReadOp transferReadOp) {
+  TypedValue<VectorType> result = transferReadOp.getResult();
+
+  // Get GPU Thread IDs.
+  SmallVector<Value> gpuThreadIds = {
+      rewriter.create<gpu::ThreadIdOp>(transferReadOp.getLoc(),
+                                       gpu::Dimension::x),
+      rewriter.create<gpu::ThreadIdOp>(transferReadOp.getLoc(),
+                                       gpu::Dimension::y),
+      rewriter.create<gpu::ThreadIdOp>(transferReadOp.getLoc(),
+                                       gpu::Dimension::z)};
+
+  // Ask the provider for the distributed shape.
+  SmallVector<int64_t> distributedShape = provider->getDistributedShape(result);
+  // Ask the provider for distribution maps.
+  SmallVector<AffineMap> simdIndices =
+      provider->getSIMDIndexFromDistributedIndex(result);
+  // Iterate over the given shape with a stride of 1.
+  iterateOverShape(distributedShape, [&](ArrayRef<int64_t> iterate) -> int64_t {
+    // Get the indices for the load.
+    SmallVector<Value> loadIndices;
+    for (auto [index, indice] : enumerate(iterate)) {
+      Value indiceVal = rewriter.create<arith::ConstantIndexOp>(
+          transferReadOp.getLoc(), indice);
+
+      // (indice)[threadx, thready, threadz]
+      SmallVector<Value> applyOperands;
+      applyOperands.push_back(indiceVal);
+      for (auto gpuThreadId : gpuThreadIds) {
+        applyOperands.push_back(gpuThreadId);
+      }
+
+      Value loadIndex = rewriter.create<affine::AffineApplyOp>(
+          transferReadOp.getLoc(), applyOperands);
+
+      loadIndices.push_back(loadIndex);
+    }
+
+    // Load from loadIndices with a width provided by the provider.
+    int64_t loadWidth = provider->getLoadWidth(result, iterate);
+
+    return loadWidth;
+  });
+}
+
+void VectorDistribution::distributeTransferWrites(
+    vector::TransferWriteOp transferWriteOp) {
+  TypedValue<VectorType> vector = transferWriteOp.getVector();
+
+  // Get GPU Thread IDs.
+  SmallVector<Value> gpuThreadIds = {
+      rewriter.create<gpu::ThreadIdOp>(transferWriteOp.getLoc(),
+                                       gpu::Dimension::x),
+      rewriter.create<gpu::ThreadIdOp>(transferWriteOp.getLoc(),
+                                       gpu::Dimension::y),
+      rewriter.create<gpu::ThreadIdOp>(transferWriteOp.getLoc(),
+                                       gpu::Dimension::z)};
+
+  // Ask the provider for the distributed shape.
+  SmallVector<int64_t> distributedShape = provider->getDistributedShape(vector);
+  // Ask the provider for distribution maps.
+  SmallVector<AffineMap> simdIndices =
+      provider->getSIMDIndexFromDistributedIndex(vector);
+  // Iterate over the given shape with a stride of 1.
+  iterateOverShape(distributedShape, [&](ArrayRef<int64_t> iterate) -> int64_t {
+    // Get the indices for the load.
+    SmallVector<Value> loadIndices;
+    for (auto [index, indice] : enumerate(iterate)) {
+      Value indiceVal = rewriter.create<arith::ConstantIndexOp>(
+          transferWriteOp.getLoc(), indice);
+
+      // (indice)[threadx, thready, threadz]
+      SmallVector<Value> applyOperands;
+      applyOperands.push_back(indiceVal);
+      for (auto gpuThreadId : gpuThreadIds) {
+        applyOperands.push_back(gpuThreadId);
+      }
+
+      Value loadIndex = rewriter.create<affine::AffineApplyOp>(
+          transferWriteOp.getLoc(), applyOperands);
+
+      loadIndices.push_back(loadIndex);
+    }
+
+    // Store from loadIndices with a width provided by the provider.
+    int64_t storeWidth = provider->getStoreWidth(vector, iterate);
+
+    return storeWidth;
+  });
+}
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
   VectorLayoutAnalysis analysis(funcOp);

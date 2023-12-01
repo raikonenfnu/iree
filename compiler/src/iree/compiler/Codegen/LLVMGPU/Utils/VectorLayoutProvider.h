@@ -10,6 +10,7 @@
 #include "iree-dialects/Dialect/VectorExt/IR/VectorExtOps.h"
 #include "iree/compiler/Codegen/Common/VectorLayoutAnalysis.h"
 #include "llvm/Support/Debug.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/AffineMap.h"
 
@@ -36,28 +37,39 @@ public:
   virtual SmallVector<int64_t>
   getDistributedShape(TypedValue<VectorType> val) = 0;
 
-  // /// Given a value, iterate over all elements assigned to a single thread in
-  // /// distribution, for that particular value.
-  // virtual void
-  // forAllElementsInThread(TypedValue<VectorType> val,
-  //                        std::function<void(ArrayRef<int64_t>)> callback) =
-  //                        0;
+  /// For a given value, return a list of AffineMaps that represents the
+  /// function: Given a index of an element in a single thread, get the index
+  /// of this thread in the distributed layout, i.e. parameterized by thread
+  /// indexes.
+  ///
+  /// (distributedIndex)[gpux, gpuy, gpuz] -> (simdIndex)
+  virtual SmallVector<AffineMap>
+  getSIMDIndexFromDistributedIndex(TypedValue<VectorType> val) = 0;
 
-  // /// Given a index of an element in a single thread, get the index of this
-  // /// thread in the distributed layout, i.e. parameterized by thread
-  // /// indexes.
-  // /// TODO: What should be the return value?
-  // virtual void getDistributedIndex(ArrayRef<int64_t> index) = 0;
+  virtual int64_t getLoadWidth(TypedValue<VectorType> val,
+                               ArrayRef<int64_t> iterate) {
+    // Convervative choice.
+    return 1;
+  }
 
-  // /// Given an operation, do specialized distribution for it. Return true if
-  // /// the operation if a specialized distribution is done.
-  // /// Return false if the operation is not specialized.
-  // virtual bool specializedDistribution(Operation *op) = 0;
+  virtual int64_t getStoreWidth(TypedValue<VectorType> val,
+                                ArrayRef<int64_t> iterate) {
+    // Convervative choice.
+    return 1;
+  }
+
+  /// Given an operation, do specialized distribution for it. Return true if
+  /// the operation if a specialized distribution is done.
+  /// Return false if the operation is not specialized.
+  virtual bool specializedDistribution(Operation *op) {
+    // No specialization by default.
+    return false;
+  }
 
 protected:
   VectorLayoutAnalysis &analysis;
   Operation *root;
-};
+}; // namespace iree_compiler
 
 // This is specific for MI-series GPUs.
 class AMDCDNAGPULayoutProvider : public LayoutProvider {
@@ -81,18 +93,8 @@ public:
   virtual SmallVector<int64_t>
   getDistributedShape(TypedValue<VectorType> val) override;
 
-  /// Given a value, iterate over all elements assigned to a single thread in
-  /// distribution, for that particular value.
-  // virtual void
-  // forAllElementsInThread(TypedValue<VectorType> val,
-  //                        std::function<void(ArrayRef<int64_t>)> callback)
-  //                        override;
-
-  // /// Given a index of an element in a single thread, get the index of this
-  // /// thread in the distributed layout, i.e. parameterized by thread
-  // /// indexes.
-  // /// TODO: What should be the return value?
-  // virtual void getDistributedIndex(ArrayRef<int64_t> index) override;
+  virtual SmallVector<AffineMap>
+  getSIMDIndexFromDistributedIndex(TypedValue<VectorType> val) override;
 
   // /// Given an operation, do specialized distribution for it. Return true if
   // /// the operation if a specialized distribution is done.
@@ -111,7 +113,6 @@ private:
 //
 //   virtual void setAnchorOps() override;
 // };
-
 }; // namespace iree_compiler
 }; // namespace mlir
 
