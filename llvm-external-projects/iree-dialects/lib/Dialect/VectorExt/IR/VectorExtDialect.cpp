@@ -65,7 +65,7 @@ std::optional<int64_t> PerDimLayoutAttr::getShape(const LayoutDimension &dim) {
 // Get the SIMT Vector shape in the order specified by dims. If no dims are
 // specified, then return an empty vector.
 SmallVector<int64_t>
-LayoutAttr::getSIMTVectorShape(ArrayRef<LayoutDimension> dims) {
+LayoutAttr::getSIMTVectorShape(ArrayRef<LayoutDimension> dims) const {
   SmallVector<int64_t> simtVectorShape;
   for (LayoutDimension dim : dims) {
     ArrayRef<PerDimLayoutAttr> layouts = getLayouts();
@@ -76,6 +76,11 @@ LayoutAttr::getSIMTVectorShape(ArrayRef<LayoutDimension> dims) {
     }
   }
   return simtVectorShape;
+}
+
+PerDimLayoutAttr LayoutAttr::getDimLayout(int64_t dim) const {
+  assert(dim >= 0 && dim < getLayouts().size());
+  return getLayouts()[dim];
 }
 
 bool LayoutAttr::isValidLayout(ArrayRef<int64_t> shape) const {

@@ -110,7 +110,8 @@ def LayoutAttr : IREEVectorExt_Attr<"Layout",
   let assemblyFormat = "`<`$layouts`>`";
   let genVerifyDecl = 0;
   let extraClassDeclaration = [{
-    SmallVector<int64_t> getSIMTVectorShape(ArrayRef<LayoutDimension> dims);
+    SmallVector<int64_t> getSIMTVectorShape(ArrayRef<LayoutDimension> dims) const;
+    PerDimLayoutAttr getDimLayout(int64_t dim) const;
   }];
 }
 
