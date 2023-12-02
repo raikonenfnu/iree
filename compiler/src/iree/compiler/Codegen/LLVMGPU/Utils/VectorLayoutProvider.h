@@ -39,6 +39,10 @@ public:
 
   virtual SmallVector<IREE::VectorExt::LayoutDimension> getSIMTLabels() = 0;
 
+  virtual SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType, int i, int j) = 0;
+  virtual Value computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) = 0;
+  virtual int64_t getKDimension(int64_t M, int64_t K) = 0;
+
   /// For a given value, return the distributed index for the value.
   /// (index)[threadx, thready, threadz] -> (distributedIndex)
   //virtual SmallVector<AffineMap>
@@ -100,6 +104,9 @@ public:
   // /// the operation if a specialized distribution is done.
   // /// Return false if the operation is not specialized.
   // virtual bool specializedDistribution(Operation *op) override;
+  virtual SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType, int i, int j) override;
+  virtual Value computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) override;
+  virtual int64_t getKDimension(int64_t M, int64_t K) override;
 
 private:
   MFMAType mfmaType;

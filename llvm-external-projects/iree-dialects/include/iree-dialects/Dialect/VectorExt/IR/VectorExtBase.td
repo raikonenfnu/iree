@@ -106,6 +106,7 @@ def PerDimLayoutAttr : IREEVectorExt_Attr<"PerDimLayout"> {
         void print();
       };
       Iterator getIterator(DenseMap<LayoutDimension, int64_t> &steps);
+      Iterator getBatchIterator();
       AffineExpr computeSIMDIndex(Iterator &iterator);
    }];
 }
@@ -132,10 +133,14 @@ def LayoutAttr : IREEVectorExt_Attr<"Layout",
       void print();
     };
     Iterator getIterator(DenseMap<LayoutDimension, int64_t> &steps);
+    Iterator getBatchIterator();
     SmallVector<int64_t> computeSIMTIndex(Iterator &iterator,
+                                          ArrayRef<LayoutDimension> labels);
+    SmallVector<int64_t> computeIteratorProjectedSIMTIndex(Iterator &iterator,
                                           ArrayRef<LayoutDimension> labels);
     void map(std::function<void(Iterator &)>, Iterator &);
     int64_t getTransferElements() const;
+    int64_t getBatchDim(int64_t dim);
   }];
 }
 

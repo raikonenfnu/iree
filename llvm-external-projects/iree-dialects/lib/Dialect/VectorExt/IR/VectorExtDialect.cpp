@@ -108,6 +108,11 @@ static bool isVector(LayoutDimension dim) {
          (dim == LayoutDimension::VECTORZ);
 }
 
+static bool isBatch(LayoutDimension dim) {
+  return (dim == LayoutDimension::BATCHX) ||
+         (dim == LayoutDimension::BATCHY);
+}
+
 // Returns true if iterator is at the end and false otherwise.
 bool PerDimLayoutAttr::DimensionIterator::next() {
   current += step;
@@ -127,6 +132,17 @@ PerDimLayoutAttr::Iterator PerDimLayoutAttr::getIterator(DenseMap<LayoutDimensio
     LayoutDimension name = nameAttr.getValue();
     if (isLane(name)) continue;
     step = stepMap.contains(name) ? stepMap[name] : 1;
+    iterator.state[name] = PerDimLayoutAttr::DimensionIterator(0, shape, step);
+  }
+  return iterator;
+}
+
+PerDimLayoutAttr::Iterator PerDimLayoutAttr::getBatchIterator() {
+  PerDimLayoutAttr::Iterator iterator;
+  int64_t step{1};
+  for (auto [nameAttr, shape] : llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
+    LayoutDimension name = nameAttr.getValue();
+    if (!isBatch(name)) continue;
     iterator.state[name] = PerDimLayoutAttr::DimensionIterator(0, shape, step);
   }
   return iterator;
@@ -170,6 +186,8 @@ AffineExpr PerDimLayoutAttr::computeSIMDIndex(PerDimLayoutAttr::Iterator &iterat
   return offset;
 }
 
+// Get the offset into the SIMT vector corresponding to the incoming iterator.
+// The returned offsets will always be the same shape as the labels array.
 SmallVector<int64_t> LayoutAttr::computeSIMTIndex(LayoutAttr::Iterator &iterator,
                                                   ArrayRef<LayoutDimension> labels) {
   SmallVector<int64_t> offset(labels.size(), 0);
@@ -190,10 +208,38 @@ SmallVector<int64_t> LayoutAttr::computeSIMTIndex(LayoutAttr::Iterator &iterator
   return offset;
 }
 
+// Get the offset into the SIMT vector corresponding to the incoming iterator.
+// The offsets are projected onto the iterator. For example, if we have a vector
+// mapping (batchx, batchy, vecx) and the iterator is (batchx, batchy), then
+// we return an vector containing the offsets for (batchx, batchy).
+SmallVector<int64_t> LayoutAttr::computeIteratorProjectedSIMTIndex(LayoutAttr::Iterator &iterator,
+                                                                   ArrayRef<LayoutDimension> labels) {
+  SmallVector<int64_t> indices = computeSIMTIndex(iterator, labels);
+  SmallVector<int64_t> projectedIndices;
+  for (int i = 0; i < labels.size(); i++) {
+    for (auto pair : llvm::zip(getLayouts(), iterator.states)) {
+      PerDimLayoutAttr layout = std::get<0>(pair);
+      PerDimLayoutAttr::Iterator iterator = std::get<1>(pair);
+      if (iterator.state.contains(labels[i])) {
+        projectedIndices.push_back(indices[i]);
+      }
+    }
+  }
+  return projectedIndices;
+}
+
 LayoutAttr::Iterator LayoutAttr::getIterator(DenseMap<LayoutDimension, int64_t> &steps) {
   LayoutAttr::Iterator iterator;
   for (auto layout : getLayouts()) {
     iterator.states.push_back(layout.getIterator(steps));
+  }
+  return iterator;
+}
+
+LayoutAttr::Iterator LayoutAttr::getBatchIterator() {
+  LayoutAttr::Iterator iterator;
+  for (auto layout : getLayouts()) {
+    iterator.states.push_back(layout.getBatchIterator());
   }
   return iterator;
 }
@@ -212,6 +258,15 @@ void PerDimLayoutAttr::Iterator::print() {
     llvm::outs() << stringifyLayoutDimension(label) << " : " << value.current << "->" << value.end
                  << " [" << value.step << "] ,";
   }
+}
+
+int64_t LayoutAttr::getBatchDim(int64_t dim) {
+  assert(dim < getLayouts().size());
+  PerDimLayoutAttr layout = getDimLayout(dim);
+  for (auto [name, shape] : llvm::zip(layout.getLabels(), layout.getShapes())) {
+    if (isBatch(name.getValue())) return shape;
+  }
+  return -1;
 }
 
 void LayoutAttr::Iterator::print() {

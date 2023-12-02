@@ -30,6 +30,10 @@ class VectorDialect;
 class WarpExecuteOnLane0Op;
 } // namespace vector
 
+namespace amdgpu {
+class AMDGPUDialect;
+} // namespace amdgpu
+
 } // namespace mlir
 
 namespace mlir::iree_compiler {
