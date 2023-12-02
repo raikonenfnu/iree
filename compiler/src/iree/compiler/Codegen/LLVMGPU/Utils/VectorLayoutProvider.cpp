@@ -93,55 +93,6 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
 
 SmallVector<int64_t>
 AMDCDNAGPULayoutProvider::getDistributedShape(TypedValue<VectorType> value) {
-  SmallVector<LayoutDimension> dims{LayoutDimension::BATCHX,
-                                    LayoutDimension::BATCHY,
-                                    LayoutDimension::VECTORX};
   auto layout = analysis.getLayout<LayoutAttr>(value);
-  return layout.getSIMTVectorShape(dims);
-}
-
-SmallVector<AffineMap>
-AMDCDNAGPULayoutProvider::getDistributedIndex(TypedValue<VectorType> val,
-                                              ArrayRef<int64_t> iterate) {
-  LayoutAttr layout = analysis.getLayout<LayoutAttr>(val);
-  MLIRContext *ctx = val.getContext();
-
-  auto constructIndex = [&](int64_t dim) {
-    // (distributedIndex)[threadX, threadY, threadZ]
-    AffineExpr simdIndex, threadX, threadY, threadZ;
-    bindDims(val.getContext(), simdIndex);
-    bindSymbols(val.getContext(), threadX, threadY, threadZ);
-
-    AffineExpr index = getAffineConstantExpr(0, ctx);
-    AffineExpr indexScale = getAffineConstantExpr(1, ctx);
-
-    // Get the dim layout for this dim.
-    PerDimLayoutAttr dimLayout = layout.getDimLayout(dim);
-    for (auto [label, shape, it] :
-         llvm::zip(dimLayout.getLabels(), dimLayout.getShapes(), iterate)) {
-      switch (label.getValue()) {
-      case LayoutDimension::LANEX:
-        index = index + indexScale * threadX;
-        break;
-      case LayoutDimension::LANEY:
-        index = index + indexScale * threadY;
-        break;
-      case LayoutDimension::LANEZ:
-        index = index + indexScale * threadZ;
-        break;
-      default:
-        index = index + indexScale * getAffineConstantExpr(it, ctx);
-        break;
-      };
-      indexScale = indexScale * getAffineConstantExpr(shape, ctx);
-    }
-
-    return AffineMap::get(1, 3, index + simdIndex);
-  };
-
-  SmallVector<AffineMap> maps;
-  for (int64_t dim = 0; dim < val.getType().getRank(); ++dim) {
-    maps.push_back(constructIndex(dim));
-  }
-  return maps;
+  return layout.getSIMTVectorShape(simtLabels);
 }

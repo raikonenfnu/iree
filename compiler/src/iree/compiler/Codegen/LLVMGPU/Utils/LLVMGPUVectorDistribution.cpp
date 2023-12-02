@@ -68,14 +68,36 @@ private:
 
   void distributeTransferReads(vector::TransferReadOp transferReadOp);
 
-  void distributeContractions(vector::ContractionOp contractionOp) {}
+  void distributeContractions(vector::ContractionOp contractionOp);
 
   void distributeConstants(arith::ConstantOp constantOp) {}
 
-  SmallVector<Value> getThreadIds() {
-    return {rewriter.create<gpu::ThreadIdOp>(root.getLoc(), gpu::Dimension::x),
-            rewriter.create<gpu::ThreadIdOp>(root.getLoc(), gpu::Dimension::y),
-            rewriter.create<gpu::ThreadIdOp>(root.getLoc(), gpu::Dimension::z)};
+  SmallVector<Value> getIndices(LayoutAttr &layout, LayoutAttr::Iterator &iterator,
+                                SmallVector<Value> indices, AffineMap permutationMap,
+                                Location loc, OpBuilder &rewriter);
+
+  // We delinearize threadIdx to 2 thread indices.
+  Value getThreadIds(PerDimLayoutAttr &layout, Value lastShape,
+                     DenseMap<int64_t, Value> &laneIds, int64_t key, LayoutDimension dim) {
+    if (lastShape) lastShape.dump();
+    Location loc = root.getLoc();
+    Value threadX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
+    auto possibleShape = layout.getShape(dim);
+    if (possibleShape) {
+      switch (dim) {
+        case LayoutDimension::LANEX: {
+          Value shapeValue = rewriter.create<arith::ConstantIndexOp>(loc, *possibleShape);
+          laneIds[key] = rewriter.create<arith::RemUIOp>(loc, threadX, shapeValue);
+          return shapeValue;
+        }
+        case LayoutDimension::LANEY:
+          laneIds[key] = rewriter.create<arith::DivUIOp>(loc, threadX, lastShape);
+          break;
+        default:
+          break;
+      }
+    }
+    return lastShape;
   }
 
   func::FuncOp root;
@@ -87,103 +109,84 @@ private:
 
 } // namespace
 
-/// Iterate over all indices of the given shape, and call the callback with the
-/// indices. The callback returns a stride to move by.
-static void
-iterateOverShape(ArrayRef<int64_t> shape,
-                 std::function<int64_t(ArrayRef<int64_t>)> callback) {
-  SmallVector<int64_t> indices(shape.size(), 0);
-  while (true) {
-    int64_t stride = callback(indices);
-    // Move by the given stride.
-    int64_t remaining = stride;
-    for (int64_t i = indices.size() - 1; i >= 0; --i) {
-      indices[i] += remaining;
-      remaining = indices[i] / shape[i];
-      indices[i] %= shape[i];
-
-      if (remaining == 0)
-        break;
-    }
-
-    if (remaining != 0)
-      break;
+static SmallVector<Value> handlePermutations(SmallVector<Value> &indices,
+                                             AffineMap permutationMap) {
+  SmallVector<Value> newIndices{indices.begin(), indices.end()};
+  int laneDim = 0;
+  for (AffineExpr expr : permutationMap.getResults()) {
+    auto dimExpr = dyn_cast<AffineDimExpr>(expr);
+    if (!dimExpr)
+      continue;
+    unsigned pos = dimExpr.getPosition();
+    newIndices[pos] = indices[laneDim++];
   }
+  return newIndices;
 }
 
-void VectorDistribution::distributeTransferReads(
-    vector::TransferReadOp transferReadOp) {
+SmallVector<Value> VectorDistribution::getIndices(LayoutAttr &layout, LayoutAttr::Iterator &iterator,
+                                                  SmallVector<Value> indices, AffineMap permutationMap,
+                                                  Location loc, OpBuilder &rewriter) {
+  SmallVector<Value> simdIndices;
+  Value shape;
+  DenseMap<int64_t, Value> laneIds;
+  for (LayoutDimension dim : {LayoutDimension::LANEX, LayoutDimension::LANEY}) {
+    for (auto pair : llvm::enumerate(layout.getLayouts())) {
+      PerDimLayoutAttr perDimLayout = pair.value();
+      shape = getThreadIds(perDimLayout, shape, laneIds, pair.index(), dim);
+    }
+  }
+
+  int i{0};
+  for (auto pair : llvm::zip(layout.getLayouts(), iterator.states)) {
+    PerDimLayoutAttr perDimLayout = std::get<0>(pair);
+    PerDimLayoutAttr::Iterator iterator = std::get<1>(pair);
+    Value index = rewriter.create<affine::AffineApplyOp>(loc, perDimLayout.computeSIMDIndex(iterator), laneIds[i]);
+    index = rewriter.create<arith::AddIOp>(loc, index, indices[i++]);
+    simdIndices.push_back(index);
+  }
+  simdIndices = handlePermutations(simdIndices, permutationMap);
+  return simdIndices;
+}
+
+void VectorDistribution::distributeTransferReads(vector::TransferReadOp transferReadOp) {
   TypedValue<VectorType> result = transferReadOp.getResult();
-  SmallVector<Value> gpuThreadIds = getThreadIds();
-  SmallVector<int64_t> distributedShape = provider->getDistributedShape(result);
-  for (auto it : distributedShape) {
-    llvm::errs() << it << "x";
-  }
-  llvm::errs() << "\n";
-  analysis.getLayout<Attribute>(result).dump();
-
-  // Iterate over the given shape with a stride of 1.
-  iterateOverShape(distributedShape, [&](ArrayRef<int64_t> iterate) -> int64_t {
-    SmallVector<AffineMap> indexMaps =
-        provider->getDistributedIndex(result, iterate);
-    // Get the indices for the load.
-    SmallVector<Value> loadIndices;
-    // Iterate on the indices in the permutation order.
-    for (auto index : transferReadOp.getPermutationMap().getResults()) {
-      auto dimExpr = dyn_cast<AffineDimExpr>(index);
-      if (!dimExpr) {
-        emitError(transferReadOp.getLoc())
-            << "Non-dim expr in permutation map\n";
-        continue;
-      }
-
-      int64_t dim = dimExpr.getPosition();
-      llvm::errs() << indexMaps[dim] << "\n";
+  Value source = transferReadOp.getSource();
+  Type elementType = llvm::cast<ShapedType>(source.getType()).getElementType();
+  auto vectorType = VectorType::get(provider->getDistributedShape(result), elementType);
+  Location loc = transferReadOp.getLoc();
+  Value vector = rewriter.create<arith::ConstantOp>(
+      loc, vectorType, rewriter.getZeroAttr(vectorType));
+  LayoutAttr layout = analysis.getLayout<LayoutAttr>(result);
+  int64_t loadElements = 4;
+  auto loadFn = [&](LayoutAttr::Iterator &iterator) {
+    SmallVector<Value> indices =
+            getIndices(layout, iterator, transferReadOp.getIndices(),
+                       transferReadOp.getPermutationMap(), loc, rewriter);
+    auto vectorType = VectorType::get({loadElements}, elementType);
+    if (loadElements == 1) {
+      Value element = rewriter.create<memref::LoadOp>(loc, source, indices);
+        Value broadcasted =
+            rewriter.create<vector::BroadcastOp>(loc, vectorType, element);
+        vector = rewriter.create<vector::InsertStridedSliceOp>(
+            loc, broadcasted, vector, layout.computeSIMTIndex(iterator, provider->getSIMTLabels()),
+            SmallVector<int64_t>{1});
+    } else {
+      Value element = rewriter.create<vector::LoadOp>(loc, vectorType, source,
+            indices);
+      vector = rewriter.create<vector::InsertStridedSliceOp>(
+          loc, element, vector, layout.computeSIMTIndex(iterator, provider->getSIMTLabels()),
+          SmallVector<int64_t>{1});
     }
-
-    // Store from loadIndices with a width provided by the provider.
-    int64_t storeWidth = provider->getStoreWidth(result, iterate);
-
-    return storeWidth;
-  });
+  };
+  LayoutAttr::Iterator iterator = layout.getIterator();
+  layout.map(loadFn, iterator);
+  simdToSimt.map(result, vector);
 }
 
-void VectorDistribution::distributeTransferWrites(
-    vector::TransferWriteOp transferWriteOp) {
-  TypedValue<VectorType> vector = transferWriteOp.getVector();
-  SmallVector<Value> gpuThreadIds = getThreadIds();
-  SmallVector<int64_t> distributedShape = provider->getDistributedShape(vector);
+void VectorDistribution::distributeTransferWrites(vector::TransferWriteOp transferWriteOp) {
+}
 
-  for (auto it : distributedShape) {
-    llvm::errs() << it << "x";
-  }
-  llvm::errs() << "\n";
-  analysis.getLayout<Attribute>(vector).dump();
-
-  // Iterate over the given shape with a stride of 1.
-  iterateOverShape(distributedShape, [&](ArrayRef<int64_t> iterate) -> int64_t {
-    SmallVector<AffineMap> indexMaps =
-        provider->getDistributedIndex(vector, iterate);
-    // Get the indices for the load.
-    SmallVector<Value> loadIndices;
-    // Iterate on the indices in the permutation order.
-    for (auto index : transferWriteOp.getPermutationMap().getResults()) {
-      auto dimExpr = dyn_cast<AffineDimExpr>(index);
-      if (!dimExpr) {
-        emitError(transferWriteOp.getLoc())
-            << "Non-dim expr in permutation map\n";
-        continue;
-      }
-
-      int64_t dim = dimExpr.getPosition();
-      llvm::errs() << indexMaps[dim] << "\n";
-    }
-
-    // Store from loadIndices with a width provided by the provider.
-    int64_t storeWidth = provider->getStoreWidth(vector, iterate);
-
-    return storeWidth;
-  });
+void VectorDistribution::distributeContractions(vector::ContractionOp contractOp) {
 }
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {

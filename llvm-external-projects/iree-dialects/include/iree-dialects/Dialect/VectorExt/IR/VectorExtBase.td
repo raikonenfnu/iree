@@ -93,6 +93,20 @@ def PerDimLayoutAttr : IREEVectorExt_Attr<"PerDimLayout"> {
    let extraClassDeclaration = [{
       std::optional<int64_t> getShape(const LayoutDimension &dim);
       bool contains(const LayoutDimension &dim);
+      struct DimensionIterator {
+        DimensionIterator() {}
+        DimensionIterator(int64_t begin, int64_t end, int64_t step) :
+          begin(begin), end(end), current(begin), step(step) {}
+        int64_t begin, end, current, step;
+        bool next();
+      };
+      struct Iterator {
+        llvm::SmallMapVector<LayoutDimension, DimensionIterator, 8> state;
+        bool next();
+        void print();
+      };
+      Iterator getIterator();
+      AffineExpr computeSIMDIndex(Iterator &iterator);
    }];
 }
 
@@ -112,6 +126,15 @@ def LayoutAttr : IREEVectorExt_Attr<"Layout",
   let extraClassDeclaration = [{
     SmallVector<int64_t> getSIMTVectorShape(ArrayRef<LayoutDimension> dims) const;
     PerDimLayoutAttr getDimLayout(int64_t dim) const;
+    struct Iterator {
+      SmallVector<PerDimLayoutAttr::Iterator, 2> states;
+      bool next();
+      void print();
+    };
+    Iterator getIterator();
+    SmallVector<int64_t> computeSIMTIndex(Iterator &iterator,
+                                          ArrayRef<LayoutDimension> labels);
+    void map(std::function<void(Iterator &)>, Iterator &);
   }];
 }
 

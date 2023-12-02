@@ -37,11 +37,13 @@ public:
   virtual SmallVector<int64_t>
   getDistributedShape(TypedValue<VectorType> val) = 0;
 
+  virtual SmallVector<IREE::VectorExt::LayoutDimension> getSIMTLabels() = 0;
+
   /// For a given value, return the distributed index for the value.
   /// (index)[threadx, thready, threadz] -> (distributedIndex)
-  virtual SmallVector<AffineMap>
-  getDistributedIndex(TypedValue<VectorType> val,
-                      ArrayRef<int64_t> iterate) = 0;
+  //virtual SmallVector<AffineMap>
+  //getDistributedIndex(TypedValue<VectorType> val,
+  //                    ArrayRef<int64_t> iterate) = 0;
 
   virtual int64_t getLoadWidth(TypedValue<VectorType> val,
                                ArrayRef<int64_t> iterate) {
@@ -90,9 +92,9 @@ public:
   virtual SmallVector<int64_t>
   getDistributedShape(TypedValue<VectorType> val) override;
 
-  virtual SmallVector<AffineMap>
-  getDistributedIndex(TypedValue<VectorType> val,
-                      ArrayRef<int64_t> iterate) override;
+  virtual SmallVector<IREE::VectorExt::LayoutDimension> getSIMTLabels() override {
+    return simtLabels;
+  }
 
   // /// Given an operation, do specialized distribution for it. Return true if
   // /// the operation if a specialized distribution is done.
@@ -102,6 +104,9 @@ public:
 private:
   MFMAType mfmaType;
   ContractType contractType;
+  SmallVector<IREE::VectorExt::LayoutDimension> simtLabels{IREE::VectorExt::LayoutDimension::BATCHX,
+                                          IREE::VectorExt::LayoutDimension::BATCHY,
+                                          IREE::VectorExt::LayoutDimension::VECTORX};
 };
 
 // class NVIDIAGPULayoutProvider : public LayoutProvider {

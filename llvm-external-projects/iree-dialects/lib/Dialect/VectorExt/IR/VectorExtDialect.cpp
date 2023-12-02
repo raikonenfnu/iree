@@ -96,6 +96,137 @@ bool LayoutAttr::isValidLayout(ArrayRef<int64_t> shape) const {
   return true;
 }
 
+static bool isLane(LayoutDimension dim) {
+  return (dim == LayoutDimension::LANEX) ||
+         (dim == LayoutDimension::LANEY) ||
+         (dim == LayoutDimension::LANEZ);
+}
+
+static bool isVector(LayoutDimension dim) {
+  return (dim == LayoutDimension::VECTORX) ||
+         (dim == LayoutDimension::VECTORY) ||
+         (dim == LayoutDimension::VECTORZ);
+}
+
+// Returns true if iterator is at the end and false otherwise.
+bool PerDimLayoutAttr::DimensionIterator::next() {
+  current += step;
+  bool done = current >= end;
+  if (done) current = 0;
+  return done;
+}
+
+static int64_t getInnermostVectorShape(ArrayRef<LayoutDimensionAttr> labels, ArrayRef<int64_t> shapes) {
+  return isVector(labels.back().getValue()) ? shapes.back() : 1;
+}
+
+PerDimLayoutAttr::Iterator PerDimLayoutAttr::getIterator() {
+  PerDimLayoutAttr::Iterator iterator;
+  int64_t step = getInnermostVectorShape(getLabels(), getShapes());
+  for (auto [nameAttr, shape] : llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
+    LayoutDimension name = nameAttr.getValue();
+    if (isLane(name)) continue;
+    iterator.state[name] = PerDimLayoutAttr::DimensionIterator(0, shape, step);
+  }
+  return iterator;
+}
+
+bool PerDimLayoutAttr::Iterator::next() {
+  bool done{true};
+  for (auto &[name, iterator] : state) {
+    if (!iterator.next()) {
+      done = false;
+      break;
+    }
+  }
+  return done;
+}
+
+AffineExpr PerDimLayoutAttr::computeSIMDIndex(PerDimLayoutAttr::Iterator &iterator) {
+  DenseSet<LayoutDimension> layoutDims;
+  for (auto label : getLabels()) {
+    if (isLane(label.getValue())) layoutDims.insert(label.getValue());
+  }
+  MLIRContext *ctx = getContext();
+  SmallVector<AffineExpr> dims(layoutDims.size());
+  bindDimsList(ctx, MutableArrayRef{dims});
+  AffineExpr offset = getAffineConstantExpr(0, ctx);
+  AffineExpr stride = getAffineConstantExpr(1, ctx);
+  int i = 0;
+  for (const auto &[nameAttr, shape] : llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
+    LayoutDimension name = nameAttr.getValue();
+    if (layoutDims.contains(name)) {
+      offset = offset + stride * dims[i++];
+      stride = stride * getAffineConstantExpr(shape, ctx);
+      continue;
+    }
+    if (!iterator.state.contains(name))
+      continue;
+    offset =
+        offset + stride * getAffineConstantExpr(iterator.state[name].current, ctx);
+    stride = stride * getAffineConstantExpr(shape, ctx);
+  }
+  return offset;
+}
+
+SmallVector<int64_t> LayoutAttr::computeSIMTIndex(LayoutAttr::Iterator &iterator,
+                                                  ArrayRef<LayoutDimension> labels) {
+  SmallVector<int64_t> offset(labels.size(), 0);
+  for (int i = 0; i < labels.size(); i++) {
+    int64_t stride{1};
+    for (auto pair : llvm::zip(getLayouts(), iterator.states)) {
+      PerDimLayoutAttr layout = std::get<0>(pair);
+      PerDimLayoutAttr::Iterator iterator = std::get<1>(pair);
+      for (auto [nameAttr, size] : llvm::zip(llvm::reverse(layout.getLabels()), llvm::reverse(layout.getShapes()))) {
+        LayoutDimension name = nameAttr.getValue();
+        if ((name == labels[i]) && (iterator.state.contains(name))) {
+          offset[i] = iterator.state[name].current * stride + offset[i];
+          stride = size;
+        }
+      }
+    }
+  }
+  return offset;
+}
+
+LayoutAttr::Iterator LayoutAttr::getIterator() {
+  LayoutAttr::Iterator iterator;
+  for (auto layout : getLayouts()) {
+    iterator.states.push_back(layout.getIterator());
+  }
+  return iterator;
+}
+
+bool LayoutAttr::Iterator::next() {
+  bool done{true};
+  for (auto iterator : states) {
+    done = done || iterator.next();
+  }
+  return done;
+}
+
+void PerDimLayoutAttr::Iterator::print() {
+  for (auto [label, value] : state) {
+    if (isLane(label)) continue;
+    llvm::outs() << stringifyLayoutDimension(label) << " : " << value.current << "/" << value.end << " ,";
+  }
+}
+
+void LayoutAttr::Iterator::print() {
+  for (PerDimLayoutAttr::Iterator iterator : states) {
+    iterator.print();
+    llvm::outs() << "\n";
+  }
+  llvm::outs() << "====================\n";
+}
+
+void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback, Iterator &iterator) {
+  do {
+    iterator.print();
+    callback(iterator);
+  } while (!iterator.next());
+}
+
 // Project out the layout for the specified dimensions
 // resulting in the layout for a lower dimensional vector.
 VectorLayoutInterface LayoutAttr::project(ArrayRef<bool> projectedDims) const {
