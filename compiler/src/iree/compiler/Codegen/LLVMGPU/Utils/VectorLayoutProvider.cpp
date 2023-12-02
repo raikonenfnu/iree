@@ -74,6 +74,11 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
                                     {batchCol, 4, numElements});
         };
         LayoutAttr layout;
+        if (contractType == ContractType::MMT) {
+          if (matrixType == ContractMatrixType::B) {
+            matrixType = ContractMatrixType::A;
+          }
+        }
         if (matrixType == ContractMatrixType::A) {
           layout = LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
         } else if (matrixType == ContractMatrixType::B) {

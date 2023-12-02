@@ -79,7 +79,6 @@ private:
   // We delinearize threadIdx to 2 thread indices.
   Value getThreadIds(PerDimLayoutAttr &layout, Value lastShape,
                      DenseMap<int64_t, Value> &laneIds, int64_t key, LayoutDimension dim) {
-    if (lastShape) lastShape.dump();
     Location loc = root.getLoc();
     Value threadX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
     auto possibleShape = layout.getShape(dim);
@@ -157,7 +156,7 @@ void VectorDistribution::distributeTransferReads(vector::TransferReadOp transfer
   Value vector = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
   LayoutAttr layout = analysis.getLayout<LayoutAttr>(result);
-  int64_t loadElements = 4;
+  int64_t loadElements = layout.getTransferElements();
   auto loadFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<Value> indices =
             getIndices(layout, iterator, transferReadOp.getIndices(),
@@ -178,7 +177,9 @@ void VectorDistribution::distributeTransferReads(vector::TransferReadOp transfer
           SmallVector<int64_t>{1});
     }
   };
-  LayoutAttr::Iterator iterator = layout.getIterator();
+  DenseMap<LayoutDimension, int64_t> steps;
+  steps[LayoutDimension::VECTORX] = loadElements;
+  LayoutAttr::Iterator iterator = layout.getIterator(steps);
   layout.map(loadFn, iterator);
   simdToSimt.map(result, vector);
 }

@@ -120,12 +120,13 @@ static int64_t getInnermostVectorShape(ArrayRef<LayoutDimensionAttr> labels, Arr
   return isVector(labels.back().getValue()) ? shapes.back() : 1;
 }
 
-PerDimLayoutAttr::Iterator PerDimLayoutAttr::getIterator() {
+PerDimLayoutAttr::Iterator PerDimLayoutAttr::getIterator(DenseMap<LayoutDimension, int64_t> &stepMap) {
   PerDimLayoutAttr::Iterator iterator;
-  int64_t step = getInnermostVectorShape(getLabels(), getShapes());
+  int64_t step;
   for (auto [nameAttr, shape] : llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
     LayoutDimension name = nameAttr.getValue();
     if (isLane(name)) continue;
+    step = stepMap.contains(name) ? stepMap[name] : 1;
     iterator.state[name] = PerDimLayoutAttr::DimensionIterator(0, shape, step);
   }
   return iterator;
@@ -189,26 +190,27 @@ SmallVector<int64_t> LayoutAttr::computeSIMTIndex(LayoutAttr::Iterator &iterator
   return offset;
 }
 
-LayoutAttr::Iterator LayoutAttr::getIterator() {
+LayoutAttr::Iterator LayoutAttr::getIterator(DenseMap<LayoutDimension, int64_t> &steps) {
   LayoutAttr::Iterator iterator;
   for (auto layout : getLayouts()) {
-    iterator.states.push_back(layout.getIterator());
+    iterator.states.push_back(layout.getIterator(steps));
   }
   return iterator;
 }
 
 bool LayoutAttr::Iterator::next() {
-  bool done{true};
-  for (auto iterator : states) {
-    done = done || iterator.next();
+  SmallVector<bool> done;
+  for (auto &iterator : states) {
+    done.push_back(iterator.next());
   }
-  return done;
+  return llvm::all_of(done, [&](bool status) { return status == true; });
 }
 
 void PerDimLayoutAttr::Iterator::print() {
   for (auto [label, value] : state) {
     if (isLane(label)) continue;
-    llvm::outs() << stringifyLayoutDimension(label) << " : " << value.current << "/" << value.end << " ,";
+    llvm::outs() << stringifyLayoutDimension(label) << " : " << value.current << "->" << value.end
+                 << " [" << value.step << "] ,";
   }
 }
 
@@ -225,6 +227,12 @@ void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback, Itera
     iterator.print();
     callback(iterator);
   } while (!iterator.next());
+}
+
+// Check innermost vector dimension along cols to determine this value.
+int64_t LayoutAttr::getTransferElements() const {
+  PerDimLayoutAttr colAttr = getDimLayout(1);
+  return getInnermostVectorShape(colAttr.getLabels(), colAttr.getShapes());
 }
 
 // Project out the layout for the specified dimensions
