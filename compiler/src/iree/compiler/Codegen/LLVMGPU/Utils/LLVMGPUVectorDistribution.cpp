@@ -158,23 +158,22 @@ void VectorDistribution::distributeTransferReads(vector::TransferReadOp transfer
   LayoutAttr layout = analysis.getLayout<LayoutAttr>(result);
   int64_t loadElements = layout.getTransferElements();
   auto loadFn = [&](LayoutAttr::Iterator &iterator) {
-    SmallVector<Value> indices =
+    SmallVector<Value> simdIndices =
             getIndices(layout, iterator, transferReadOp.getIndices(),
                        transferReadOp.getPermutationMap(), loc, rewriter);
+    SmallVector<int64_t> simtIndices = layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
     auto vectorType = VectorType::get({loadElements}, elementType);
     if (loadElements == 1) {
-      Value element = rewriter.create<memref::LoadOp>(loc, source, indices);
+      Value element = rewriter.create<memref::LoadOp>(loc, source, simdIndices);
         Value broadcasted =
             rewriter.create<vector::BroadcastOp>(loc, vectorType, element);
         vector = rewriter.create<vector::InsertStridedSliceOp>(
-            loc, broadcasted, vector, layout.computeSIMTIndex(iterator, provider->getSIMTLabels()),
-            SmallVector<int64_t>{1});
+            loc, broadcasted, vector, simtIndices, SmallVector<int64_t>{1});
     } else {
       Value element = rewriter.create<vector::LoadOp>(loc, vectorType, source,
-            indices);
+            simdIndices);
       vector = rewriter.create<vector::InsertStridedSliceOp>(
-          loc, element, vector, layout.computeSIMTIndex(iterator, provider->getSIMTLabels()),
-          SmallVector<int64_t>{1});
+          loc, element, vector, simtIndices, SmallVector<int64_t>{1});
     }
   };
   DenseMap<LayoutDimension, int64_t> steps;
@@ -185,6 +184,37 @@ void VectorDistribution::distributeTransferReads(vector::TransferReadOp transfer
 }
 
 void VectorDistribution::distributeTransferWrites(vector::TransferWriteOp transferWriteOp) {
+  TypedValue<VectorType> vector = transferWriteOp.getVector();
+  if (!simdToSimt.lookupOrNull(vector)) return;
+  Value source = transferWriteOp.getSource();
+  LayoutAttr layout = analysis.getLayout<LayoutAttr>(vector);
+  Location loc = transferWriteOp.getLoc();
+  int64_t loadElements = layout.getTransferElements();
+  auto storeFn = [&](LayoutAttr::Iterator &iterator) {
+    SmallVector<Value> simdIndices =
+            getIndices(layout, iterator, transferWriteOp.getIndices(),
+                       transferWriteOp.getPermutationMap(), loc, rewriter);
+    SmallVector<int64_t> simtIndices = layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+    if (loadElements == 1) {
+      SmallVector<int64_t> strides(simtIndices.size(), 1);
+      SmallVector<int64_t> shapes(simtIndices.size(), 1);
+        shapes[shapes.size() - 1] = loadElements;
+        Value result = rewriter.create<vector::ExtractStridedSliceOp>(
+            loc, simdToSimt.lookup(vector), simtIndices, shapes, strides);
+        result = rewriter.create<vector::ExtractOp>(loc, result, SmallVector<int64_t>(simtIndices.size() - 1, 0));
+        rewriter.create<vector::StoreOp>(loc, result, source, simdIndices);
+    } else {
+      Value result = rewriter.create<vector::ExtractOp>(
+          loc, simdToSimt.lookup(vector), simtIndices);
+      rewriter.create<memref::StoreOp>(
+          loc, result, source,
+          getIndices(layout, iterator, transferWriteOp.getIndices(),
+                     transferWriteOp.getPermutationMap(), loc, rewriter));
+    }};
+  DenseMap<LayoutDimension, int64_t> steps;
+  steps[LayoutDimension::VECTORX] = loadElements;
+  LayoutAttr::Iterator iterator = layout.getIterator(steps);
+  layout.map(storeFn, iterator);
 }
 
 void VectorDistribution::distributeContractions(vector::ContractionOp contractOp) {
