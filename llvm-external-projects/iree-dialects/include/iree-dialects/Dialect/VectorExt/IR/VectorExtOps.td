@@ -42,5 +42,39 @@ def IREEVectorExt_LayoutConflictResolutionOp : IREEVectorExt_PureOp<"layout_conf
   let hasVerifier = 1;
 }
 
+def IREEVectorExt_ToSIMDOp : IREEVectorExt_PureOp<"to_simd"> {
+  let summary = "SIMT to SIMD conversion operation";
+  let description = [{
+    This operation is a temporary operation useful for source/target
+    materializations when doing type conversions between distributed and not
+    distributed vectors.
+  }];
+  let arguments = (ins
+    AnyVector:$input
+  );
+  let results = (outs
+    AnyVector:$output
+  );
+  let extraClassDeclaration = [{}];
+  let assemblyFormat = "$input attr-dict `:` type($input) `->` type($output)";
+}
+
+def IREEVectorExt_ToSIMTOp : IREEVectorExt_PureOp<"to_simt"> {
+  let summary = "SIMD to SIMT conversion operation";
+  let description = [{
+    This operation is a temporary operation useful for source/target
+    materializations when doing type conversions between distributed and not
+    distributed vectors.
+  }];
+  let arguments = (ins
+    AnyVector:$input
+  );
+  let results = (outs
+    AnyVector:$output
+  );
+  let extraClassDeclaration = [{}];
+  let assemblyFormat = "$input attr-dict `:` type($input) `->` type($output)";
+}
+
 #endif  // IREE_DIALECT_VECTOREXT_OPS
 
