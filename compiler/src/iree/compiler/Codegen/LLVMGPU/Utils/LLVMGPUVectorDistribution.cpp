@@ -22,8 +22,14 @@ using namespace mlir::iree_compiler::IREE::VectorExt;
 
 namespace mlir::iree_compiler {
 
-Value getDistributed(RewriterBase &rewriter, TypedValue<VectorType> value,
-                     LayoutProvider *provider) {
+TypedValue<VectorType> getDistributed(RewriterBase &rewriter,
+                                      TypedValue<VectorType> value,
+                                      LayoutProvider *provider) {
+  // If this is a result of a "to_simd" op, use the source value of it.
+  if (auto toSIMD = value.getDefiningOp<IREE::VectorExt::ToSIMDOp>()) {
+    value = cast<TypedValue<VectorType>>(toSIMD.getInput());
+    return value;
+  }
   // Create a "to_simt" op to convert the value to the distributed layout.
   SmallVector<int64_t> distributedShape = provider->getDistributedShape(value);
   VectorType distributedType =
@@ -265,6 +271,8 @@ void VectorDistribution::distributeTransferWrites(
   steps[LayoutDimension::VECTORX] = storeElements;
   LayoutAttr::Iterator iterator = layout.getIterator(steps);
   layout.map(storeFn, iterator);
+  replaceOpWithDistributedValues(rewriter, transferWriteOp, provider,
+                                 ValueRange());
 }
 
 void VectorDistribution::distributeContractions(

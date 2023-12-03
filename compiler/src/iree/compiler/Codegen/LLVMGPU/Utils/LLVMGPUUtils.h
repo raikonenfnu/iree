@@ -22,8 +22,9 @@ void createAsyncGroups(RewriterBase &rewriter, func::FuncOp funcOp,
 void doLayoutAnalysisAndDistribution(RewriterBase &rewriter,
                                      func::FuncOp funcOp);
 
-Value getDistributed(RewriterBase &rewriter, TypedValue<VectorType> value,
-                     LayoutProvider *provider);
+TypedValue<VectorType> getDistributed(RewriterBase &rewriter,
+                                      TypedValue<VectorType> value,
+                                      LayoutProvider *provider);
 
 void replaceOpWithDistributedValues(RewriterBase &rewriter, Operation *op,
                                     LayoutProvider *provider,
