@@ -72,28 +72,33 @@ private:
 
   void distributeConstants(arith::ConstantOp constantOp);
 
-  SmallVector<Value> getIndices(LayoutAttr &layout, LayoutAttr::Iterator &iterator,
-                                SmallVector<Value> indices, AffineMap permutationMap,
-                                Location loc, OpBuilder &rewriter);
+  SmallVector<Value> getIndices(LayoutAttr &layout,
+                                LayoutAttr::Iterator &iterator,
+                                SmallVector<Value> indices,
+                                AffineMap permutationMap, Location loc,
+                                OpBuilder &rewriter);
 
   // We delinearize threadIdx to 2 thread indices.
   Value getThreadIds(PerDimLayoutAttr &layout, Value lastShape,
-                     DenseMap<int64_t, Value> &laneIds, int64_t key, LayoutDimension dim) {
+                     DenseMap<int64_t, Value> &laneIds, int64_t key,
+                     LayoutDimension dim) {
     Location loc = root.getLoc();
     Value threadX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
     auto possibleShape = layout.getShape(dim);
     if (possibleShape) {
       switch (dim) {
-        case LayoutDimension::LANEX: {
-          Value shapeValue = rewriter.create<arith::ConstantIndexOp>(loc, *possibleShape);
-          laneIds[key] = rewriter.create<arith::RemUIOp>(loc, threadX, shapeValue);
-          return shapeValue;
-        }
-        case LayoutDimension::LANEY:
-          laneIds[key] = rewriter.create<arith::DivUIOp>(loc, threadX, lastShape);
-          break;
-        default:
-          break;
+      case LayoutDimension::LANEX: {
+        Value shapeValue =
+            rewriter.create<arith::ConstantIndexOp>(loc, *possibleShape);
+        laneIds[key] =
+            rewriter.create<arith::RemUIOp>(loc, threadX, shapeValue);
+        return shapeValue;
+      }
+      case LayoutDimension::LANEY:
+        laneIds[key] = rewriter.create<arith::DivUIOp>(loc, threadX, lastShape);
+        break;
+      default:
+        break;
       }
     }
     return lastShape;
@@ -122,9 +127,10 @@ static SmallVector<Value> handlePermutations(SmallVector<Value> &indices,
   return newIndices;
 }
 
-SmallVector<Value> VectorDistribution::getIndices(LayoutAttr &layout, LayoutAttr::Iterator &iterator,
-                                                  SmallVector<Value> indices, AffineMap permutationMap,
-                                                  Location loc, OpBuilder &rewriter) {
+SmallVector<Value> VectorDistribution::getIndices(
+    LayoutAttr &layout, LayoutAttr::Iterator &iterator,
+    SmallVector<Value> indices, AffineMap permutationMap, Location loc,
+    OpBuilder &rewriter) {
   SmallVector<Value> simdIndices;
   Value shape;
   DenseMap<int64_t, Value> laneIds;
@@ -139,7 +145,8 @@ SmallVector<Value> VectorDistribution::getIndices(LayoutAttr &layout, LayoutAttr
   for (auto pair : llvm::zip(layout.getLayouts(), iterator.states)) {
     PerDimLayoutAttr perDimLayout = std::get<0>(pair);
     PerDimLayoutAttr::Iterator iterator = std::get<1>(pair);
-    Value index = rewriter.create<affine::AffineApplyOp>(loc, perDimLayout.computeSIMDIndex(iterator), laneIds[i]);
+    Value index = rewriter.create<affine::AffineApplyOp>(
+        loc, perDimLayout.computeSIMDIndex(iterator), laneIds[i]);
     index = rewriter.create<arith::AddIOp>(loc, index, indices[i++]);
     simdIndices.push_back(index);
   }
@@ -147,11 +154,13 @@ SmallVector<Value> VectorDistribution::getIndices(LayoutAttr &layout, LayoutAttr
   return simdIndices;
 }
 
-void VectorDistribution::distributeTransferReads(vector::TransferReadOp transferReadOp) {
+void VectorDistribution::distributeTransferReads(
+    vector::TransferReadOp transferReadOp) {
   TypedValue<VectorType> result = transferReadOp.getResult();
   Value source = transferReadOp.getSource();
   Type elementType = llvm::cast<ShapedType>(source.getType()).getElementType();
-  auto vectorType = VectorType::get(provider->getDistributedShape(result), elementType);
+  auto vectorType =
+      VectorType::get(provider->getDistributedShape(result), elementType);
   Location loc = transferReadOp.getLoc();
   Value vector = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
@@ -159,19 +168,20 @@ void VectorDistribution::distributeTransferReads(vector::TransferReadOp transfer
   int64_t loadElements = layout.getTransferElements();
   auto loadFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<Value> simdIndices =
-            getIndices(layout, iterator, transferReadOp.getIndices(),
-                       transferReadOp.getPermutationMap(), loc, rewriter);
-    SmallVector<int64_t> simtIndices = layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+        getIndices(layout, iterator, transferReadOp.getIndices(),
+                   transferReadOp.getPermutationMap(), loc, rewriter);
+    SmallVector<int64_t> simtIndices =
+        layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
     auto vectorType = VectorType::get({loadElements}, elementType);
     if (loadElements == 1) {
       Value element = rewriter.create<memref::LoadOp>(loc, source, simdIndices);
-        Value broadcasted =
-            rewriter.create<vector::BroadcastOp>(loc, vectorType, element);
-        vector = rewriter.create<vector::InsertStridedSliceOp>(
-            loc, broadcasted, vector, simtIndices, SmallVector<int64_t>{1});
+      Value broadcasted =
+          rewriter.create<vector::BroadcastOp>(loc, vectorType, element);
+      vector = rewriter.create<vector::InsertStridedSliceOp>(
+          loc, broadcasted, vector, simtIndices, SmallVector<int64_t>{1});
     } else {
-      Value element = rewriter.create<vector::LoadOp>(loc, vectorType, source,
-            simdIndices);
+      Value element =
+          rewriter.create<vector::LoadOp>(loc, vectorType, source, simdIndices);
       vector = rewriter.create<vector::InsertStridedSliceOp>(
           loc, element, vector, simtIndices, SmallVector<int64_t>{1});
     }
@@ -183,18 +193,21 @@ void VectorDistribution::distributeTransferReads(vector::TransferReadOp transfer
   simdToSimt.map(result, vector);
 }
 
-void VectorDistribution::distributeTransferWrites(vector::TransferWriteOp transferWriteOp) {
+void VectorDistribution::distributeTransferWrites(
+    vector::TransferWriteOp transferWriteOp) {
   TypedValue<VectorType> vector = transferWriteOp.getVector();
-  if (!simdToSimt.lookupOrNull(vector)) return;
+  if (!simdToSimt.lookupOrNull(vector))
+    return;
   Value source = transferWriteOp.getSource();
   LayoutAttr layout = analysis.getLayout<LayoutAttr>(vector);
   Location loc = transferWriteOp.getLoc();
   int64_t storeElements = layout.getTransferElements();
   auto storeFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<Value> simdIndices =
-            getIndices(layout, iterator, transferWriteOp.getIndices(),
-                       transferWriteOp.getPermutationMap(), loc, rewriter);
-    SmallVector<int64_t> simtIndices = layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+        getIndices(layout, iterator, transferWriteOp.getIndices(),
+                   transferWriteOp.getPermutationMap(), loc, rewriter);
+    SmallVector<int64_t> simtIndices =
+        layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
     if (storeElements == 1) {
       Value result = rewriter.create<vector::ExtractOp>(
           loc, simdToSimt.lookup(vector), simtIndices);
@@ -205,45 +218,58 @@ void VectorDistribution::distributeTransferWrites(vector::TransferWriteOp transf
     } else {
       SmallVector<int64_t> strides(simtIndices.size(), 1);
       SmallVector<int64_t> shapes(simtIndices.size(), 1);
-        shapes[shapes.size() - 1] = storeElements;
-        Value result = rewriter.create<vector::ExtractStridedSliceOp>(
-            loc, simdToSimt.lookup(vector), simtIndices, shapes, strides);
-        result = rewriter.create<vector::ExtractOp>(loc, result, SmallVector<int64_t>(simtIndices.size() - 1, 0));
-        rewriter.create<vector::StoreOp>(loc, result, source, simdIndices);
-    }};
+      shapes[shapes.size() - 1] = storeElements;
+      Value result = rewriter.create<vector::ExtractStridedSliceOp>(
+          loc, simdToSimt.lookup(vector), simtIndices, shapes, strides);
+      result = rewriter.create<vector::ExtractOp>(
+          loc, result, SmallVector<int64_t>(simtIndices.size() - 1, 0));
+      rewriter.create<vector::StoreOp>(loc, result, source, simdIndices);
+    }
+  };
   DenseMap<LayoutDimension, int64_t> steps;
   steps[LayoutDimension::VECTORX] = storeElements;
   LayoutAttr::Iterator iterator = layout.getIterator(steps);
   layout.map(storeFn, iterator);
 }
 
-void VectorDistribution::distributeContractions(vector::ContractionOp contractOp) {
+void VectorDistribution::distributeContractions(
+    vector::ContractionOp contractOp) {
   TypedValue<VectorType> lhs = contractOp.getLhs();
   TypedValue<VectorType> rhs = contractOp.getRhs();
   Value acc = contractOp.getAcc();
-  if (!simdToSimt.lookupOrNull(lhs) || !simdToSimt.lookupOrNull(rhs) || !simdToSimt.lookupOrNull(acc))
+  if (!simdToSimt.lookupOrNull(lhs) || !simdToSimt.lookupOrNull(rhs) ||
+      !simdToSimt.lookupOrNull(acc))
     return;
   Location loc = contractOp.getLoc();
-  TypedValue<VectorType> result = cast<TypedValue<VectorType>>(contractOp.getResult());
+  TypedValue<VectorType> result =
+      cast<TypedValue<VectorType>>(contractOp.getResult());
   LayoutAttr layout = analysis.getLayout<LayoutAttr>(result);
   LayoutAttr lhsLayout = analysis.getLayout<LayoutAttr>(lhs);
-  int K = provider->getKDimension(lhsLayout.getBatchDim(0), lhsLayout.getBatchDim(1));
+  int K = provider->getKDimension(lhsLayout.getBatchDim(0),
+                                  lhsLayout.getBatchDim(1));
   Type elementType = llvm::cast<ShapedType>(acc.getType()).getElementType();
-  auto vectorType = VectorType::get(provider->getDistributedShape(result), elementType);
+  auto vectorType =
+      VectorType::get(provider->getDistributedShape(result), elementType);
   Value vector = rewriter.create<arith::ConstantOp>(
       loc, vectorType, rewriter.getZeroAttr(vectorType));
   auto contractFn = [&](LayoutAttr::Iterator &iterator) {
-    SmallVector<int64_t> simtIndices = layout.computeIteratorProjectedSIMTIndex(iterator, provider->getSIMTLabels());
+    SmallVector<int64_t> simtIndices = layout.computeIteratorProjectedSIMTIndex(
+        iterator, provider->getSIMTLabels());
     Value dMatrix = rewriter.create<vector::ExtractOp>(
         loc, simdToSimt.lookup(acc), simtIndices);
     for (int k = 0; k < K; k++) {
       Value aMatrix = rewriter.create<vector::ExtractOp>(
-          loc, simdToSimt.lookup(lhs), provider->getContractIndices(ContractMatrixType::A, simtIndices[0], k));
+          loc, simdToSimt.lookup(lhs),
+          provider->getContractIndices(ContractMatrixType::A, simtIndices[0],
+                                       k));
       Value bMatrix = rewriter.create<vector::ExtractOp>(
-          loc, simdToSimt.lookup(rhs), provider->getContractIndices(ContractMatrixType::B, k, simtIndices[1]));
+          loc, simdToSimt.lookup(rhs),
+          provider->getContractIndices(ContractMatrixType::B, k,
+                                       simtIndices[1]));
       dMatrix = provider->computeMMA(aMatrix, bMatrix, dMatrix, loc, rewriter);
     }
-    vector = rewriter.create<vector::InsertOp>(loc, dMatrix, vector, simtIndices);
+    vector =
+        rewriter.create<vector::InsertOp>(loc, dMatrix, vector, simtIndices);
   };
   LayoutAttr::Iterator iterator = layout.getBatchIterator();
   layout.map(contractFn, iterator);
@@ -252,7 +278,8 @@ void VectorDistribution::distributeContractions(vector::ContractionOp contractOp
 
 void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {
   Value constantResult = constantOp.getResult();
-  if (!isa<VectorType>(constantResult.getType())) return;
+  if (!isa<VectorType>(constantResult.getType()))
+    return;
   auto constant = cast<TypedValue<VectorType>>(constantResult);
   auto attr = llvm::cast<DenseElementsAttr>(constantOp.getValue());
   // Only handle splat values for now
@@ -260,7 +287,8 @@ void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {
     return;
   Type elementType =
       llvm::cast<VectorType>(constant.getType()).getElementType();
-  auto vectorType = VectorType::get(provider->getDistributedShape(constant), elementType);
+  auto vectorType =
+      VectorType::get(provider->getDistributedShape(constant), elementType);
   Value result = rewriter.create<arith::ConstantOp>(
       constantOp.getLoc(), vectorType,
       DenseElementsAttr::get(vectorType, attr.getSplatValue<APFloat>()));

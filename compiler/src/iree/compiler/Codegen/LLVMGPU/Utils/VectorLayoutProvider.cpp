@@ -103,39 +103,44 @@ AMDCDNAGPULayoutProvider::getDistributedShape(TypedValue<VectorType> value) {
   return layout.getSIMTVectorShape(simtLabels);
 }
 
-SmallVector<int64_t> AMDCDNAGPULayoutProvider::getContractIndices(ContractMatrixType matrixType, int i, int j) {
+SmallVector<int64_t>
+AMDCDNAGPULayoutProvider::getContractIndices(ContractMatrixType matrixType,
+                                             int i, int j) {
   if (matrixType == ContractMatrixType::A) {
     switch (contractType) {
-      case ContractType::MM:
-      case ContractType::MMT:
-        return SmallVector<int64_t>{i, j};
-      case ContractType::MTM:
-        return SmallVector<int64_t>{j, i};
+    case ContractType::MM:
+    case ContractType::MMT:
+      return SmallVector<int64_t>{i, j};
+    case ContractType::MTM:
+      return SmallVector<int64_t>{j, i};
     }
   }
 
   if (matrixType == ContractMatrixType::B) {
     switch (contractType) {
-      case ContractType::MM:
-      case ContractType::MTM:
-        return SmallVector<int64_t>{i, j};
-      case ContractType::MMT:
-        return SmallVector<int64_t>{j, i};
+    case ContractType::MM:
+    case ContractType::MTM:
+      return SmallVector<int64_t>{i, j};
+    case ContractType::MMT:
+      return SmallVector<int64_t>{j, i};
     }
   }
   return SmallVector<int64_t>{i, j};
 }
 
-Value AMDCDNAGPULayoutProvider::computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) {
+Value AMDCDNAGPULayoutProvider::computeMMA(Value a, Value b, Value c,
+                                           Location loc, OpBuilder &rewriter) {
   uint32_t m, n, k, blks;
   if (mfmaType == AMDCDNAGPULayoutProvider::MFMAType::F16_16x16x16_F32) {
     m = n = k = 16;
   }
   blks = 1;
-  return rewriter.create<amdgpu::MFMAOp>(loc, c.getType(), m, n, k, blks, a, b, c);
+  return rewriter.create<amdgpu::MFMAOp>(loc, c.getType(), m, n, k, blks, a, b,
+                                         c);
 }
 
-int64_t AMDCDNAGPULayoutProvider::getKDimension(int64_t rowBatch, int64_t colBatch) {
+int64_t AMDCDNAGPULayoutProvider::getKDimension(int64_t rowBatch,
+                                                int64_t colBatch) {
   if (contractType == ContractType::MTM) {
     return rowBatch;
   }

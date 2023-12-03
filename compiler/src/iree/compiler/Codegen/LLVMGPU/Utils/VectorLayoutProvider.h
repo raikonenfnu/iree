@@ -39,15 +39,17 @@ public:
 
   virtual SmallVector<IREE::VectorExt::LayoutDimension> getSIMTLabels() = 0;
 
-  virtual SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType, int i, int j) = 0;
-  virtual Value computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) = 0;
+  virtual SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType,
+                                                  int i, int j) = 0;
+  virtual Value computeMMA(Value a, Value b, Value c, Location loc,
+                           OpBuilder &rewriter) = 0;
   virtual int64_t getKDimension(int64_t M, int64_t K) = 0;
 
   /// For a given value, return the distributed index for the value.
   /// (index)[threadx, thready, threadz] -> (distributedIndex)
-  //virtual SmallVector<AffineMap>
-  //getDistributedIndex(TypedValue<VectorType> val,
-  //                    ArrayRef<int64_t> iterate) = 0;
+  // virtual SmallVector<AffineMap>
+  // getDistributedIndex(TypedValue<VectorType> val,
+  //                     ArrayRef<int64_t> iterate) = 0;
 
   virtual int64_t getLoadWidth(TypedValue<VectorType> val,
                                ArrayRef<int64_t> iterate) {
@@ -96,7 +98,8 @@ public:
   virtual SmallVector<int64_t>
   getDistributedShape(TypedValue<VectorType> val) override;
 
-  virtual SmallVector<IREE::VectorExt::LayoutDimension> getSIMTLabels() override {
+  virtual SmallVector<IREE::VectorExt::LayoutDimension>
+  getSIMTLabels() override {
     return simtLabels;
   }
 
@@ -104,16 +107,19 @@ public:
   // /// the operation if a specialized distribution is done.
   // /// Return false if the operation is not specialized.
   // virtual bool specializedDistribution(Operation *op) override;
-  virtual SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType, int i, int j) override;
-  virtual Value computeMMA(Value a, Value b, Value c, Location loc, OpBuilder &rewriter) override;
+  virtual SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType,
+                                                  int i, int j) override;
+  virtual Value computeMMA(Value a, Value b, Value c, Location loc,
+                           OpBuilder &rewriter) override;
   virtual int64_t getKDimension(int64_t M, int64_t K) override;
 
 private:
   MFMAType mfmaType;
   ContractType contractType;
-  SmallVector<IREE::VectorExt::LayoutDimension> simtLabels{IREE::VectorExt::LayoutDimension::BATCHX,
-                                          IREE::VectorExt::LayoutDimension::BATCHY,
-                                          IREE::VectorExt::LayoutDimension::VECTORX};
+  SmallVector<IREE::VectorExt::LayoutDimension> simtLabels{
+      IREE::VectorExt::LayoutDimension::BATCHX,
+      IREE::VectorExt::LayoutDimension::BATCHY,
+      IREE::VectorExt::LayoutDimension::VECTORX};
 };
 
 // class NVIDIAGPULayoutProvider : public LayoutProvider {

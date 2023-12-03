@@ -97,40 +97,42 @@ bool LayoutAttr::isValidLayout(ArrayRef<int64_t> shape) const {
 }
 
 static bool isLane(LayoutDimension dim) {
-  return (dim == LayoutDimension::LANEX) ||
-         (dim == LayoutDimension::LANEY) ||
+  return (dim == LayoutDimension::LANEX) || (dim == LayoutDimension::LANEY) ||
          (dim == LayoutDimension::LANEZ);
 }
 
 static bool isVector(LayoutDimension dim) {
   return (dim == LayoutDimension::VECTORX) ||
-         (dim == LayoutDimension::VECTORY) ||
-         (dim == LayoutDimension::VECTORZ);
+         (dim == LayoutDimension::VECTORY) || (dim == LayoutDimension::VECTORZ);
 }
 
 static bool isBatch(LayoutDimension dim) {
-  return (dim == LayoutDimension::BATCHX) ||
-         (dim == LayoutDimension::BATCHY);
+  return (dim == LayoutDimension::BATCHX) || (dim == LayoutDimension::BATCHY);
 }
 
 // Returns true if iterator is at the end and false otherwise.
 bool PerDimLayoutAttr::DimensionIterator::next() {
   current += step;
   bool done = current >= end;
-  if (done) current = 0;
+  if (done)
+    current = 0;
   return done;
 }
 
-static int64_t getInnermostVectorShape(ArrayRef<LayoutDimensionAttr> labels, ArrayRef<int64_t> shapes) {
+static int64_t getInnermostVectorShape(ArrayRef<LayoutDimensionAttr> labels,
+                                       ArrayRef<int64_t> shapes) {
   return isVector(labels.back().getValue()) ? shapes.back() : 1;
 }
 
-PerDimLayoutAttr::Iterator PerDimLayoutAttr::getIterator(DenseMap<LayoutDimension, int64_t> &stepMap) {
+PerDimLayoutAttr::Iterator
+PerDimLayoutAttr::getIterator(DenseMap<LayoutDimension, int64_t> &stepMap) {
   PerDimLayoutAttr::Iterator iterator;
   int64_t step;
-  for (auto [nameAttr, shape] : llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
+  for (auto [nameAttr, shape] :
+       llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
     LayoutDimension name = nameAttr.getValue();
-    if (isLane(name)) continue;
+    if (isLane(name))
+      continue;
     step = stepMap.contains(name) ? stepMap[name] : 1;
     iterator.state[name] = PerDimLayoutAttr::DimensionIterator(0, shape, step);
   }
@@ -140,9 +142,11 @@ PerDimLayoutAttr::Iterator PerDimLayoutAttr::getIterator(DenseMap<LayoutDimensio
 PerDimLayoutAttr::Iterator PerDimLayoutAttr::getBatchIterator() {
   PerDimLayoutAttr::Iterator iterator;
   int64_t step{1};
-  for (auto [nameAttr, shape] : llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
+  for (auto [nameAttr, shape] :
+       llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
     LayoutDimension name = nameAttr.getValue();
-    if (!isBatch(name)) continue;
+    if (!isBatch(name))
+      continue;
     iterator.state[name] = PerDimLayoutAttr::DimensionIterator(0, shape, step);
   }
   return iterator;
@@ -159,10 +163,12 @@ bool PerDimLayoutAttr::Iterator::next() {
   return done;
 }
 
-AffineExpr PerDimLayoutAttr::computeSIMDIndex(PerDimLayoutAttr::Iterator &iterator) {
+AffineExpr
+PerDimLayoutAttr::computeSIMDIndex(PerDimLayoutAttr::Iterator &iterator) {
   DenseSet<LayoutDimension> layoutDims;
   for (auto label : getLabels()) {
-    if (isLane(label.getValue())) layoutDims.insert(label.getValue());
+    if (isLane(label.getValue()))
+      layoutDims.insert(label.getValue());
   }
   MLIRContext *ctx = getContext();
   SmallVector<AffineExpr> dims(layoutDims.size());
@@ -170,7 +176,8 @@ AffineExpr PerDimLayoutAttr::computeSIMDIndex(PerDimLayoutAttr::Iterator &iterat
   AffineExpr offset = getAffineConstantExpr(0, ctx);
   AffineExpr stride = getAffineConstantExpr(1, ctx);
   int i = 0;
-  for (const auto &[nameAttr, shape] : llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
+  for (const auto &[nameAttr, shape] :
+       llvm::zip(llvm::reverse(getLabels()), llvm::reverse(getShapes()))) {
     LayoutDimension name = nameAttr.getValue();
     if (layoutDims.contains(name)) {
       offset = offset + stride * dims[i++];
@@ -179,8 +186,8 @@ AffineExpr PerDimLayoutAttr::computeSIMDIndex(PerDimLayoutAttr::Iterator &iterat
     }
     if (!iterator.state.contains(name))
       continue;
-    offset =
-        offset + stride * getAffineConstantExpr(iterator.state[name].current, ctx);
+    offset = offset +
+             stride * getAffineConstantExpr(iterator.state[name].current, ctx);
     stride = stride * getAffineConstantExpr(shape, ctx);
   }
   return offset;
@@ -188,15 +195,18 @@ AffineExpr PerDimLayoutAttr::computeSIMDIndex(PerDimLayoutAttr::Iterator &iterat
 
 // Get the offset into the SIMT vector corresponding to the incoming iterator.
 // The returned offsets will always be the same shape as the labels array.
-SmallVector<int64_t> LayoutAttr::computeSIMTIndex(LayoutAttr::Iterator &iterator,
-                                                  ArrayRef<LayoutDimension> labels) {
+SmallVector<int64_t>
+LayoutAttr::computeSIMTIndex(LayoutAttr::Iterator &iterator,
+                             ArrayRef<LayoutDimension> labels) {
   SmallVector<int64_t> offset(labels.size(), 0);
   for (int i = 0; i < labels.size(); i++) {
     int64_t stride{1};
     for (auto pair : llvm::zip(getLayouts(), iterator.states)) {
       PerDimLayoutAttr layout = std::get<0>(pair);
       PerDimLayoutAttr::Iterator iterator = std::get<1>(pair);
-      for (auto [nameAttr, size] : llvm::zip(llvm::reverse(layout.getLabels()), llvm::reverse(layout.getShapes()))) {
+      for (auto [nameAttr, size] :
+           llvm::zip(llvm::reverse(layout.getLabels()),
+                     llvm::reverse(layout.getShapes()))) {
         LayoutDimension name = nameAttr.getValue();
         if ((name == labels[i]) && (iterator.state.contains(name))) {
           offset[i] = iterator.state[name].current * stride + offset[i];
@@ -212,8 +222,8 @@ SmallVector<int64_t> LayoutAttr::computeSIMTIndex(LayoutAttr::Iterator &iterator
 // The offsets are projected onto the iterator. For example, if we have a vector
 // mapping (batchx, batchy, vecx) and the iterator is (batchx, batchy), then
 // we return an vector containing the offsets for (batchx, batchy).
-SmallVector<int64_t> LayoutAttr::computeIteratorProjectedSIMTIndex(LayoutAttr::Iterator &iterator,
-                                                                   ArrayRef<LayoutDimension> labels) {
+SmallVector<int64_t> LayoutAttr::computeIteratorProjectedSIMTIndex(
+    LayoutAttr::Iterator &iterator, ArrayRef<LayoutDimension> labels) {
   SmallVector<int64_t> indices = computeSIMTIndex(iterator, labels);
   SmallVector<int64_t> projectedIndices;
   for (int i = 0; i < labels.size(); i++) {
@@ -228,7 +238,8 @@ SmallVector<int64_t> LayoutAttr::computeIteratorProjectedSIMTIndex(LayoutAttr::I
   return projectedIndices;
 }
 
-LayoutAttr::Iterator LayoutAttr::getIterator(DenseMap<LayoutDimension, int64_t> &steps) {
+LayoutAttr::Iterator
+LayoutAttr::getIterator(DenseMap<LayoutDimension, int64_t> &steps) {
   LayoutAttr::Iterator iterator;
   for (auto layout : getLayouts()) {
     iterator.states.push_back(layout.getIterator(steps));
@@ -254,9 +265,10 @@ bool LayoutAttr::Iterator::next() {
 
 void PerDimLayoutAttr::Iterator::print() {
   for (auto [label, value] : state) {
-    if (isLane(label)) continue;
-    llvm::outs() << stringifyLayoutDimension(label) << " : " << value.current << "->" << value.end
-                 << " [" << value.step << "] ,";
+    if (isLane(label))
+      continue;
+    llvm::outs() << stringifyLayoutDimension(label) << " : " << value.current
+                 << "->" << value.end << " [" << value.step << "] ,";
   }
 }
 
@@ -264,7 +276,8 @@ int64_t LayoutAttr::getBatchDim(int64_t dim) {
   assert(dim < getLayouts().size());
   PerDimLayoutAttr layout = getDimLayout(dim);
   for (auto [name, shape] : llvm::zip(layout.getLabels(), layout.getShapes())) {
-    if (isBatch(name.getValue())) return shape;
+    if (isBatch(name.getValue()))
+      return shape;
   }
   return -1;
 }
@@ -277,7 +290,8 @@ void LayoutAttr::Iterator::print() {
   llvm::outs() << "====================\n";
 }
 
-void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback, Iterator &iterator) {
+void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback,
+                     Iterator &iterator) {
   do {
     iterator.print();
     callback(iterator);
