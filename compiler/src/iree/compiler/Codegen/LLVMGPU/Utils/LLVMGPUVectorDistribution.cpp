@@ -22,6 +22,43 @@ using namespace mlir::iree_compiler::IREE::VectorExt;
 
 namespace mlir::iree_compiler {
 
+Value getDistributed(RewriterBase &rewriter, TypedValue<VectorType> value,
+                     LayoutProvider *provider) {
+  // Create a "to_simt" op to convert the value to the distributed layout.
+  SmallVector<int64_t> distributedShape = provider->getDistributedShape(value);
+  VectorType distributedType =
+      VectorType::get(distributedShape, value.getType().getElementType());
+  auto toSIMT = rewriter.create<IREE::VectorExt::ToSIMTOp>(
+      value.getLoc(), distributedType, value);
+  return toSIMT.getResult();
+}
+
+void replaceOpWithDistributedValues(RewriterBase &rewriter, Operation *op,
+                                    LayoutProvider *provider,
+                                    ValueRange values) {
+  // Replace all OpResults with the given values.
+  SmallVector<Value> replacements;
+  for (OpResult opResult : op->getOpResults()) {
+    Value replacement = values[opResult.getResultNumber()];
+    // If this value is a vector type, it must be converted back to simd.
+    if (isa<VectorType>(replacement.getType())) {
+      auto oldResult = cast<TypedValue<VectorType>>(opResult);
+      // Create a toSIMD op to convert the value back to the simd.
+      rewriter.setInsertionPointAfterValue(oldResult);
+      auto toSIMD = rewriter.create<IREE::VectorExt::ToSIMDOp>(
+          oldResult.getLoc(), oldResult.getType(), replacement);
+      // Clone the layout to the new value.
+      provider->getAnalysis().cloneLayoutInformationToNewValue(
+          oldResult, toSIMD.getResult());
+      // Add to replacements.
+      replacement = toSIMD.getResult();
+    }
+    replacements.push_back(replacement);
+  }
+
+  rewriter.replaceOp(op, replacements);
+}
+
 namespace {
 
 class VectorDistribution {
@@ -108,7 +145,6 @@ private:
   VectorLayoutAnalysis &analysis;
   LayoutProvider *provider;
   RewriterBase &rewriter;
-  IRMapping simdToSimt;
 }; // namespace
 
 } // namespace
@@ -190,14 +226,12 @@ void VectorDistribution::distributeTransferReads(
   steps[LayoutDimension::VECTORX] = loadElements;
   LayoutAttr::Iterator iterator = layout.getIterator(steps);
   layout.map(loadFn, iterator);
-  simdToSimt.map(result, vector);
+  replaceOpWithDistributedValues(rewriter, transferReadOp, provider, vector);
 }
 
 void VectorDistribution::distributeTransferWrites(
     vector::TransferWriteOp transferWriteOp) {
   TypedValue<VectorType> vector = transferWriteOp.getVector();
-  if (!simdToSimt.lookupOrNull(vector))
-    return;
   Value source = transferWriteOp.getSource();
   LayoutAttr layout = analysis.getLayout<LayoutAttr>(vector);
   Location loc = transferWriteOp.getLoc();
@@ -210,7 +244,7 @@ void VectorDistribution::distributeTransferWrites(
         layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
     if (storeElements == 1) {
       Value result = rewriter.create<vector::ExtractOp>(
-          loc, simdToSimt.lookup(vector), simtIndices);
+          loc, getDistributed(rewriter, vector, provider), simtIndices);
       rewriter.create<memref::StoreOp>(
           loc, result, source,
           getIndices(layout, iterator, transferWriteOp.getIndices(),
@@ -220,7 +254,8 @@ void VectorDistribution::distributeTransferWrites(
       SmallVector<int64_t> shapes(simtIndices.size(), 1);
       shapes[shapes.size() - 1] = storeElements;
       Value result = rewriter.create<vector::ExtractStridedSliceOp>(
-          loc, simdToSimt.lookup(vector), simtIndices, shapes, strides);
+          loc, getDistributed(rewriter, vector, provider), simtIndices, shapes,
+          strides);
       result = rewriter.create<vector::ExtractOp>(
           loc, result, SmallVector<int64_t>(simtIndices.size() - 1, 0));
       rewriter.create<vector::StoreOp>(loc, result, source, simdIndices);
@@ -236,10 +271,10 @@ void VectorDistribution::distributeContractions(
     vector::ContractionOp contractOp) {
   TypedValue<VectorType> lhs = contractOp.getLhs();
   TypedValue<VectorType> rhs = contractOp.getRhs();
-  Value acc = contractOp.getAcc();
-  if (!simdToSimt.lookupOrNull(lhs) || !simdToSimt.lookupOrNull(rhs) ||
-      !simdToSimt.lookupOrNull(acc))
+  Value accVal = contractOp.getAcc();
+  if (!isa<VectorType>(accVal.getType()))
     return;
+  TypedValue<VectorType> acc = cast<TypedValue<VectorType>>(accVal);
   Location loc = contractOp.getLoc();
   TypedValue<VectorType> result =
       cast<TypedValue<VectorType>>(contractOp.getResult());
@@ -256,14 +291,14 @@ void VectorDistribution::distributeContractions(
     SmallVector<int64_t> simtIndices = layout.computeIteratorProjectedSIMTIndex(
         iterator, provider->getSIMTLabels());
     Value dMatrix = rewriter.create<vector::ExtractOp>(
-        loc, simdToSimt.lookup(acc), simtIndices);
+        loc, getDistributed(rewriter, acc, provider), simtIndices);
     for (int k = 0; k < K; k++) {
       Value aMatrix = rewriter.create<vector::ExtractOp>(
-          loc, simdToSimt.lookup(lhs),
+          loc, getDistributed(rewriter, lhs, provider),
           provider->getContractIndices(ContractMatrixType::A, simtIndices[0],
                                        k));
       Value bMatrix = rewriter.create<vector::ExtractOp>(
-          loc, simdToSimt.lookup(rhs),
+          loc, getDistributed(rewriter, rhs, provider),
           provider->getContractIndices(ContractMatrixType::B, k,
                                        simtIndices[1]));
       dMatrix = provider->computeMMA(aMatrix, bMatrix, dMatrix, loc, rewriter);
@@ -273,7 +308,7 @@ void VectorDistribution::distributeContractions(
   };
   LayoutAttr::Iterator iterator = layout.getBatchIterator();
   layout.map(contractFn, iterator);
-  simdToSimt.map(result, vector);
+  replaceOpWithDistributedValues(rewriter, contractOp, provider, vector);
 }
 
 void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {
@@ -292,7 +327,7 @@ void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {
   Value result = rewriter.create<arith::ConstantOp>(
       constantOp.getLoc(), vectorType,
       DenseElementsAttr::get(vectorType, attr.getSplatValue<APFloat>()));
-  simdToSimt.map(constant, result);
+  replaceOpWithDistributedValues(rewriter, constantOp, provider, result);
 }
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {

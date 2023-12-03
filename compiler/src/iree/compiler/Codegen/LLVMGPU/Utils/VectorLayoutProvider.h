@@ -29,6 +29,8 @@ public:
 
   virtual ~LayoutProvider() = default;
 
+  VectorLayoutAnalysis &getAnalysis() { return analysis; }
+
   /// Set the anchor ops in the analysis rooted on the root operation.
   virtual void setAnchorOps() = 0;
 

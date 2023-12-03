@@ -7,6 +7,7 @@
 #ifndef IREE_COMPILER_CODEGEN_LLVMGPU_UTILS_LLVMGPUUTILS_H_
 #define IREE_COMPILER_CODEGEN_LLVMGPU_UTILS_LLVMGPUUTILS_H_
 
+#include "iree/compiler/Codegen/LLVMGPU/Utils/VectorLayoutProvider.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/PatternMatch.h"
 
@@ -20,6 +21,22 @@ void createAsyncGroups(RewriterBase &rewriter, func::FuncOp funcOp,
 /// Function to do layout analysis and distribution.
 void doLayoutAnalysisAndDistribution(RewriterBase &rewriter,
                                      func::FuncOp funcOp);
+
+Value getDistributed(RewriterBase &rewriter, TypedValue<VectorType> value,
+                     LayoutProvider *provider);
+
+void replaceOpWithDistributedValues(RewriterBase &rewriter, Operation *op,
+                                    LayoutProvider *provider,
+                                    ValueRange values);
+
+template <typename OpTy, typename... Args>
+OpTy replaceOpWithNewDistributedOp(LayoutProvider *provider,
+                                   RewriterBase &rewriter, Operation *op,
+                                   Args &&...args) {
+  auto newOp = rewriter.create<OpTy>(op->getLoc(), std::forward<Args>(args)...);
+  replaceOpWithDistributedValues(rewriter, op, provider, newOp->getResults());
+  return newOp;
+}
 
 /// Function to do layout analysis and distribution. This is a rewrite of
 /// doLayoutAnalysisAndDistribution.

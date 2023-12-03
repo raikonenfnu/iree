@@ -983,3 +983,14 @@ VectorLayoutInterface VectorLayoutAnalysis::getLayout(Value val) {
   }
   return layout->getInnerLayout();
 }
+
+void VectorLayoutAnalysis::cloneLayoutInformationToNewValue(Value oldValue,
+                                                            Value newValue) {
+  DistributionLayout *newLayout =
+      solver.getOrCreateState<DistributionLayout>(newValue);
+  // Resolve this new layout to the old one.
+  newLayout->resolve(getLayout(oldValue));
+  // We don't need to propagate the change, since it is same as the old layout.
+  // TODO: If we try to propagate/enforce this layout again, we will
+  // need to subscribe it to enforcement and propagation.
+}
