@@ -321,14 +321,12 @@ void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {
   // Only handle splat values for now
   if (!attr.isSplat())
     return;
-  Type elementType =
-      llvm::cast<VectorType>(constant.getType()).getElementType();
+  Type elementType = constant.getType().getElementType();
   auto vectorType =
       VectorType::get(provider->getDistributedShape(constant), elementType);
-  Value result = rewriter.create<arith::ConstantOp>(
-      constantOp.getLoc(), vectorType,
+  replaceOpWithNewDistributedOp<arith::ConstantOp>(
+      provider, rewriter, constantOp, vectorType,
       DenseElementsAttr::get(vectorType, attr.getSplatValue<APFloat>()));
-  replaceOpWithDistributedValues(rewriter, constantOp, provider, result);
 }
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
