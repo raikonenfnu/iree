@@ -101,10 +101,21 @@ public:
   /// Fix the layout for a specific value. The layout must implement
   /// VectorLayoutInterface.
   template <typename T>
-  void setAnchor(Value val, T layout) {
+  void setAnchorForValue(Value val, T layout) {
     assert(isa<VectorLayoutInterface>(layout) &&
            "expected layout to implement VectorLayoutInterface");
-    anchors[val] = cast<VectorLayoutInterface>(layout);
+    assert(!anchorValues.count(val) &&
+           "value already has a layout known to the analysis");
+    anchorValues[val] = cast<VectorLayoutInterface>(layout);
+  }
+
+  template <typename T>
+  void setAnchorForOperand(OpOperand &operand, T layout) {
+    assert(isa<VectorLayoutInterface>(layout) &&
+           "expected layout to implement VectorLayoutInterface");
+    assert(!anchorOperands.count(&operand) &&
+           "operand already has a layout known to the analysis");
+    anchorOperands[&operand] = cast<VectorLayoutInterface>(layout);
   }
 
   /// Run the analysis. The analysis expects that the user has set some anchor
@@ -139,7 +150,8 @@ private:
   VectorLayoutInterface getLayout(Value val);
 
   Operation *root;
-  DenseMap<Value, VectorLayoutInterface> anchors;
+  DenseMap<Value, VectorLayoutInterface> anchorValues;
+  DenseMap<OpOperand *, VectorLayoutInterface> anchorOperands;
   DataFlowSolver solver;
 };
 

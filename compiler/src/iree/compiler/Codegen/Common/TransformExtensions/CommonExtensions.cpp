@@ -930,12 +930,13 @@ static void setAnchorOpsFromAttributes(VectorLayoutAnalysis &analysis,
         if (name.find("__vector_layout_test_anchor_operand_") !=
             std::string::npos) {
           int operandNum = std::stoi(name.substr(name.find_last_of("_") + 1));
-          analysis.setAnchor(op.getOperand(operandNum), attr.getValue());
+          analysis.setAnchorForOperand(op.getOpOperand(operandNum),
+                                       attr.getValue());
         }
         if (name.find("__vector_layout_test_anchor_result_") !=
             std::string::npos) {
           int resultNum = std::stoi(name.substr(name.find_last_of("_") + 1));
-          analysis.setAnchor(op.getResult(resultNum), attr.getValue());
+          analysis.setAnchorForValue(op.getResult(resultNum), attr.getValue());
         }
       }
     }

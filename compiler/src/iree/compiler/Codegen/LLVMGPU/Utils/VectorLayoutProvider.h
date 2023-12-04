@@ -104,9 +104,9 @@ public:
 
   int64_t getKDimension(int64_t M, int64_t K);
 
-  void setCanonicalMFMALayout(TypedValue<VectorType> value,
-                              ContractMatrixType matrixType,
-                              int64_t numElements);
+  IREE::VectorExt::LayoutAttr
+  getCanonicalMFMALayout(TypedValue<VectorType> value,
+                         ContractMatrixType matrixType, int64_t numElements);
 
 private:
   MFMAType mfmaType;

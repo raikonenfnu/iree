@@ -51,9 +51,10 @@ static PerDimLayoutAttr createPerDimLayout(MLIRContext *ctx,
   return PerDimLayoutAttr::get(ctx, dimAttrs, shapes);
 }
 
-void AMDCDNAGPULayoutProvider::setCanonicalMFMALayout(
-    TypedValue<VectorType> value, ContractMatrixType matrixType,
-    int64_t numElements) {
+LayoutAttr
+AMDCDNAGPULayoutProvider::getCanonicalMFMALayout(TypedValue<VectorType> value,
+                                                 ContractMatrixType matrixType,
+                                                 int64_t numElements) {
   MLIRContext *ctx = root->getContext();
 
   // Get MMA matrix info.
@@ -85,34 +86,35 @@ void AMDCDNAGPULayoutProvider::setCanonicalMFMALayout(
   }
 
   // Set layout based on matrix type.
-  LayoutAttr layout;
   switch (matrixType) {
   case ContractMatrixType::A:
-    layout = LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
-    break;
+    return LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
   case ContractMatrixType::B:
-    layout = LayoutAttr::get(ctx, {colLayout(numElements), rowLayout});
-    break;
+    return LayoutAttr::get(ctx, {colLayout(numElements), rowLayout});
   default:
-    layout = LayoutAttr::get(ctx, {colLayout(4), rowLayout});
-    break;
+    return LayoutAttr::get(ctx, {colLayout(4), rowLayout});
   }
-  analysis.setAnchor(value, layout);
 }
 
 void AMDCDNAGPULayoutProvider::setAnchorOps() {
   root->walk([&](Operation *op) {
     TypeSwitch<Operation *, void>(op)
-        .Case<vector::ContractionOp>([&](auto contractOp) {
-          setCanonicalMFMALayout(contractOp.getLhs(), ContractMatrixType::A, 4);
-          setCanonicalMFMALayout(contractOp.getRhs(), ContractMatrixType::B, 4);
+        .Case<vector::ContractionOp>([&](vector::ContractionOp contractOp) {
+          LayoutAttr layoutA = getCanonicalMFMALayout(contractOp.getLhs(),
+                                                      ContractMatrixType::A, 4);
+          analysis.setAnchorForOperand(contractOp->getOpOperand(0), layoutA);
+          LayoutAttr layoutB = getCanonicalMFMALayout(contractOp.getRhs(),
+                                                      ContractMatrixType::B, 4);
+          analysis.setAnchorForOperand(contractOp->getOpOperand(1), layoutB);
           // Do not allow scalar result.
           if (isa<VectorType>(contractOp.getAccType()) &&
               isa<VectorType>(contractOp.getResultType())) {
             auto acc = cast<TypedValue<VectorType>>(contractOp.getAcc());
             auto result = cast<TypedValue<VectorType>>(contractOp.getResult());
-            setCanonicalMFMALayout(acc, ContractMatrixType::C, 4);
-            setCanonicalMFMALayout(result, ContractMatrixType::D, 4);
+            LayoutAttr layoutC =
+                getCanonicalMFMALayout(acc, ContractMatrixType::C, 4);
+            analysis.setAnchorForOperand(contractOp->getOpOperand(2), layoutC);
+            analysis.setAnchorForValue(result, layoutC);
           }
         })
         .Case<vector::TransferReadOp>([&](auto transferReadOp) {
@@ -120,10 +122,14 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
           for (Operation *user : vector.getUsers()) {
             if (auto contractOp = dyn_cast<vector::ContractionOp>(user)) {
               if (vector == contractOp.getLhs()) {
-                setCanonicalMFMALayout(vector, ContractMatrixType::A, 8);
+                LayoutAttr layoutLhs =
+                    getCanonicalMFMALayout(vector, ContractMatrixType::A, 8);
+                analysis.setAnchorForValue(vector, layoutLhs);
               }
               if (vector == contractOp.getRhs()) {
-                setCanonicalMFMALayout(vector, ContractMatrixType::B, 8);
+                LayoutAttr layoutRhs =
+                    getCanonicalMFMALayout(vector, ContractMatrixType::B, 8);
+                analysis.setAnchorForValue(vector, layoutRhs);
               }
             }
           }
