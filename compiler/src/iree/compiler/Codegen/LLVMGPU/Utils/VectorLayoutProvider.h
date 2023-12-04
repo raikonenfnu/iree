@@ -41,18 +41,6 @@ public:
 
   virtual SmallVector<IREE::VectorExt::LayoutDimension> getSIMTLabels() = 0;
 
-  virtual SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType,
-                                                  int i, int j) = 0;
-  virtual Value computeMMA(Value a, Value b, Value c, Location loc,
-                           OpBuilder &rewriter) = 0;
-  virtual int64_t getKDimension(int64_t M, int64_t K) = 0;
-
-  /// For a given value, return the distributed index for the value.
-  /// (index)[threadx, thready, threadz] -> (distributedIndex)
-  // virtual SmallVector<AffineMap>
-  // getDistributedIndex(TypedValue<VectorType> val,
-  //                     ArrayRef<int64_t> iterate) = 0;
-
   virtual int64_t getLoadWidth(TypedValue<VectorType> val,
                                ArrayRef<int64_t> iterate) {
     // Convervative choice.
@@ -68,7 +56,7 @@ public:
   /// Given an operation, do specialized distribution for it. Return true if
   /// the operation if a specialized distribution is done.
   /// Return false if the operation is not specialized.
-  virtual bool specializedDistribution(Operation *op) {
+  virtual bool specializedDistribution(RewriterBase &rewriter, Operation *op) {
     // No specialization by default.
     return false;
   }
@@ -105,15 +93,16 @@ public:
     return simtLabels;
   }
 
-  // /// Given an operation, do specialized distribution for it. Return true if
-  // /// the operation if a specialized distribution is done.
-  // /// Return false if the operation is not specialized.
-  // virtual bool specializedDistribution(Operation *op) override;
-  virtual SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType,
-                                                  int i, int j) override;
-  virtual Value computeMMA(Value a, Value b, Value c, Location loc,
-                           OpBuilder &rewriter) override;
-  virtual int64_t getKDimension(int64_t M, int64_t K) override;
+  virtual bool specializedDistribution(RewriterBase &rewriter,
+                                       Operation *op) override;
+
+  SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType, int i,
+                                          int j);
+
+  Value computeMMA(Value a, Value b, Value c, Location loc,
+                   OpBuilder &rewriter);
+
+  int64_t getKDimension(int64_t M, int64_t K);
 
 private:
   MFMAType mfmaType;

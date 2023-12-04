@@ -120,15 +120,11 @@ public:
       Operation *op = worklist[i];
       rewriter.setInsertionPoint(op);
 
-      if (provider->specializedDistribution(op)) {
+      if (provider->specializedDistribution(rewriter, op)) {
         return;
       }
 
       TypeSwitch<Operation *, void>(op)
-          .Case<vector::ContractionOp>([&](auto contractOp) {
-            distributeContractions(contractOp);
-            return;
-          })
           .Case<vector::TransferReadOp>([&](auto transferReadOp) {
             distributeTransferReads(transferReadOp);
             return;
@@ -153,8 +149,6 @@ private:
   void distributeTransferWrites(vector::TransferWriteOp transferWriteOp);
 
   void distributeTransferReads(vector::TransferReadOp transferReadOp);
-
-  void distributeContractions(vector::ContractionOp contractionOp);
 
   void distributeConstants(arith::ConstantOp constantOp);
 
@@ -316,50 +310,6 @@ void VectorDistribution::distributeTransferWrites(
   layout.map(storeFn, iterator);
   replaceOpWithDistributedValues(rewriter, transferWriteOp, provider,
                                  ValueRange());
-}
-
-void VectorDistribution::distributeContractions(
-    vector::ContractionOp contractOp) {
-  TypedValue<VectorType> lhs = contractOp.getLhs();
-  TypedValue<VectorType> rhs = contractOp.getRhs();
-  Value accVal = contractOp.getAcc();
-  if (!isa<VectorType>(accVal.getType()))
-    return;
-  TypedValue<VectorType> acc = cast<TypedValue<VectorType>>(accVal);
-  Location loc = contractOp.getLoc();
-  TypedValue<VectorType> result =
-      cast<TypedValue<VectorType>>(contractOp.getResult());
-  LayoutAttr layout = analysis.getLayout<LayoutAttr>(result);
-  LayoutAttr lhsLayout = analysis.getLayout<LayoutAttr>(lhs);
-  int K = provider->getKDimension(lhsLayout.getBatchDim(0),
-                                  lhsLayout.getBatchDim(1));
-  Type elementType = llvm::cast<ShapedType>(acc.getType()).getElementType();
-  auto vectorType =
-      VectorType::get(provider->getDistributedShape(result), elementType);
-  Value vector = rewriter.create<arith::ConstantOp>(
-      loc, vectorType, rewriter.getZeroAttr(vectorType));
-  auto contractFn = [&](LayoutAttr::Iterator &iterator) {
-    SmallVector<int64_t> simtIndices = layout.computeIteratorProjectedSIMTIndex(
-        iterator, provider->getSIMTLabels());
-    Value dMatrix = rewriter.create<vector::ExtractOp>(
-        loc, getDistributed(rewriter, acc, provider), simtIndices);
-    for (int k = 0; k < K; k++) {
-      Value aMatrix = rewriter.create<vector::ExtractOp>(
-          loc, getDistributed(rewriter, lhs, provider),
-          provider->getContractIndices(ContractMatrixType::A, simtIndices[0],
-                                       k));
-      Value bMatrix = rewriter.create<vector::ExtractOp>(
-          loc, getDistributed(rewriter, rhs, provider),
-          provider->getContractIndices(ContractMatrixType::B, k,
-                                       simtIndices[1]));
-      dMatrix = provider->computeMMA(aMatrix, bMatrix, dMatrix, loc, rewriter);
-    }
-    vector =
-        rewriter.create<vector::InsertOp>(loc, dMatrix, vector, simtIndices);
-  };
-  LayoutAttr::Iterator iterator = layout.getBatchIterator();
-  layout.map(contractFn, iterator);
-  replaceOpWithDistributedValues(rewriter, contractOp, provider, vector);
 }
 
 void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {

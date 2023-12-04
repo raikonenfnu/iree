@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Codegen/LLVMGPU/Utils/VectorLayoutProvider.h"
+#include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 
 using namespace mlir::iree_compiler::IREE::VectorExt;
@@ -159,4 +160,60 @@ int64_t AMDCDNAGPULayoutProvider::getKDimension(int64_t rowBatch,
     return rowBatch;
   }
   return colBatch;
+}
+
+static void distributeContractionsToMFMA(RewriterBase &rewriter,
+                                         AMDCDNAGPULayoutProvider *provider,
+                                         vector::ContractionOp contractOp) {
+  VectorLayoutAnalysis &analysis = provider->getAnalysis();
+  TypedValue<VectorType> lhs = contractOp.getLhs();
+  TypedValue<VectorType> rhs = contractOp.getRhs();
+  Value accVal = contractOp.getAcc();
+  if (!isa<VectorType>(accVal.getType()))
+    return;
+  TypedValue<VectorType> acc = cast<TypedValue<VectorType>>(accVal);
+  Location loc = contractOp.getLoc();
+  TypedValue<VectorType> result =
+      cast<TypedValue<VectorType>>(contractOp.getResult());
+  LayoutAttr layout = analysis.getLayout<LayoutAttr>(result);
+  LayoutAttr lhsLayout = analysis.getLayout<LayoutAttr>(lhs);
+  int K = provider->getKDimension(lhsLayout.getBatchDim(0),
+                                  lhsLayout.getBatchDim(1));
+  Type elementType = llvm::cast<ShapedType>(acc.getType()).getElementType();
+  auto vectorType =
+      VectorType::get(provider->getDistributedShape(result), elementType);
+  Value vector = rewriter.create<arith::ConstantOp>(
+      loc, vectorType, rewriter.getZeroAttr(vectorType));
+  auto contractFn = [&](LayoutAttr::Iterator &iterator) {
+    SmallVector<int64_t> simtIndices = layout.computeIteratorProjectedSIMTIndex(
+        iterator, provider->getSIMTLabels());
+    Value dMatrix = rewriter.create<vector::ExtractOp>(
+        loc, getDistributed(rewriter, acc, provider), simtIndices);
+    for (int k = 0; k < K; k++) {
+      Value aMatrix = rewriter.create<vector::ExtractOp>(
+          loc, getDistributed(rewriter, lhs, provider),
+          provider->getContractIndices(ContractMatrixType::A, simtIndices[0],
+                                       k));
+      Value bMatrix = rewriter.create<vector::ExtractOp>(
+          loc, getDistributed(rewriter, rhs, provider),
+          provider->getContractIndices(ContractMatrixType::B, k,
+                                       simtIndices[1]));
+      dMatrix = provider->computeMMA(aMatrix, bMatrix, dMatrix, loc, rewriter);
+    }
+    vector =
+        rewriter.create<vector::InsertOp>(loc, dMatrix, vector, simtIndices);
+  };
+  LayoutAttr::Iterator iterator = layout.getBatchIterator();
+  layout.map(contractFn, iterator);
+  replaceOpWithDistributedValues(rewriter, contractOp, provider, vector);
+}
+
+bool AMDCDNAGPULayoutProvider::specializedDistribution(RewriterBase &rewriter,
+                                                       Operation *op) {
+  // Do specialized mfma distribution.
+  if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
+    distributeContractionsToMFMA(rewriter, this, contractOp);
+    return true;
+  }
+  return false;
 }
