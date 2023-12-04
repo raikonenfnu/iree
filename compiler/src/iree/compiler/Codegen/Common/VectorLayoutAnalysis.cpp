@@ -994,3 +994,27 @@ void VectorLayoutAnalysis::cloneLayoutInformationToNewValue(Value oldValue,
   // TODO: If we try to propagate/enforce this layout again, we will
   // need to subscribe it to enforcement and propagation.
 }
+
+void VectorLayoutAnalysis::print(raw_ostream &os) {
+  // Annotate each operation with the layout of it's result.
+  root->walk([&](Operation *op) {
+    if (op->getNumResults() == 0) {
+      return;
+    }
+
+    for (auto [index, result] : llvm::enumerate(op->getResults())) {
+      if (!isa<VectorType>(result.getType())) {
+        continue;
+      }
+
+      Attribute layout = getLayout<Attribute>(result);
+      if (!layout) {
+        continue;
+      }
+
+      op->setAttr("layout_result_" + std::to_string(index), layout);
+    }
+  });
+
+  root->dump();
+}

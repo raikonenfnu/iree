@@ -129,6 +129,12 @@ public:
   // must not have a layout known to the analysis.
   void cloneLayoutInformationToNewValue(Value oldValue, Value newValue);
 
+  void print(raw_ostream &os);
+  void dump() {
+    print(llvm::errs());
+    llvm::errs() << "\n";
+  };
+
 private:
   VectorLayoutInterface getLayout(Value val);
 

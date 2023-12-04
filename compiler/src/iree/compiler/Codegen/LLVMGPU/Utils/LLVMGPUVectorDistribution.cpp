@@ -75,6 +75,7 @@ public:
     provider->setAnchorOps();
     if (failed(analysis.run()))
       return;
+    analysis.dump();
   }
 
   void distribute() {
