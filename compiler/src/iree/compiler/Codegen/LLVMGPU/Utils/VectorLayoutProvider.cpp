@@ -64,7 +64,9 @@ void AMDCDNAGPULayoutProvider::setCanonicalMFMALayout(
 
   // Get batch sizes.
   int64_t batchRow = matrixShape[0] / canonicalShape[0];
-  int64_t batchCol = matrixShape[1] / canonicalShape[1];
+  // If we load more elements, corresponds to smaller batch size.
+  int64_t multiplier = numElements / 4;
+  int64_t batchCol = matrixShape[1] / canonicalShape[1] / multiplier;
 
   PerDimLayoutAttr rowLayout = createPerDimLayout(
       ctx, {LayoutDimension::BATCHX, LayoutDimension::LANEX}, {batchRow, 16});
