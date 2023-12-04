@@ -138,6 +138,11 @@ public:
                 distributeConstants(constantOp);
                 return true;
               })
+              .Case<IREE::VectorExt::LayoutConflictResolutionOp>(
+                  [&](auto resolutionOp) {
+                    distributeResolutions(resolutionOp);
+                    return true;
+                  })
               .Default([&](Operation *op) { return false; });
 
       // If the operation was distributed, continue with the next one.
@@ -164,6 +169,9 @@ private:
   void distributeConstants(arith::ConstantOp constantOp);
 
   void distributeElementwise(Operation *op);
+
+  void distributeResolutions(
+      IREE::VectorExt::LayoutConflictResolutionOp resolutionOp);
 
   SmallVector<Value> getIndices(LayoutAttr &layout,
                                 LayoutAttr::Iterator &iterator,
@@ -375,6 +383,9 @@ void VectorDistribution::distributeElementwise(Operation *op) {
   replaceOpWithDistributedValues(rewriter, op, provider,
                                  distributedOp->getResults());
 }
+
+void VectorDistribution::distributeResolutions(
+    IREE::VectorExt::LayoutConflictResolutionOp resolutionOp) {}
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
   VectorLayoutAnalysis analysis(funcOp);
