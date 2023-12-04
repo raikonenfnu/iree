@@ -46,6 +46,7 @@ struct ROCMOptions {
   std::string targetChip = "gfx908";
   bool linkBitcode = false;
   std::string bitcodeDirectory;
+  std::string enableROCMUkernels = "none";
 
   void bindOptions(OptionsBinder &binder) {
     static llvm::cl::OptionCategory category("ROCM HAL Target");
@@ -57,6 +58,11 @@ struct ROCMOptions {
     binder.opt<std::string>("iree-rocm-bc-dir", bitcodeDirectory,
                             llvm::cl::cat(category),
                             llvm::cl::desc("Directory of ROCM Bitcode"));
+    binder.opt<std::string>("iree-rocm-enable-ukernels", enableROCMUkernels,
+                            llvm::cl::cat(category),
+                            llvm::cl::desc("Enables microkernels in the llvmcpu backend. May be "
+                                      "`default`, `none`, `all`, or a comma-separated list of "
+                                      "specific unprefixed microkernels to enable, e.g. `mmt4d`."));
   }
 };
 } // namespace
@@ -397,6 +403,9 @@ private:
     };
     // Set target arch
     addConfig("target_arch", StringAttr::get(context, options.targetChip));
+
+    // Set Ukernels.
+    addConfig("ukernels", StringAttr::get(context, options.enableROCMUkernels));
 
     auto configAttr = b.getDictionaryAttr(configItems);
     return IREE::HAL::ExecutableTargetAttr::get(
