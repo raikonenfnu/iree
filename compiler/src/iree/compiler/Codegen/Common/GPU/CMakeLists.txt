@@ -50,6 +50,7 @@ iree_cc_library(
     "GPUDistribute.cpp"
     "GPUDistributeSharedMemoryCopy.cpp"
     "GPUGeneralizeNamedOps.cpp"
+    "GPULowerToUKernels.cpp"
     "GPUMultiBuffering.cpp"
     "GPUPatterns.cpp"
     "GPUPipelining.cpp"
