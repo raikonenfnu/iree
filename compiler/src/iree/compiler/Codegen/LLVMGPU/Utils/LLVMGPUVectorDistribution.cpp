@@ -124,19 +124,26 @@ public:
         continue;
       }
 
-      TypeSwitch<Operation *, void>(op)
-          .Case<vector::TransferReadOp>([&](auto transferReadOp) {
-            distributeTransferReads(transferReadOp);
-            return;
-          })
-          .Case<vector::TransferWriteOp>([&](auto transferWriteOp) {
-            distributeTransferWrites(transferWriteOp);
-            return;
-          })
-          .Case<arith::ConstantOp>([&](auto constantOp) {
-            distributeConstants(constantOp);
-            return;
-          });
+      bool distributed =
+          TypeSwitch<Operation *, bool>(op)
+              .Case<vector::TransferReadOp>([&](auto transferReadOp) {
+                distributeTransferReads(transferReadOp);
+                return true;
+              })
+              .Case<vector::TransferWriteOp>([&](auto transferWriteOp) {
+                distributeTransferWrites(transferWriteOp);
+                return true;
+              })
+              .Case<arith::ConstantOp>([&](auto constantOp) {
+                distributeConstants(constantOp);
+                return true;
+              })
+              .Default([&](Operation *op) { return false; });
+
+      // If the operation was distributed, continue with the next one.
+      if (distributed) {
+        continue;
+      }
 
       if (OpTrait::hasElementwiseMappableTraits(op)) {
         distributeElementwise(op);
