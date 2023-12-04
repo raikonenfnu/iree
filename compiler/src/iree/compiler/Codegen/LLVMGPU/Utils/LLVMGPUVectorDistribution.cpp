@@ -121,7 +121,7 @@ public:
       rewriter.setInsertionPoint(op);
 
       if (provider->specializedDistribution(rewriter, op)) {
-        return;
+        continue;
       }
 
       TypeSwitch<Operation *, void>(op)
@@ -136,8 +136,12 @@ public:
           .Case<arith::ConstantOp>([&](auto constantOp) {
             distributeConstants(constantOp);
             return;
-          })
-          .Default([&](auto op) {});
+          });
+
+      if (OpTrait::hasElementwiseMappableTraits(op)) {
+        distributeElementwise(op);
+        continue;
+      }
     }
 
     // 3. Ideally, we should error out here if everything was not distributed.
@@ -151,6 +155,8 @@ private:
   void distributeTransferReads(vector::TransferReadOp transferReadOp);
 
   void distributeConstants(arith::ConstantOp constantOp);
+
+  void distributeElementwise(Operation *op);
 
   SmallVector<Value> getIndices(LayoutAttr &layout,
                                 LayoutAttr::Iterator &iterator,
@@ -327,6 +333,40 @@ void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {
   replaceOpWithNewDistributedOp<arith::ConstantOp>(
       provider, rewriter, constantOp, vectorType,
       DenseElementsAttr::get(vectorType, attr.getSplatValue<APFloat>()));
+}
+
+void VectorDistribution::distributeElementwise(Operation *op) {
+  assert(OpTrait::hasElementwiseMappableTraits(op) &&
+         "expected elementwise op");
+  // Replace vector operands with their distributed counter-parts.
+  SmallVector<Value> operands;
+  for (Value operand : op->getOperands()) {
+    if (auto vectorOperand = dyn_cast<TypedValue<VectorType>>(operand)) {
+      operand = getDistributed(rewriter, vectorOperand, provider);
+    }
+    operands.push_back(operand);
+  }
+
+  // Replace vector types with their distributed counter-parts.
+  SmallVector<Type> resultTypes;
+  for (Value result : op->getResults()) {
+    if (auto vectorResult = dyn_cast<TypedValue<VectorType>>(result)) {
+      // Distribute vector result types.
+      auto newType =
+          VectorType::get(provider->getDistributedShape(vectorResult),
+                          vectorResult.getType().getElementType());
+      resultTypes.push_back(newType);
+    } else {
+      resultTypes.push_back(result.getType());
+    }
+  }
+
+  // Replace the original op with the distributed op.
+  Operation *distributedOp =
+      rewriter.create(op->getLoc(), op->getName().getIdentifier(), operands,
+                      resultTypes, op->getAttrs());
+  replaceOpWithDistributedValues(rewriter, op, provider,
+                                 distributedOp->getResults());
 }
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
