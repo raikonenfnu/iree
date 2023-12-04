@@ -78,7 +78,46 @@ public:
   }
 
   void distribute() {
+    // 1: Collect all operations that need to be distributed.
+    SmallVector<Operation *> worklist;
     root->walk([&](Operation *op) {
+      bool needsDistribution = false;
+      // Check if this operation has any operands with a vector type. If so,
+      // then they need to have a layout.
+      for (Value operand : op->getOperands()) {
+        if (isa<VectorType>(operand.getType())) {
+          if (!analysis.getLayout<Attribute>(operand)) {
+            llvm::report_fatal_error("operand of operation " +
+                                     op->getName().getStringRef() +
+                                     " does not have a layout");
+          }
+          needsDistribution = true;
+        }
+      }
+
+      // Check if this operation has any results with a vector type. If so,
+      // then they need to have a layout.
+      for (OpResult result : op->getResults()) {
+        if (isa<VectorType>(result.getType())) {
+          if (!analysis.getLayout<Attribute>(result)) {
+            llvm::report_fatal_error("result of operation " +
+                                     op->getName().getStringRef() +
+                                     " does not have a layout");
+          }
+          needsDistribution = true;
+        }
+      }
+
+      if (needsDistribution) {
+        worklist.push_back(op);
+      }
+    });
+
+    // 2. Distribute all operations in the worklist. Each pattern currently
+    // only replaces a single operation, which means we can iterate only once.
+    // TODO: Add a rewriter which can handle multiple replacements.
+    for (unsigned i = 0; i < worklist.size(); ++i) {
+      Operation *op = worklist[i];
       rewriter.setInsertionPoint(op);
 
       if (provider->specializedDistribution(op)) {
@@ -103,7 +142,11 @@ public:
             return;
           })
           .Default([&](auto op) {});
-    });
+    }
+
+    // 3. Ideally, we should error out here if everything was not distributed.
+    // Currently, I'm not adding it for debugging purposes.
+    // TODO: Add a check here if something was not distributed.
   }
 
 private:
