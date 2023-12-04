@@ -93,7 +93,7 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
         layout = LayoutAttr::get(ctx, {colLayout(numElements), rowLayout});
         break;
       default:
-        layout = LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
+        layout = LayoutAttr::get(ctx, {colLayout(4), rowLayout});
         break;
       }
       analysis.setAnchor(value, layout);
