@@ -21,19 +21,18 @@ getCanonicalDims(AMDCDNAGPULayoutProvider::MFMAType type) {
   }
 }
 
-static SmallVector<uint32_t> getCanonicalShape(uint32_t M, uint32_t N,
-                                               uint32_t K,
-                                               ContractMatrixType matrixType,
-                                               ContractType contractType) {
-  SmallVector<uint32_t> shape;
+static SmallVector<int64_t> getCanonicalShape(int64_t M, int64_t N, int64_t K,
+                                              ContractMatrixType matrixType,
+                                              ContractType contractType) {
+  SmallVector<int64_t> shape;
   switch (matrixType) {
   case ContractMatrixType::A:
-    shape = contractType == ContractType::MTM ? SmallVector<uint32_t>{K, M}
-                                              : SmallVector<uint32_t>{M, K};
+    shape = contractType == ContractType::MTM ? SmallVector<int64_t>{K, M}
+                                              : SmallVector<int64_t>{M, K};
     break;
   case ContractMatrixType::B:
-    shape = contractType == ContractType::MMT ? SmallVector<uint32_t>{N, K}
-                                              : SmallVector<uint32_t>{K, N};
+    shape = contractType == ContractType::MMT ? SmallVector<int64_t>{N, K}
+                                              : SmallVector<int64_t>{K, N};
     break;
   default:
     shape = {M, N};
@@ -52,47 +51,62 @@ static PerDimLayoutAttr createPerDimLayout(MLIRContext *ctx,
 
 void AMDCDNAGPULayoutProvider::setAnchorOps() {
   MLIRContext *ctx = root->getContext();
-  root->walk([&](Operation *op) {
-    if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
-      uint32_t M, N, K;
-      std::tie(M, N, K) = getCanonicalDims(mfmaType);
-      auto setLayout = [&](Value value, ContractMatrixType matrixType,
-                           int64_t numElements) {
-        ArrayRef<int64_t> matrixShape =
-            cast<VectorType>(value.getType()).getShape();
-        SmallVector<uint32_t> canonicalShape =
-            getCanonicalShape(M, N, K, matrixType, contractType);
-        uint32_t batchRow = matrixShape[0] / canonicalShape[0];
-        uint32_t batchCol = matrixShape[1] / canonicalShape[1];
-        PerDimLayoutAttr rowLayout = createPerDimLayout(
-            ctx, {LayoutDimension::BATCHX, LayoutDimension::LANEX},
-            {batchRow, 16});
-        auto colLayout = [&](int64_t numElements) -> PerDimLayoutAttr {
-          return createPerDimLayout(ctx,
-                                    {LayoutDimension::BATCHY,
-                                     LayoutDimension::LANEY,
-                                     LayoutDimension::VECTORX},
-                                    {batchCol, 4, numElements});
-        };
-        LayoutAttr layout;
-        if (contractType == ContractType::MMT) {
-          if (matrixType == ContractMatrixType::B) {
-            matrixType = ContractMatrixType::A;
-          }
-        }
-        if (matrixType == ContractMatrixType::A) {
-          layout = LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
-        } else if (matrixType == ContractMatrixType::B) {
-          layout = LayoutAttr::get(ctx, {colLayout(numElements), rowLayout});
-        } else {
-          layout = LayoutAttr::get(ctx, {colLayout(4), rowLayout});
-        }
-        analysis.setAnchor(value, layout);
+  root->walk([&](vector::ContractionOp contractOp) {
+    auto setLayout = [&](TypedValue<VectorType> value,
+                         ContractMatrixType matrixType, int64_t numElements) {
+      // Get MMA matrix info.
+      auto [M, N, K] = getCanonicalDims(mfmaType);
+      ArrayRef<int64_t> matrixShape = value.getType().getShape();
+      SmallVector<int64_t> canonicalShape =
+          getCanonicalShape(M, N, K, matrixType, contractType);
+
+      // Get batch sizes.
+      int64_t batchRow = matrixShape[0] / canonicalShape[0];
+      int64_t batchCol = matrixShape[1] / canonicalShape[1];
+
+      PerDimLayoutAttr rowLayout = createPerDimLayout(
+          ctx, {LayoutDimension::BATCHX, LayoutDimension::LANEX},
+          {batchRow, 16});
+
+      auto colLayout = [&](int64_t numElements) -> PerDimLayoutAttr {
+        return createPerDimLayout(ctx,
+                                  {LayoutDimension::BATCHY,
+                                   LayoutDimension::LANEY,
+                                   LayoutDimension::VECTORX},
+                                  {batchCol, 4, numElements});
       };
-      setLayout(contractOp.getLhs(), ContractMatrixType::A, 4);
-      setLayout(contractOp.getRhs(), ContractMatrixType::B, 4);
-      setLayout(contractOp.getAcc(), ContractMatrixType::C, 4);
-      setLayout(contractOp.getResult(), ContractMatrixType::D, 4);
+
+      // For MMT contract, the layout of B is same as layout of A.
+      if (contractType == ContractType::MMT &&
+          matrixType == ContractMatrixType::B) {
+        matrixType = ContractMatrixType::A;
+      }
+
+      // Set layout based on matrix type.
+      LayoutAttr layout;
+      switch (matrixType) {
+      case ContractMatrixType::A:
+        layout = LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
+        break;
+      case ContractMatrixType::B:
+        layout = LayoutAttr::get(ctx, {colLayout(numElements), rowLayout});
+        break;
+      default:
+        layout = LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
+        break;
+      }
+      analysis.setAnchor(value, layout);
+    };
+
+    setLayout(contractOp.getLhs(), ContractMatrixType::A, 4);
+    setLayout(contractOp.getRhs(), ContractMatrixType::B, 4);
+    // Do not allow scalar result.
+    if (isa<VectorType>(contractOp.getAccType()) &&
+        isa<VectorType>(contractOp.getResultType())) {
+      auto acc = cast<TypedValue<VectorType>>(contractOp.getAcc());
+      auto result = cast<TypedValue<VectorType>>(contractOp.getResult());
+      setLayout(acc, ContractMatrixType::C, 4);
+      setLayout(result, ContractMatrixType::D, 4);
     }
   });
 }
