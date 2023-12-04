@@ -293,7 +293,6 @@ void LayoutAttr::Iterator::print() {
 void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback,
                      Iterator &iterator) {
   do {
-    iterator.print();
     callback(iterator);
   } while (!iterator.next());
 }
