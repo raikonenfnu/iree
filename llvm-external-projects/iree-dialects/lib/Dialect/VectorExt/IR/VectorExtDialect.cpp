@@ -266,11 +266,14 @@ LayoutAttr::Iterator LayoutAttr::getBatchIterator() {
 }
 
 bool LayoutAttr::Iterator::next() {
-  SmallVector<bool> done;
+  bool done{true};
   for (auto &iterator : states) {
-    done.push_back(iterator.next());
+    if (!iterator.next()) {
+      done = false;
+      break;
+    }
   }
-  return llvm::all_of(done, [&](bool status) { return status == true; });
+  return done;
 }
 
 void PerDimLayoutAttr::Iterator::print() {

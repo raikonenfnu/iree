@@ -110,6 +110,9 @@ public:
   getCanonicalMFMALayout(TypedValue<VectorType> value,
                          ContractMatrixType matrixType, int64_t numElements);
 
+  bool hasCanonicalShape(ContractMatrixType matrixType,
+                         ArrayRef<int64_t> shape);
+
   IREE::VectorExt::LayoutDimension getInnerMostVecDim() const {
     for (auto label : llvm::reverse(simtLabels)) {
       switch (label) {

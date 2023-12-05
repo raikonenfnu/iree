@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Codegen/LLVMGPU/Utils/VectorLayoutProvider.h"
+#include "VectorLayoutProvider.h"
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
@@ -66,17 +67,20 @@ AMDCDNAGPULayoutProvider::getCanonicalMFMALayout(TypedValue<VectorType> value,
   // Get batch sizes.
   int64_t batchRow = matrixShape[0] / canonicalShape[0];
   // If we load more elements, corresponds to smaller batch size.
-  int64_t multiplier = numElements / 4;
+  int64_t multiplier = numElements >= 4 ? numElements / 4 : 1;
   int64_t batchCol = matrixShape[1] / canonicalShape[1] / multiplier;
 
-  PerDimLayoutAttr rowLayout = createPerDimLayout(
-      ctx, {LayoutDimension::BATCHX, LayoutDimension::LANEX}, {batchRow, 16});
+  auto rowLayout = [&](LayoutDimension batchDim,
+                       int64_t batch) -> PerDimLayoutAttr {
+    return createPerDimLayout(ctx, {batchDim, LayoutDimension::LANEX},
+                              {batch, 16});
+  };
 
-  auto colLayout = [&](int64_t numElements) -> PerDimLayoutAttr {
-    return createPerDimLayout(ctx,
-                              {LayoutDimension::BATCHY, LayoutDimension::LANEY,
-                               LayoutDimension::VECTORX},
-                              {batchCol, 4, numElements});
+  auto colLayout = [&](LayoutDimension batchDim, int64_t batch,
+                       int64_t numElements) -> PerDimLayoutAttr {
+    return createPerDimLayout(
+        ctx, {batchDim, LayoutDimension::LANEY, LayoutDimension::VECTORX},
+        {batch, 4, numElements});
   };
 
   // For MMT contract, the layout of B is same as layout of A.
@@ -88,14 +92,43 @@ AMDCDNAGPULayoutProvider::getCanonicalMFMALayout(TypedValue<VectorType> value,
   // Set layout based on matrix type.
   switch (matrixType) {
   case ContractMatrixType::A:
-    return LayoutAttr::get(ctx, {rowLayout, colLayout(numElements)});
+    return LayoutAttr::get(
+        ctx, {rowLayout(LayoutDimension::BATCHX, batchRow),
+              colLayout(LayoutDimension::BATCHY, batchCol, numElements)});
   case ContractMatrixType::B:
-    return LayoutAttr::get(ctx, {colLayout(numElements), rowLayout});
+    return LayoutAttr::get(
+        ctx, {colLayout(LayoutDimension::BATCHX, batchRow, numElements),
+              rowLayout(LayoutDimension::BATCHY, batchCol)});
   default:
-    return LayoutAttr::get(ctx, {colLayout(4), rowLayout});
+    return LayoutAttr::get(ctx,
+                           {colLayout(LayoutDimension::BATCHX, batchRow, 4),
+                            rowLayout(LayoutDimension::BATCHY, batchCol)});
   }
 }
 
+bool AMDCDNAGPULayoutProvider::hasCanonicalShape(ContractMatrixType matrixType,
+                                                 ArrayRef<int64_t> shape) {
+  SmallVector<int64_t> Ashape, Bshape, Cshape;
+  switch (mfmaType) {
+  case AMDCDNAGPULayoutProvider::MFMAType::F16_16x16x16_F32:
+    Ashape = Bshape = Cshape = {16, 16};
+    break;
+  default:
+    return false;
+  }
+
+  switch (matrixType) {
+  case ContractMatrixType::A:
+    return Ashape == shape;
+  case ContractMatrixType::B:
+    return Bshape == shape;
+  case ContractMatrixType::C:
+  case ContractMatrixType::D:
+    return Cshape == shape;
+  default:
+    return false;
+  }
+}
 void AMDCDNAGPULayoutProvider::setAnchorOps() {
   root->walk([&](Operation *op) {
     TypeSwitch<Operation *, void>(op)
@@ -112,7 +145,7 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
             auto acc = cast<TypedValue<VectorType>>(contractOp.getAcc());
             auto result = cast<TypedValue<VectorType>>(contractOp.getResult());
             LayoutAttr layoutC =
-                getCanonicalMFMALayout(acc, ContractMatrixType::C, 4);
+                getCanonicalMFMALayout(acc, ContractMatrixType::C, 1);
             analysis.setAnchorForOperand(contractOp->getOpOperand(2), layoutC);
             analysis.setAnchorForValue(result, layoutC);
           }
@@ -121,6 +154,13 @@ void AMDCDNAGPULayoutProvider::setAnchorOps() {
           TypedValue<VectorType> vector = transferReadOp.getVector();
           for (Operation *user : vector.getUsers()) {
             if (auto contractOp = dyn_cast<vector::ContractionOp>(user)) {
+              ArrayRef<int64_t> lhsShape =
+                  cast<ShapedType>(contractOp.getLhs().getType()).getShape();
+              ArrayRef<int64_t> rhsShape =
+                  cast<ShapedType>(contractOp.getRhs().getType()).getShape();
+              if (hasCanonicalShape(ContractMatrixType::A, lhsShape) ||
+                  hasCanonicalShape(ContractMatrixType::B, rhsShape))
+                return;
               if (vector == contractOp.getLhs()) {
                 LayoutAttr layoutLhs =
                     getCanonicalMFMALayout(vector, ContractMatrixType::A, 8);
