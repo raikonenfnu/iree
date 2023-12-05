@@ -4,6 +4,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include <numeric>
 #include "iree-dialects/Dialect/VectorExt/IR/VectorExtOps.h"
 #include "iree/compiler/Codegen/Common/VectorLayoutAnalysis.h"
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
@@ -173,6 +174,11 @@ private:
 
   void distributeResolutions(
       IREE::VectorExt::LayoutConflictResolutionOp resolutionOp);
+
+  TypedValue<VectorType> reshapeVector(TypedValue<VectorType> src,
+                                       LayoutAttr &currentLayout,
+                                       LayoutAttr &targetLayout,
+                                       Type elementType);
 
   SmallVector<Value> getIndices(LayoutAttr &layout,
                                 LayoutAttr::Iterator &iterator,
@@ -385,8 +391,69 @@ void VectorDistribution::distributeElementwise(Operation *op) {
                                  distributedOp->getResults());
 }
 
+TypedValue<VectorType>
+VectorDistribution::reshapeVector(TypedValue<VectorType> src,
+                                  LayoutAttr &currentLayout,
+                                  LayoutAttr &targetLayout, Type elementType) {
+  SmallVector<int64_t> targetShape =
+      targetLayout.getSIMTVectorShape(provider->getSIMTLabels());
+  auto newVectorType = VectorType::get(targetShape, elementType);
+  Location loc = root->getLoc();
+  arith::ConstantOp constantOp = rewriter.create<arith::ConstantOp>(
+      loc, newVectorType, rewriter.getZeroAttr(newVectorType));
+  auto newVector = cast<TypedValue<VectorType>>(constantOp.getResult());
+
+  SmallVector<int64_t> currentShape =
+      currentLayout.getSIMTVectorShape(provider->getSIMTLabels());
+  int64_t innermostDim = targetShape.size() - 1;
+  int64_t step =
+      std::min(targetShape[innermostDim], currentShape[innermostDim]);
+  DenseMap<LayoutDimension, int64_t> steps;
+  LayoutDimension vecDim = provider->getInnerMostVecDim();
+  steps[vecDim] = step;
+  auto srcIterator = currentLayout.getIterator(steps);
+  auto targetIterator = targetLayout.getIterator(steps);
+  do {
+    auto srcOffset =
+        currentLayout.computeSIMTIndex(srcIterator, provider->getSIMTLabels());
+    SmallVector<int64_t> sliceSize(srcOffset.size(), 1);
+    SmallVector<int64_t> sliceStride(srcOffset.size(), 1);
+    sliceSize[sliceSize.size() - 1] = step;
+    Value slice = rewriter.create<vector::ExtractStridedSliceOp>(
+        loc, src, srcOffset, sliceSize, sliceStride);
+    auto targetOffset = targetLayout.computeSIMTIndex(
+        targetIterator, provider->getSIMTLabels());
+    newVector = rewriter.create<vector::InsertStridedSliceOp>(
+        loc, slice, newVector, targetOffset, sliceStride);
+  } while (!srcIterator.next() && !targetIterator.next());
+  return newVector;
+}
+
 void VectorDistribution::distributeResolutions(
-    IREE::VectorExt::LayoutConflictResolutionOp resolutionOp) {}
+    IREE::VectorExt::LayoutConflictResolutionOp resolutionOp) {
+  TypedValue<VectorType> vector = resolutionOp.getInput();
+  TypedValue<VectorType> result = resolutionOp.getOutput();
+  LayoutAttr currentLayout = cast<LayoutAttr>(resolutionOp.getSourceLayout());
+  LayoutAttr targetLayout = cast<LayoutAttr>(resolutionOp.getDesiredLayout());
+  if (currentLayout.hasLaneConflictWith(targetLayout))
+    return;
+  SmallVector<int64_t> currentVecShape =
+      currentLayout.getSIMTVectorShape(provider->getSIMTLabels());
+  SmallVector<int64_t> targetVecShape =
+      targetLayout.getSIMTVectorShape(provider->getSIMTLabels());
+  if (currentVecShape.size() != targetVecShape.size())
+    return;
+  auto numElements = [](ArrayRef<int64_t> vector) {
+    return std::reduce(vector.begin(), vector.end(), 1,
+                       std::multiplies<int64_t>());
+  };
+  if (numElements(currentVecShape) != numElements(targetVecShape))
+    return;
+  Type elementType = llvm::cast<VectorType>(result.getType()).getElementType();
+  Value newVector = reshapeVector(getDistributed(rewriter, vector, provider),
+                                  currentLayout, targetLayout, elementType);
+  replaceOpWithDistributedValues(rewriter, resolutionOp, provider, newVector);
+}
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
   VectorLayoutAnalysis analysis(funcOp);

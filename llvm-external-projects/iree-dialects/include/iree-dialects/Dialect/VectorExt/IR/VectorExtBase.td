@@ -91,7 +91,7 @@ def PerDimLayoutAttr : IREEVectorExt_Attr<"PerDimLayout"> {
    let assemblyFormat = "`<``[` $labels `]``,` `[` $shapes `]``>`";
    let genVerifyDecl = 0;
    let extraClassDeclaration = [{
-      std::optional<int64_t> getShape(const LayoutDimension &dim);
+      std::optional<int64_t> getShape(const LayoutDimension &dim) const;
       bool contains(const LayoutDimension &dim);
       struct DimensionIterator {
         DimensionIterator() {}
@@ -141,6 +141,8 @@ def LayoutAttr : IREEVectorExt_Attr<"Layout",
     void map(std::function<void(Iterator &)>, Iterator &);
     int64_t getTransferElements() const;
     int64_t getBatchDim(int64_t dim);
+    bool hasLaneConflictWith(const LayoutAttr &other);
+    std::optional<int64_t> getShape(const LayoutDimension &dim) const;
   }];
 }
 

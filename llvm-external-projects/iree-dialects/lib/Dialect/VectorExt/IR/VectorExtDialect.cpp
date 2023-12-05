@@ -54,10 +54,20 @@ bool PerDimLayoutAttr::contains(const LayoutDimension &dim) {
   return false;
 }
 
-std::optional<int64_t> PerDimLayoutAttr::getShape(const LayoutDimension &dim) {
+std::optional<int64_t>
+PerDimLayoutAttr::getShape(const LayoutDimension &dim) const {
   for (auto value : llvm::zip(getLabels(), getShapes())) {
     if (dim == std::get<0>(value).getValue())
       return std::get<1>(value);
+  }
+  return std::nullopt;
+}
+
+std::optional<int64_t> LayoutAttr::getShape(const LayoutDimension &dim) const {
+  for (PerDimLayoutAttr layout : getLayouts()) {
+    auto maybeShape = layout.getShape(dim);
+    if (maybeShape)
+      return *maybeShape;
   }
   return std::nullopt;
 }
@@ -301,6 +311,24 @@ void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback,
 int64_t LayoutAttr::getTransferElements() const {
   PerDimLayoutAttr colAttr = getDimLayout(1);
   return getInnermostVectorShape(colAttr.getLabels(), colAttr.getShapes());
+}
+
+// Layout conflict is one where
+// 1. Layout A has a particular dim while Layout B doesn't and vice-versa
+// 2. Layout A and B have a particular dim but their shapes disagree
+bool LayoutAttr::hasLaneConflictWith(const LayoutAttr &other) {
+  SmallVector<LayoutDimension> laneDims{
+      LayoutDimension::LANEX, LayoutDimension::LANEY, LayoutDimension::LANEZ};
+  for (auto dim : laneDims) {
+    auto shape0 = getShape(dim);
+    auto shape1 = other.getShape(dim);
+    if ((shape0 && !shape1) || (shape1 && !shape0))
+      return true;
+    if (shape0 && shape1)
+      if (*shape0 != *shape1)
+        return true;
+  }
+  return false;
 }
 
 // Project out the layout for the specified dimensions

@@ -41,6 +41,8 @@ public:
 
   virtual SmallVector<IREE::VectorExt::LayoutDimension> getSIMTLabels() = 0;
 
+  virtual IREE::VectorExt::LayoutDimension getInnerMostVecDim() const = 0;
+
   virtual int64_t getLoadWidth(TypedValue<VectorType> val,
                                ArrayRef<int64_t> iterate) {
     // Convervative choice.
@@ -107,6 +109,20 @@ public:
   IREE::VectorExt::LayoutAttr
   getCanonicalMFMALayout(TypedValue<VectorType> value,
                          ContractMatrixType matrixType, int64_t numElements);
+
+  IREE::VectorExt::LayoutDimension getInnerMostVecDim() const {
+    for (auto label : llvm::reverse(simtLabels)) {
+      switch (label) {
+      case IREE::VectorExt::LayoutDimension::VECTORX:
+      case IREE::VectorExt::LayoutDimension::VECTORY:
+      case IREE::VectorExt::LayoutDimension::VECTORZ:
+        return label;
+      default:
+        break;
+      }
+    }
+    llvm_unreachable("layout has no vector dimensions!");
+  }
 
 private:
   MFMAType mfmaType;
