@@ -144,6 +144,14 @@ public:
                     distributeResolutions(resolutionOp);
                     return true;
                   })
+              .Case<scf::ForOp>([&](auto forOp) {
+                distributeScfFor(forOp);
+                return true;
+              })
+              .Case<scf::YieldOp>([&](auto yieldOp) {
+                distributeScfYield(yieldOp);
+                return true;
+              })
               .Default([&](Operation *op) { return false; });
 
       // If the operation was distributed, continue with the next one.
@@ -173,6 +181,10 @@ private:
 
   void distributeResolutions(
       IREE::VectorExt::LayoutConflictResolutionOp resolutionOp);
+
+  void distributeScfFor(scf::ForOp forOp);
+
+  void distributeScfYield(scf::YieldOp yieldOp);
 
   TypedValue<VectorType> reshapeVector(TypedValue<VectorType> src,
                                        LayoutAttr &currentLayout,
@@ -464,6 +476,68 @@ void VectorDistribution::distributeResolutions(
   Value newVector = reshapeVector(getDistributed(rewriter, vector, provider),
                                   currentLayout, targetLayout, elementType);
   replaceOpWithDistributedValues(rewriter, resolutionOp, provider, newVector);
+}
+
+/// Helper function for loop distribution. Given a list of bbArgs of the new
+/// (distributed) loop op, wrap the distributed vector args (now distributed)
+/// into ToSIMDOps, so that the block body can be moved over to the new op.
+static SmallVector<Value> getBbArgsReplacements(RewriterBase &rewriter,
+                                                Block::BlockArgListType bbArgs,
+                                                ValueRange oldInits) {
+  SmallVector<Value> replacements;
+  for (auto [bbArg, oldInit] : llvm::zip_equal(bbArgs, oldInits)) {
+    Value val = bbArg;
+    if (auto oldVectorInit = dyn_cast<TypedValue<VectorType>>(oldInit)) {
+      val = rewriter.create<IREE::VectorExt::ToSIMDOp>(
+          oldVectorInit.getLoc(), oldVectorInit.getType(), val);
+    }
+    replacements.push_back(val);
+  }
+  return replacements;
+}
+
+void VectorDistribution::distributeScfFor(scf::ForOp forOp) {
+  Block *oldLoopBody = forOp.getBody();
+
+  // The new vector init_args of the loop.
+  SmallVector<Value> newInitArgs;
+  for (Value initArg : forOp.getInitArgs()) {
+    if (auto vectorInitArg = dyn_cast<TypedValue<VectorType>>(initArg)) {
+      initArg = getDistributed(rewriter, vectorInitArg, provider);
+    }
+    newInitArgs.push_back(initArg);
+  }
+
+  auto newForOp = rewriter.create<scf::ForOp>(
+      forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
+      forOp.getStep(), newInitArgs);
+  newForOp->setAttrs(forOp->getAttrs());
+  Block *loopBody = newForOp.getBody();
+
+  // Set up new iter_args. The loop body uses SIMD, so wrap the SIMD iter_args
+  // of the new loop op into ToSIMDOps.
+  rewriter.setInsertionPointToStart(loopBody);
+  SmallVector<Value> iterArgs = getBbArgsReplacements(
+      rewriter, newForOp.getRegionIterArgs(), forOp.getInitArgs());
+  iterArgs.insert(iterArgs.begin(), newForOp.getInductionVar());
+
+  // Move loop body to new loop.
+  rewriter.mergeBlocks(oldLoopBody, loopBody, iterArgs);
+
+  // Rpleace loop results.
+  replaceOpWithDistributedValues(rewriter, forOp, provider,
+                                 newForOp.getResults());
+}
+
+void VectorDistribution::distributeScfYield(scf::YieldOp yieldOp) {
+  SmallVector<Value> newOperands;
+  for (Value operand : yieldOp.getOperands()) {
+    if (auto vectorOperand = dyn_cast<TypedValue<VectorType>>(operand)) {
+      operand = getDistributed(rewriter, vectorOperand, provider);
+    }
+    newOperands.push_back(operand);
+  }
+  rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, newOperands);
 }
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
