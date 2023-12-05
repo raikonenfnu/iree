@@ -76,7 +76,6 @@ public:
     provider->setAnchorOps();
     if (failed(analysis.run()))
       return;
-    analysis.dump();
   }
 
   void distribute() {
@@ -220,17 +219,28 @@ private:
 
 } // namespace
 
-static SmallVector<Value> handlePermutations(SmallVector<Value> &indices,
-                                             AffineMap permutationMap) {
-  SmallVector<Value> newIndices{indices.begin(), indices.end()};
+static SmallVector<Value> handlePermutationsAndLeadingUnitDims(
+    SmallVector<Value> &indices, AffineMap permutationMap, OpBuilder &builder) {
+  SmallVector<Value> newIndices(permutationMap.getNumDims());
+  // Not all dims are used in the permutation map.
+  int unitLeadingDims =
+      permutationMap.getNumDims() - permutationMap.getNumResults();
   int laneDim = 0;
   for (AffineExpr expr : permutationMap.getResults()) {
     auto dimExpr = dyn_cast<AffineDimExpr>(expr);
-    if (!dimExpr)
-      continue;
+    if (!dimExpr) {
+      llvm::report_fatal_error("invalid permutation map");
+    }
     unsigned pos = dimExpr.getPosition();
+    assert(pos >= unitLeadingDims && "invalid permutation map");
     newIndices[pos] = indices[laneDim++];
   }
+  // TODO: Fix the loc here.
+  for (unsigned i = 0; i < unitLeadingDims; ++i) {
+    newIndices[i] =
+        builder.create<arith::ConstantIndexOp>(builder.getUnknownLoc(), 0);
+  }
+
   return newIndices;
 }
 
@@ -257,7 +267,8 @@ SmallVector<Value> VectorDistribution::getIndices(
     index = rewriter.create<arith::AddIOp>(loc, index, indices[i++]);
     simdIndices.push_back(index);
   }
-  simdIndices = handlePermutations(simdIndices, permutationMap);
+  simdIndices = handlePermutationsAndLeadingUnitDims(simdIndices,
+                                                     permutationMap, rewriter);
   return simdIndices;
 }
 
@@ -444,8 +455,8 @@ void VectorDistribution::distributeResolutions(
   if (currentVecShape.size() != targetVecShape.size())
     return;
   auto numElements = [](ArrayRef<int64_t> vector) {
-    return std::reduce(vector.begin(), vector.end(), 1,
-                       std::multiplies<int64_t>());
+    return std::accumulate(vector.begin(), vector.end(), 1,
+                           std::multiplies<int64_t>());
   };
   if (numElements(currentVecShape) != numElements(targetVecShape))
     return;
