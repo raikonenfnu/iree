@@ -68,19 +68,39 @@ void replaceOpWithDistributedValues(RewriterBase &rewriter, Operation *op,
 
 namespace {
 
+class DistributionRewriter : public IRRewriter, public RewriterBase::Listener {
+public:
+  DistributionRewriter(MLIRContext *ctx, DenseSet<Operation *> &erasedOps,
+                       SmallVector<Operation *> &worklist)
+      : IRRewriter(ctx), erasedOps(erasedOps), worklist(worklist) {}
+
+protected:
+  void notifyOperationRemoved(Operation *op) override { erasedOps.insert(op); }
+
+private:
+  // A reference to the set of operations that have been erased.
+  DenseSet<Operation *> &erasedOps;
+  // A reference to the worklist of operations that need to be distributed.
+  SmallVector<Operation *> &worklist;
+};
+
 class VectorDistribution {
 public:
-  VectorDistribution(func::FuncOp root, RewriterBase &rewriter,
-                     LayoutProvider *provider, VectorLayoutAnalysis &analysis)
-      : root(root), analysis(analysis), provider(provider), rewriter(rewriter) {
+  VectorDistribution(func::FuncOp root, LayoutProvider *provider,
+                     VectorLayoutAnalysis &analysis)
+      : root(root), analysis(analysis), provider(provider) {
     provider->setAnchorOps();
     if (failed(analysis.run()))
       return;
+    analysis.dump();
   }
 
   void distribute() {
-    // 1: Collect all operations that need to be distributed.
     SmallVector<Operation *> worklist;
+    DenseSet<Operation *> erasedOps;
+    DistributionRewriter rewriter(root.getContext(), erasedOps, worklist);
+
+    // 1: Collect all operations that need to be distributed.
     root->walk([&](Operation *op) {
       bool needsDistribution = false;
       // Check if this operation has any operands with a vector type. If so,
@@ -116,9 +136,11 @@ public:
 
     // 2. Distribute all operations in the worklist. Each pattern currently
     // only replaces a single operation, which means we can iterate only once.
-    // TODO: Add a rewriter which can handle multiple replacements.
     for (unsigned i = 0; i < worklist.size(); ++i) {
       Operation *op = worklist[i];
+      if (erasedOps.count(op))
+        continue;
+
       rewriter.setInsertionPoint(op);
 
       if (provider->specializedDistribution(rewriter, op)) {
@@ -128,28 +150,28 @@ public:
       bool distributed =
           TypeSwitch<Operation *, bool>(op)
               .Case<vector::TransferReadOp>([&](auto transferReadOp) {
-                distributeTransferReads(transferReadOp);
+                distributeTransferReads(rewriter, transferReadOp);
                 return true;
               })
               .Case<vector::TransferWriteOp>([&](auto transferWriteOp) {
-                distributeTransferWrites(transferWriteOp);
+                distributeTransferWrites(rewriter, transferWriteOp);
                 return true;
               })
               .Case<arith::ConstantOp>([&](auto constantOp) {
-                distributeConstants(constantOp);
+                distributeConstants(rewriter, constantOp);
                 return true;
               })
               .Case<IREE::VectorExt::LayoutConflictResolutionOp>(
                   [&](auto resolutionOp) {
-                    distributeResolutions(resolutionOp);
+                    distributeResolutions(rewriter, resolutionOp);
                     return true;
                   })
               .Case<scf::ForOp>([&](auto forOp) {
-                distributeScfFor(forOp);
+                distributeScfFor(rewriter, forOp);
                 return true;
               })
               .Case<scf::YieldOp>([&](auto yieldOp) {
-                distributeScfYield(yieldOp);
+                distributeScfYield(rewriter, yieldOp);
                 return true;
               })
               .Default([&](Operation *op) { return false; });
@@ -160,7 +182,7 @@ public:
       }
 
       if (OpTrait::hasElementwiseMappableTraits(op)) {
-        distributeElementwise(op);
+        distributeElementwise(rewriter, op);
         continue;
       }
     }
@@ -171,36 +193,40 @@ public:
   }
 
 private:
-  void distributeTransferWrites(vector::TransferWriteOp transferWriteOp);
+  void distributeTransferWrites(RewriterBase &rewriter,
+                                vector::TransferWriteOp transferWriteOp);
 
-  void distributeTransferReads(vector::TransferReadOp transferReadOp);
+  void distributeTransferReads(RewriterBase &rewriter,
+                               vector::TransferReadOp transferReadOp);
 
-  void distributeConstants(arith::ConstantOp constantOp);
+  void distributeConstants(RewriterBase &rewriter,
+                           arith::ConstantOp constantOp);
 
-  void distributeElementwise(Operation *op);
+  void distributeElementwise(RewriterBase &rewriter, Operation *op);
 
   void distributeResolutions(
+      RewriterBase &rewriter,
       IREE::VectorExt::LayoutConflictResolutionOp resolutionOp);
 
-  void distributeScfFor(scf::ForOp forOp);
+  void distributeScfFor(RewriterBase &rewriter, scf::ForOp forOp);
 
-  void distributeScfYield(scf::YieldOp yieldOp);
+  void distributeScfYield(RewriterBase &rewriter, scf::YieldOp yieldOp);
 
-  TypedValue<VectorType> reshapeVector(TypedValue<VectorType> src,
+  TypedValue<VectorType> reshapeVector(RewriterBase &rewriter,
+                                       TypedValue<VectorType> src,
                                        LayoutAttr &currentLayout,
                                        LayoutAttr &targetLayout,
                                        Type elementType);
 
-  SmallVector<Value> getIndices(LayoutAttr &layout,
+  SmallVector<Value> getIndices(RewriterBase &rewriter, LayoutAttr &layout,
                                 LayoutAttr::Iterator &iterator,
                                 SmallVector<Value> indices,
-                                AffineMap permutationMap, Location loc,
-                                OpBuilder &rewriter);
+                                AffineMap permutationMap, Location loc);
 
   // We delinearize threadIdx to 2 thread indices.
-  Value getThreadIds(PerDimLayoutAttr &layout, Value lastShape,
-                     DenseMap<int64_t, Value> &laneIds, int64_t key,
-                     LayoutDimension dim) {
+  Value getThreadIds(RewriterBase &rewriter, PerDimLayoutAttr &layout,
+                     Value lastShape, DenseMap<int64_t, Value> &laneIds,
+                     int64_t key, LayoutDimension dim) {
     Location loc = root.getLoc();
     Value threadX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
     auto possibleShape = layout.getShape(dim);
@@ -226,13 +252,14 @@ private:
   func::FuncOp root;
   VectorLayoutAnalysis &analysis;
   LayoutProvider *provider;
-  RewriterBase &rewriter;
 }; // namespace
 
 } // namespace
 
-static SmallVector<Value> handlePermutationsAndLeadingUnitDims(
-    SmallVector<Value> &indices, AffineMap permutationMap, OpBuilder &builder) {
+static SmallVector<Value>
+handlePermutationsAndLeadingUnitDims(RewriterBase &rewriter,
+                                     SmallVector<Value> &indices,
+                                     AffineMap permutationMap) {
   SmallVector<Value> newIndices(permutationMap.getNumDims());
   // Not all dims are used in the permutation map.
   int unitLeadingDims =
@@ -247,26 +274,26 @@ static SmallVector<Value> handlePermutationsAndLeadingUnitDims(
     assert(pos >= unitLeadingDims && "invalid permutation map");
     newIndices[pos] = indices[laneDim++];
   }
-  // TODO: Fix the loc here.
+  // TODO: Fix unknown loc here.
   for (unsigned i = 0; i < unitLeadingDims; ++i) {
     newIndices[i] =
-        builder.create<arith::ConstantIndexOp>(builder.getUnknownLoc(), 0);
+        rewriter.create<arith::ConstantIndexOp>(rewriter.getUnknownLoc(), 0);
   }
 
   return newIndices;
 }
 
 SmallVector<Value> VectorDistribution::getIndices(
-    LayoutAttr &layout, LayoutAttr::Iterator &iterator,
-    SmallVector<Value> indices, AffineMap permutationMap, Location loc,
-    OpBuilder &rewriter) {
+    RewriterBase &rewriter, LayoutAttr &layout, LayoutAttr::Iterator &iterator,
+    SmallVector<Value> indices, AffineMap permutationMap, Location loc) {
   SmallVector<Value> simdIndices;
   Value shape;
   DenseMap<int64_t, Value> laneIds;
   for (LayoutDimension dim : {LayoutDimension::LANEX, LayoutDimension::LANEY}) {
     for (auto pair : llvm::enumerate(layout.getLayouts())) {
       PerDimLayoutAttr perDimLayout = pair.value();
-      shape = getThreadIds(perDimLayout, shape, laneIds, pair.index(), dim);
+      shape = getThreadIds(rewriter, perDimLayout, shape, laneIds, pair.index(),
+                           dim);
     }
   }
 
@@ -279,13 +306,13 @@ SmallVector<Value> VectorDistribution::getIndices(
     index = rewriter.create<arith::AddIOp>(loc, index, indices[i++]);
     simdIndices.push_back(index);
   }
-  simdIndices = handlePermutationsAndLeadingUnitDims(simdIndices,
-                                                     permutationMap, rewriter);
+  simdIndices = handlePermutationsAndLeadingUnitDims(rewriter, simdIndices,
+                                                     permutationMap);
   return simdIndices;
 }
 
 void VectorDistribution::distributeTransferReads(
-    vector::TransferReadOp transferReadOp) {
+    RewriterBase &rewriter, vector::TransferReadOp transferReadOp) {
   TypedValue<VectorType> result = transferReadOp.getResult();
   Value source = transferReadOp.getSource();
   Type elementType = llvm::cast<ShapedType>(source.getType()).getElementType();
@@ -298,8 +325,8 @@ void VectorDistribution::distributeTransferReads(
   int64_t loadElements = layout.getTransferElements();
   auto loadFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<Value> simdIndices =
-        getIndices(layout, iterator, transferReadOp.getIndices(),
-                   transferReadOp.getPermutationMap(), loc, rewriter);
+        getIndices(rewriter, layout, iterator, transferReadOp.getIndices(),
+                   transferReadOp.getPermutationMap(), loc);
     SmallVector<int64_t> simtIndices =
         layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
     auto vectorType = VectorType::get({loadElements}, elementType);
@@ -324,7 +351,7 @@ void VectorDistribution::distributeTransferReads(
 }
 
 void VectorDistribution::distributeTransferWrites(
-    vector::TransferWriteOp transferWriteOp) {
+    RewriterBase &rewriter, vector::TransferWriteOp transferWriteOp) {
   TypedValue<VectorType> vector = transferWriteOp.getVector();
   Value source = transferWriteOp.getSource();
   LayoutAttr layout = analysis.getLayout<LayoutAttr>(vector);
@@ -332,8 +359,8 @@ void VectorDistribution::distributeTransferWrites(
   int64_t storeElements = layout.getTransferElements();
   auto storeFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<Value> simdIndices =
-        getIndices(layout, iterator, transferWriteOp.getIndices(),
-                   transferWriteOp.getPermutationMap(), loc, rewriter);
+        getIndices(rewriter, layout, iterator, transferWriteOp.getIndices(),
+                   transferWriteOp.getPermutationMap(), loc);
     SmallVector<int64_t> simtIndices =
         layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
     if (storeElements == 1) {
@@ -341,8 +368,8 @@ void VectorDistribution::distributeTransferWrites(
           loc, getDistributed(rewriter, vector, provider), simtIndices);
       rewriter.create<memref::StoreOp>(
           loc, result, source,
-          getIndices(layout, iterator, transferWriteOp.getIndices(),
-                     transferWriteOp.getPermutationMap(), loc, rewriter));
+          getIndices(rewriter, layout, iterator, transferWriteOp.getIndices(),
+                     transferWriteOp.getPermutationMap(), loc));
     } else {
       SmallVector<int64_t> strides(simtIndices.size(), 1);
       SmallVector<int64_t> shapes(simtIndices.size(), 1);
@@ -363,7 +390,8 @@ void VectorDistribution::distributeTransferWrites(
                                  ValueRange());
 }
 
-void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {
+void VectorDistribution::distributeConstants(RewriterBase &rewriter,
+                                             arith::ConstantOp constantOp) {
   Value constantResult = constantOp.getResult();
   if (!isa<VectorType>(constantResult.getType()))
     return;
@@ -380,7 +408,8 @@ void VectorDistribution::distributeConstants(arith::ConstantOp constantOp) {
       DenseElementsAttr::get(vectorType, attr.getSplatValue<APFloat>()));
 }
 
-void VectorDistribution::distributeElementwise(Operation *op) {
+void VectorDistribution::distributeElementwise(RewriterBase &rewriter,
+                                               Operation *op) {
   assert(OpTrait::hasElementwiseMappableTraits(op) &&
          "expected elementwise op");
   // Replace vector operands with their distributed counter-parts.
@@ -414,10 +443,9 @@ void VectorDistribution::distributeElementwise(Operation *op) {
                                  distributedOp->getResults());
 }
 
-TypedValue<VectorType>
-VectorDistribution::reshapeVector(TypedValue<VectorType> src,
-                                  LayoutAttr &currentLayout,
-                                  LayoutAttr &targetLayout, Type elementType) {
+TypedValue<VectorType> VectorDistribution::reshapeVector(
+    RewriterBase &rewriter, TypedValue<VectorType> src,
+    LayoutAttr &currentLayout, LayoutAttr &targetLayout, Type elementType) {
   SmallVector<int64_t> targetShape =
       targetLayout.getSIMTVectorShape(provider->getSIMTLabels());
   auto newVectorType = VectorType::get(targetShape, elementType);
@@ -453,6 +481,7 @@ VectorDistribution::reshapeVector(TypedValue<VectorType> src,
 }
 
 void VectorDistribution::distributeResolutions(
+    RewriterBase &rewriter,
     IREE::VectorExt::LayoutConflictResolutionOp resolutionOp) {
   TypedValue<VectorType> vector = resolutionOp.getInput();
   TypedValue<VectorType> result = resolutionOp.getOutput();
@@ -473,8 +502,9 @@ void VectorDistribution::distributeResolutions(
   if (numElements(currentVecShape) != numElements(targetVecShape))
     return;
   Type elementType = llvm::cast<VectorType>(result.getType()).getElementType();
-  Value newVector = reshapeVector(getDistributed(rewriter, vector, provider),
-                                  currentLayout, targetLayout, elementType);
+  Value newVector =
+      reshapeVector(rewriter, getDistributed(rewriter, vector, provider),
+                    currentLayout, targetLayout, elementType);
   replaceOpWithDistributedValues(rewriter, resolutionOp, provider, newVector);
 }
 
@@ -496,7 +526,8 @@ static SmallVector<Value> getBbArgsReplacements(RewriterBase &rewriter,
   return replacements;
 }
 
-void VectorDistribution::distributeScfFor(scf::ForOp forOp) {
+void VectorDistribution::distributeScfFor(RewriterBase &rewriter,
+                                          scf::ForOp forOp) {
   Block *oldLoopBody = forOp.getBody();
 
   // The new vector init_args of the loop.
@@ -529,7 +560,8 @@ void VectorDistribution::distributeScfFor(scf::ForOp forOp) {
                                  newForOp.getResults());
 }
 
-void VectorDistribution::distributeScfYield(scf::YieldOp yieldOp) {
+void VectorDistribution::distributeScfYield(RewriterBase &rewriter,
+                                            scf::YieldOp yieldOp) {
   SmallVector<Value> newOperands;
   for (Value operand : yieldOp.getOperands()) {
     if (auto vectorOperand = dyn_cast<TypedValue<VectorType>>(operand)) {
@@ -543,7 +575,7 @@ void VectorDistribution::distributeScfYield(scf::YieldOp yieldOp) {
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
   VectorLayoutAnalysis analysis(funcOp);
   AMDCDNAGPULayoutProvider layoutProvider(analysis, funcOp);
-  VectorDistribution distribution(funcOp, rewriter, &layoutProvider, analysis);
+  VectorDistribution distribution(funcOp, &layoutProvider, analysis);
   distribution.distribute();
 }
 
