@@ -178,6 +178,10 @@ public:
                 distributeReductions(rewriter, reductionOp);
                 return true;
               })
+              .Case<vector::BroadcastOp>([&](auto broadcastOp) {
+                distributeBroadcasts(rewriter, broadcastOp);
+                return true;
+              })
               .Default([&](Operation *op) { return false; });
 
       // If the operation was distributed, continue with the next one.
@@ -218,6 +222,9 @@ private:
 
   void distributeReductions(RewriterBase &rewriter,
                             vector::MultiDimReductionOp reductionOp);
+
+  void distributeBroadcasts(RewriterBase &rewriter,
+                            vector::BroadcastOp broadcastOp);
 
   TypedValue<VectorType> reshapeVector(RewriterBase &rewriter,
                                        TypedValue<VectorType> src,
@@ -719,6 +726,59 @@ void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
   AMDCDNAGPULayoutProvider layoutProvider(analysis, funcOp);
   VectorDistribution distribution(funcOp, &layoutProvider, analysis);
   distribution.distribute();
+}
+
+// Distributed a broadcast + transpose which returns a 1D vector
+// to its original 2D shape (prior to be folded along the reduction dimension).
+void VectorDistribution::distributeBroadcasts(
+    RewriterBase &rewriter, vector::BroadcastOp broadcastOp) {
+  // Check if this is a broadcast with one use that is a transpose.
+  if (!broadcastOp.getResult().hasOneUse()) return;
+  vector::TransposeOp transposeOp;
+  for (Operation *user : broadcastOp.getResult().getUsers()) {
+    transposeOp = dyn_cast<vector::TransposeOp>(user);
+    if (transposeOp) {
+      break;
+    }
+  }
+  if (!transposeOp) return;
+
+  TypedValue<VectorType> result = transposeOp.getResult();
+  TypedValue<VectorType> source = cast<TypedValue<VectorType>>(broadcastOp.getSource());
+  auto layout = analysis.getLayout<LayoutAttr>(result);
+  Type elementType = llvm::cast<ShapedType>(result.getType()).getElementType();
+  auto vectorType =
+      VectorType::get(provider->getDistributedShape(result), elementType);
+  Location loc = broadcastOp.getLoc();
+  Value broadcastedVector = rewriter.create<arith::ConstantOp>(
+      loc, vectorType, rewriter.getZeroAttr(vectorType));
+  // Since this is a broadcast + transpose, reduction dimension = 1.
+  // For just a broadcast, reduction dimension = 0.
+  int64_t reductionDim = 1;
+  int64_t parallelDim = 0;
+  auto broadcastFn = [&](LayoutAttr::Iterator &iterator) {
+    SmallVector<int64_t> parallelSimtIndices =
+        layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+    auto projectedIndices = layout.projectSIMTVector(
+        provider->getSIMTLabels(), parallelSimtIndices, reductionDim);
+    Value value = rewriter.create<vector::ExtractOp>(
+        loc, getDistributed(rewriter, source, provider), projectedIndices);
+
+    auto broadcastValue = [&](LayoutAttr::Iterator &iterator) {
+      SmallVector<int64_t> reductionSimtIndices =
+          layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+      SmallVector<int64_t> indices;
+      for (auto [a, b] : llvm::zip(parallelSimtIndices, reductionSimtIndices))
+        indices.push_back(a + b);
+      broadcastedVector = rewriter.create<vector::InsertOp>(loc, value, broadcastedVector, indices);
+    };
+    LayoutAttr::Iterator reductionIterator =
+        layout.getDimIterator(reductionDim);
+    layout.map(broadcastValue, reductionIterator);
+  };
+  LayoutAttr::Iterator parallelIterator = layout.getDimIterator(parallelDim);
+  layout.map(broadcastFn, parallelIterator);
+  replaceOpWithDistributedValues(rewriter, broadcastOp, provider, broadcastedVector);
 }
 
 } // namespace mlir::iree_compiler
