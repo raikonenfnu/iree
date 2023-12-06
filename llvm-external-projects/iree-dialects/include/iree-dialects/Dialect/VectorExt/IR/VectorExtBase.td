@@ -134,6 +134,7 @@ def LayoutAttr : IREEVectorExt_Attr<"Layout",
     };
     Iterator getIterator(DenseMap<LayoutDimension, int64_t> &steps);
     Iterator getBatchIterator();
+    Iterator getDimIterator(int64_t dim);
     SmallVector<int64_t> computeSIMTIndex(Iterator &iterator,
                                           ArrayRef<LayoutDimension> labels);
     SmallVector<int64_t> computeIteratorProjectedSIMTIndex(Iterator &iterator,
@@ -143,6 +144,8 @@ def LayoutAttr : IREEVectorExt_Attr<"Layout",
     int64_t getBatchDim(int64_t dim);
     bool hasLaneConflictWith(const LayoutAttr &other);
     std::optional<int64_t> getShape(const LayoutDimension &dim) const;
+    std::optional<LayoutDimension> getLaneId(int64_t dim) const;
+    SmallVector<int64_t> projectSIMTVector(ArrayRef<LayoutDimension> labels, ArrayRef<int64_t> input, int64_t dim);
   }];
 }
 

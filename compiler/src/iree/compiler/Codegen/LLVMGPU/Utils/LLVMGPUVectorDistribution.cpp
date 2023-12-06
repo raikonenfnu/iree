@@ -174,6 +174,10 @@ public:
                 distributeScfYield(rewriter, yieldOp);
                 return true;
               })
+              .Case<vector::MultiDimReductionOp>([&](auto reductionOp) {
+                distributeReductions(rewriter, reductionOp);
+                return true;
+              })
               .Default([&](Operation *op) { return false; });
 
       // If the operation was distributed, continue with the next one.
@@ -211,6 +215,9 @@ private:
   void distributeScfFor(RewriterBase &rewriter, scf::ForOp forOp);
 
   void distributeScfYield(RewriterBase &rewriter, scf::YieldOp yieldOp);
+
+  void distributeReductions(RewriterBase &rewriter,
+                            vector::MultiDimReductionOp reductionOp);
 
   TypedValue<VectorType> reshapeVector(RewriterBase &rewriter,
                                        TypedValue<VectorType> src,
@@ -570,6 +577,141 @@ void VectorDistribution::distributeScfYield(RewriterBase &rewriter,
     newOperands.push_back(operand);
   }
   rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, newOperands);
+}
+
+void VectorDistribution::distributeReductions(
+    RewriterBase &rewriter, vector::MultiDimReductionOp reductionOp) {
+  Location loc = reductionOp.getLoc();
+  auto reductionDims = llvm::to_vector<4>(
+      reductionOp.getReductionDims().getAsRange<IntegerAttr>());
+  // Only support reduction on one dimension
+  if (reductionDims.size() > 1)
+    return;
+  int reductionDim = reductionDims[0].getInt();
+  // TODO: The following assumes only a 2D tensor
+  int parallelDim = !reductionDim;
+  vector::CombiningKind combiningKind = reductionOp.getKind();
+  auto acc = cast<TypedValue<VectorType>>(reductionOp.getAcc());
+  TypedValue<VectorType> source = reductionOp.getSource();
+
+  Type elementType = llvm::cast<ShapedType>(acc.getType()).getElementType();
+  int bitWidth = elementType.getIntOrFloatBitWidth();
+  auto vectorType =
+      VectorType::get(provider->getDistributedShape(source), elementType);
+  Value vector = rewriter.create<arith::ConstantOp>(
+      loc, vectorType, rewriter.getZeroAttr(vectorType));
+  LayoutAttr layout = analysis.getLayout<LayoutAttr>(source);
+
+  // Get information for reduction from layout
+  uint64_t offset{0};
+  auto maybeReductionLaneDim = layout.getLaneId(reductionDim);
+  if (!maybeReductionLaneDim)
+    return;
+  int64_t laneSize = *layout.getShape(*maybeReductionLaneDim);
+  switch (*maybeReductionLaneDim) {
+  case LayoutDimension::LANEX:
+    offset = 1;
+    break;
+  case LayoutDimension::LANEY:
+    offset = *layout.getShape(LayoutDimension::LANEX);
+    break;
+  case LayoutDimension::LANEZ:
+    offset = (*layout.getShape(LayoutDimension::LANEX)) *
+             (*layout.getShape(LayoutDimension::LANEY));
+    break;
+  default:
+    break;
+  }
+
+  auto reduceFn = [&](LayoutAttr::Iterator &iterator) {
+    SmallVector<int64_t> parallelSimtIndices =
+        layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+    auto projectedIndices = layout.projectSIMTVector(
+        provider->getSIMTLabels(), parallelSimtIndices, reductionDim);
+    Value mEmpty = rewriter.create<vector::ExtractOp>(
+        loc, getDistributed(rewriter, acc, provider), projectedIndices);
+    int count{0};
+    Value tmp, result, mask;
+    if (bitWidth == 32) {
+      tmp = rewriter.create<arith::ConstantOp>(
+          loc, rewriter.getZeroAttr(VectorType::get({1}, elementType)));
+    } else {
+      tmp = rewriter.create<arith::ConstantOp>(
+          loc, rewriter.getZeroAttr(VectorType::get({2}, elementType)));
+    }
+
+    auto reduceLocalFn = [&](LayoutAttr::Iterator &iterator) {
+      SmallVector<int64_t> reductionSimtIndices =
+          layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+      SmallVector<int64_t> indices;
+      for (auto [a, b] : llvm::zip(parallelSimtIndices, reductionSimtIndices))
+        indices.push_back(a + b);
+      Value x = rewriter.create<vector::ExtractOp>(
+          loc, getDistributed(rewriter, source, provider), indices);
+      if (bitWidth == 32) {
+        tmp = rewriter.create<vector::InsertOp>(loc, x, tmp,
+                                                SmallVector<int64_t>{0});
+      } else {
+        int index = (count++) % 2;
+        tmp = rewriter.create<vector::InsertOp>(loc, x, tmp,
+                                                SmallVector<int64_t>{index});
+        if (index == 0)
+          return;
+      }
+      result = !result ? tmp
+                       : makeArithReduction(rewriter, loc, combiningKind,
+                                            result, tmp, mask);
+    };
+    LayoutAttr::Iterator reductionIterator =
+        layout.getDimIterator(reductionDim);
+    layout.map(reduceLocalFn, reductionIterator);
+
+    auto reduceGlobalFn = [&]() {
+      uint32_t size{32};
+      for (uint64_t i = offset; i < offset * laneSize; i <<= 1) {
+        Value packed = packVectorToSupportedWidth(loc, rewriter, result);
+        auto shuffleOp = rewriter.create<gpu::ShuffleOp>(loc, packed, i, size,
+                                                         gpu::ShuffleMode::XOR);
+        Value unpacked =
+            unpackToVector(loc, rewriter, shuffleOp.getShuffleResult(),
+                           result.getType().cast<VectorType>());
+        result = makeArithReduction(rewriter, loc, combiningKind, unpacked,
+                                    result, mask);
+      }
+
+      // Convert to f16 or f32
+      if (bitWidth == 32) {
+        Value v0 = rewriter.create<vector::ExtractOp>(loc, result,
+                                                      SmallVector<int64_t>{0});
+        result =
+            makeArithReduction(rewriter, loc, combiningKind, v0, mEmpty, mask);
+      } else {
+        Value v0 = rewriter.create<vector::ExtractOp>(loc, result,
+                                                      SmallVector<int64_t>{0});
+        Value v1 = rewriter.create<vector::ExtractOp>(loc, result,
+                                                      SmallVector<int64_t>{1});
+        result = makeArithReduction(rewriter, loc, combiningKind, v0, v1, mask);
+        result = makeArithReduction(rewriter, loc, combiningKind, result,
+                                    mEmpty, mask);
+      }
+    };
+    reduceGlobalFn();
+
+    auto broadcastFn = [&](LayoutAttr::Iterator &iterator) {
+      SmallVector<int64_t> reductionSimtIndices =
+          layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+      SmallVector<int64_t> indices;
+      for (auto [a, b] : llvm::zip(parallelSimtIndices, reductionSimtIndices))
+        indices.push_back(a + b);
+      vector = rewriter.create<vector::InsertOp>(loc, result, vector, indices);
+    };
+    reductionIterator = layout.getDimIterator(reductionDim);
+    layout.map(broadcastFn, reductionIterator);
+  };
+
+  LayoutAttr::Iterator parallelIterator = layout.getDimIterator(parallelDim);
+  layout.map(reduceFn, parallelIterator);
+  replaceOpWithDistributedValues(rewriter, reductionOp, provider, vector);
 }
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {

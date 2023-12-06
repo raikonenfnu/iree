@@ -265,6 +265,19 @@ LayoutAttr::Iterator LayoutAttr::getBatchIterator() {
   return iterator;
 }
 
+LayoutAttr::Iterator LayoutAttr::getDimIterator(int64_t dim) {
+  LayoutAttr::Iterator iterator;
+  DenseMap<LayoutDimension, int64_t> steps;
+  for (auto tuple : llvm::enumerate(getLayouts())) {
+    int64_t index = tuple.index();
+    PerDimLayoutAttr layout = tuple.value();
+    if (index == dim) {
+      iterator.states.push_back(layout.getIterator(steps));
+    }
+  }
+  return iterator;
+}
+
 bool LayoutAttr::Iterator::next() {
   bool done{true};
   for (auto &iterator : states) {
@@ -314,6 +327,34 @@ void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback,
 int64_t LayoutAttr::getTransferElements() const {
   PerDimLayoutAttr colAttr = getDimLayout(1);
   return getInnermostVectorShape(colAttr.getLabels(), colAttr.getShapes());
+}
+
+std::optional<LayoutDimension> LayoutAttr::getLaneId(int64_t dim) const {
+  auto layouts = getLayouts();
+  assert(dim < layouts.size());
+  PerDimLayoutAttr layout = layouts[dim];
+  for (auto [nameAttr, shape] : llvm::zip(llvm::reverse(layout.getLabels()),
+                                          llvm::reverse(layout.getShapes()))) {
+    LayoutDimension name = nameAttr.getValue();
+    if (isLane(name)) {
+      return name;
+    }
+  }
+  return std::nullopt;
+}
+
+SmallVector<int64_t>
+LayoutAttr::projectSIMTVector(ArrayRef<LayoutDimension> labels,
+                              ArrayRef<int64_t> input, int64_t dim) {
+  SmallVector<int64_t> projectedVector;
+  PerDimLayoutAttr layout = getDimLayout(dim);
+  for (auto [name, value] : llvm::zip(labels, input)) {
+    auto maybeShape = layout.getShape(name);
+    if (!maybeShape) {
+      projectedVector.push_back(value);
+    }
+  }
+  return projectedVector;
 }
 
 // Layout conflict is one where
