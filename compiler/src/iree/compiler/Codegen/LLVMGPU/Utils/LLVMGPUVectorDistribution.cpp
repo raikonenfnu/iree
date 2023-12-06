@@ -596,10 +596,6 @@ void VectorDistribution::distributeReductions(
 
   Type elementType = llvm::cast<ShapedType>(acc.getType()).getElementType();
   int bitWidth = elementType.getIntOrFloatBitWidth();
-  auto vectorType =
-      VectorType::get(provider->getDistributedShape(source), elementType);
-  Value vector = rewriter.create<arith::ConstantOp>(
-      loc, vectorType, rewriter.getZeroAttr(vectorType));
   LayoutAttr layout = analysis.getLayout<LayoutAttr>(source);
 
   // Get information for reduction from layout
@@ -622,6 +618,17 @@ void VectorDistribution::distributeReductions(
   default:
     break;
   }
+
+  auto resultVec = dyn_cast<TypedValue<VectorType>>(reductionOp.getResult());
+  // For now, fail if result is not a vector.
+  // TODO: Support this.
+  if (!resultVec) {
+    return;
+  }
+  auto storeVectorType =
+      VectorType::get(provider->getDistributedShape(resultVec), elementType);
+  Value storeVec = rewriter.create<arith::ConstantOp>(
+      loc, storeVectorType, rewriter.getZeroAttr(storeVectorType));
 
   auto reduceFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<int64_t> parallelSimtIndices =
@@ -662,6 +669,7 @@ void VectorDistribution::distributeReductions(
                        : makeArithReduction(rewriter, loc, combiningKind,
                                             result, tmp, mask);
     };
+
     LayoutAttr::Iterator reductionIterator =
         layout.getDimIterator(reductionDim);
     layout.map(reduceLocalFn, reductionIterator);
@@ -696,22 +704,14 @@ void VectorDistribution::distributeReductions(
       }
     };
     reduceGlobalFn();
-
-    auto broadcastFn = [&](LayoutAttr::Iterator &iterator) {
-      SmallVector<int64_t> reductionSimtIndices =
-          layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
-      SmallVector<int64_t> indices;
-      for (auto [a, b] : llvm::zip(parallelSimtIndices, reductionSimtIndices))
-        indices.push_back(a + b);
-      vector = rewriter.create<vector::InsertOp>(loc, result, vector, indices);
-    };
     reductionIterator = layout.getDimIterator(reductionDim);
-    layout.map(broadcastFn, reductionIterator);
+    storeVec = rewriter.create<vector::InsertOp>(loc, result, storeVec,
+                                                 projectedIndices);
   };
 
   LayoutAttr::Iterator parallelIterator = layout.getDimIterator(parallelDim);
   layout.map(reduceFn, parallelIterator);
-  replaceOpWithDistributedValues(rewriter, reductionOp, provider, vector);
+  replaceOpWithDistributedValues(rewriter, reductionOp, provider, storeVec);
 }
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
