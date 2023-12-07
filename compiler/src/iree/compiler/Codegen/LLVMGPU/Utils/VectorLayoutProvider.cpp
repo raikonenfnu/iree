@@ -228,15 +228,16 @@ int64_t AMDCDNAGPULayoutProvider::getKDimension(int64_t rowBatch,
   return colBatch;
 }
 
-static void distributeContractionsToMFMA(RewriterBase &rewriter,
-                                         AMDCDNAGPULayoutProvider *provider,
-                                         vector::ContractionOp contractOp) {
+static LogicalResult
+distributeContractionsToMFMA(RewriterBase &rewriter,
+                             AMDCDNAGPULayoutProvider *provider,
+                             vector::ContractionOp contractOp) {
   VectorLayoutAnalysis &analysis = provider->getAnalysis();
   TypedValue<VectorType> lhs = contractOp.getLhs();
   TypedValue<VectorType> rhs = contractOp.getRhs();
   Value accVal = contractOp.getAcc();
   if (!isa<VectorType>(accVal.getType()))
-    return;
+    return failure();
   TypedValue<VectorType> acc = cast<TypedValue<VectorType>>(accVal);
   Location loc = contractOp.getLoc();
   TypedValue<VectorType> result =
@@ -272,14 +273,15 @@ static void distributeContractionsToMFMA(RewriterBase &rewriter,
   LayoutAttr::Iterator iterator = layout.getBatchIterator();
   layout.map(contractFn, iterator);
   replaceOpWithDistributedValues(rewriter, contractOp, provider, vector);
+  return success();
 }
 
-bool AMDCDNAGPULayoutProvider::specializedDistribution(RewriterBase &rewriter,
-                                                       Operation *op) {
+LogicalResult
+AMDCDNAGPULayoutProvider::specializedDistribution(RewriterBase &rewriter,
+                                                  Operation *op) {
   // Do specialized mfma distribution.
   if (auto contractOp = dyn_cast<vector::ContractionOp>(op)) {
-    distributeContractionsToMFMA(rewriter, this, contractOp);
-    return true;
+    return distributeContractionsToMFMA(rewriter, this, contractOp);
   }
-  return false;
+  return failure();
 }

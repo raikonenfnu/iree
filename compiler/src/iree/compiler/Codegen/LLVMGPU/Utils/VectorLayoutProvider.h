@@ -58,9 +58,10 @@ public:
   /// Given an operation, do specialized distribution for it. Return true if
   /// the operation if a specialized distribution is done.
   /// Return false if the operation is not specialized.
-  virtual bool specializedDistribution(RewriterBase &rewriter, Operation *op) {
+  virtual LogicalResult specializedDistribution(RewriterBase &rewriter,
+                                                Operation *op) {
     // No specialization by default.
-    return false;
+    return failure();
   }
 
 protected:
@@ -95,8 +96,8 @@ public:
     return simtLabels;
   }
 
-  virtual bool specializedDistribution(RewriterBase &rewriter,
-                                       Operation *op) override;
+  virtual LogicalResult specializedDistribution(RewriterBase &rewriter,
+                                                Operation *op) override;
 
   SmallVector<int64_t> getContractIndices(ContractMatrixType matrixType, int i,
                                           int j);

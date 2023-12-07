@@ -23,6 +23,33 @@ using namespace mlir::iree_compiler::IREE::VectorExt;
 
 namespace mlir::iree_compiler {
 
+static bool canDistribute(Operation *op, VectorLayoutAnalysis &analysis) {
+  bool needsDistribution = false;
+  // Check if this operation has any operands with a vector type. If so,
+  // then they need to have a layout.
+  for (Value operand : op->getOperands()) {
+    if (isa<VectorType>(operand.getType())) {
+      needsDistribution = true;
+      if (!analysis.getLayout<Attribute>(operand)) {
+        return false;
+      }
+    }
+  }
+
+  // Check if this operation has any results with a vector type. If so,
+  // then they need to have a layout.
+  for (OpResult result : op->getResults()) {
+    if (isa<VectorType>(result.getType())) {
+      needsDistribution = true;
+      if (!analysis.getLayout<Attribute>(result)) {
+        return false;
+      }
+    }
+  }
+
+  return needsDistribution;
+}
+
 TypedValue<VectorType> getDistributed(RewriterBase &rewriter,
                                       TypedValue<VectorType> value,
                                       LayoutProvider *provider) {
@@ -71,17 +98,29 @@ namespace {
 class DistributionRewriter : public IRRewriter, public RewriterBase::Listener {
 public:
   DistributionRewriter(MLIRContext *ctx, DenseSet<Operation *> &erasedOps,
-                       SmallVector<Operation *> &worklist)
-      : IRRewriter(ctx), erasedOps(erasedOps), worklist(worklist) {}
+                       SmallVector<Operation *> &worklist,
+                       VectorLayoutAnalysis &analysis)
+      : IRRewriter(ctx), erasedOps(erasedOps), worklist(worklist),
+        analysis(analysis) {
+    setListener(this);
+  }
 
 protected:
   void notifyOperationRemoved(Operation *op) override { erasedOps.insert(op); }
+
+  void notifyOperationInserted(Operation *op) override {
+    // For now, do nothing.
+    // TODO: Check if the operation can still be distributed and try to
+    // distribute it.
+  }
 
 private:
   // A reference to the set of operations that have been erased.
   DenseSet<Operation *> &erasedOps;
   // A reference to the worklist of operations that need to be distributed.
   SmallVector<Operation *> &worklist;
+  // A reference to the analysis that provides the layout information.
+  VectorLayoutAnalysis &analysis;
 };
 
 class VectorDistribution {
@@ -92,106 +131,79 @@ public:
     provider->setAnchorOps();
     if (failed(analysis.run()))
       return;
-    analysis.dump();
   }
 
   void distribute() {
     SmallVector<Operation *> worklist;
     DenseSet<Operation *> erasedOps;
-    DistributionRewriter rewriter(root.getContext(), erasedOps, worklist);
+    DistributionRewriter rewriter(root.getContext(), erasedOps, worklist,
+                                  analysis);
 
     // 1: Collect all operations that need to be distributed.
     root->walk([&](Operation *op) {
-      bool needsDistribution = false;
-      // Check if this operation has any operands with a vector type. If so,
-      // then they need to have a layout.
-      for (Value operand : op->getOperands()) {
-        if (isa<VectorType>(operand.getType())) {
-          if (!analysis.getLayout<Attribute>(operand)) {
-            llvm::report_fatal_error("operand of operation " +
-                                     op->getName().getStringRef() +
-                                     " does not have a layout");
-          }
-          needsDistribution = true;
-        }
-      }
-
-      // Check if this operation has any results with a vector type. If so,
-      // then they need to have a layout.
-      for (OpResult result : op->getResults()) {
-        if (isa<VectorType>(result.getType())) {
-          if (!analysis.getLayout<Attribute>(result)) {
-            llvm::report_fatal_error("result of operation " +
-                                     op->getName().getStringRef() +
-                                     " does not have a layout");
-          }
-          needsDistribution = true;
-        }
-      }
-
-      if (needsDistribution) {
+      if (canDistribute(op, analysis)) {
         worklist.push_back(op);
       }
     });
 
-    // 2. Distribute all operations in the worklist. Each pattern currently
-    // only replaces a single operation, which means we can iterate only once.
-    for (unsigned i = 0; i < worklist.size(); ++i) {
-      Operation *op = worklist[i];
-      if (erasedOps.count(op))
-        continue;
+    // 2. Distribute all operations in the worklist until we reach a fixed
+    // point.
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (unsigned i = 0; i < worklist.size(); ++i) {
+        Operation *op = worklist[i];
+        if (erasedOps.count(op))
+          continue;
 
-      rewriter.setInsertionPoint(op);
+        rewriter.setInsertionPoint(op);
 
-      if (provider->specializedDistribution(rewriter, op)) {
-        continue;
-      }
+        if (provider->specializedDistribution(rewriter, op).succeeded()) {
+          changed = true;
+          continue;
+        }
 
-      bool distributed =
-          TypeSwitch<Operation *, bool>(op)
-              .Case<vector::TransferReadOp>([&](auto transferReadOp) {
-                distributeTransferReads(rewriter, transferReadOp);
-                return true;
-              })
-              .Case<vector::TransferWriteOp>([&](auto transferWriteOp) {
-                distributeTransferWrites(rewriter, transferWriteOp);
-                return true;
-              })
-              .Case<arith::ConstantOp>([&](auto constantOp) {
-                distributeConstants(rewriter, constantOp);
-                return true;
-              })
-              .Case<IREE::VectorExt::LayoutConflictResolutionOp>(
-                  [&](auto resolutionOp) {
-                    distributeResolutions(rewriter, resolutionOp);
-                    return true;
-                  })
-              .Case<scf::ForOp>([&](auto forOp) {
-                distributeScfFor(rewriter, forOp);
-                return true;
-              })
-              .Case<scf::YieldOp>([&](auto yieldOp) {
-                distributeScfYield(rewriter, yieldOp);
-                return true;
-              })
-              .Case<vector::MultiDimReductionOp>([&](auto reductionOp) {
-                distributeReductions(rewriter, reductionOp);
-                return true;
-              })
-              .Case<vector::BroadcastOp>([&](auto broadcastOp) {
-                distributeBroadcasts(rewriter, broadcastOp);
-                return true;
-              })
-              .Default([&](Operation *op) { return false; });
+        LogicalResult distributed =
+            TypeSwitch<Operation *, LogicalResult>(op)
+                .Case<vector::TransferReadOp>([&](auto transferReadOp) {
+                  return distributeTransferReads(rewriter, transferReadOp);
+                })
+                .Case<vector::TransferWriteOp>([&](auto transferWriteOp) {
+                  return distributeTransferWrites(rewriter, transferWriteOp);
+                })
+                .Case<arith::ConstantOp>([&](auto constantOp) {
+                  return distributeConstants(rewriter, constantOp);
+                })
+                .Case<IREE::VectorExt::LayoutConflictResolutionOp>(
+                    [&](auto resolutionOp) {
+                      return distributeResolutions(rewriter, resolutionOp);
+                    })
+                .Case<scf::ForOp>([&](auto forOp) {
+                  return distributeScfFor(rewriter, forOp);
+                })
+                .Case<scf::YieldOp>([&](auto yieldOp) {
+                  return distributeScfYield(rewriter, yieldOp);
+                })
+                .Case<vector::MultiDimReductionOp>([&](auto reductionOp) {
+                  return distributeReductions(rewriter, reductionOp);
+                })
+                .Case<vector::BroadcastOp>([&](auto broadcastOp) {
+                  return distributeBroadcasts(rewriter, broadcastOp);
+                })
+                .Default([&](Operation *op) { return failure(); });
 
-      // If the operation was distributed, continue with the next one.
-      if (distributed) {
-        continue;
-      }
+        // If the operation was distributed, continue with the next one.
+        if (distributed.succeeded()) {
+          changed = true;
+          continue;
+        }
 
-      if (OpTrait::hasElementwiseMappableTraits(op)) {
-        distributeElementwise(rewriter, op);
-        continue;
+        if (OpTrait::hasElementwiseMappableTraits(op)) {
+          if (distributeElementwise(rewriter, op).succeeded()) {
+            changed = true;
+          }
+          continue;
+        }
       }
     }
 
@@ -201,30 +213,32 @@ public:
   }
 
 private:
-  void distributeTransferWrites(RewriterBase &rewriter,
-                                vector::TransferWriteOp transferWriteOp);
+  LogicalResult
+  distributeTransferWrites(RewriterBase &rewriter,
+                           vector::TransferWriteOp transferWriteOp);
 
-  void distributeTransferReads(RewriterBase &rewriter,
-                               vector::TransferReadOp transferReadOp);
+  LogicalResult distributeTransferReads(RewriterBase &rewriter,
+                                        vector::TransferReadOp transferReadOp);
 
-  void distributeConstants(RewriterBase &rewriter,
-                           arith::ConstantOp constantOp);
+  LogicalResult distributeConstants(RewriterBase &rewriter,
+                                    arith::ConstantOp constantOp);
 
-  void distributeElementwise(RewriterBase &rewriter, Operation *op);
+  LogicalResult distributeElementwise(RewriterBase &rewriter, Operation *op);
 
-  void distributeResolutions(
+  LogicalResult distributeResolutions(
       RewriterBase &rewriter,
       IREE::VectorExt::LayoutConflictResolutionOp resolutionOp);
 
-  void distributeScfFor(RewriterBase &rewriter, scf::ForOp forOp);
+  LogicalResult distributeScfFor(RewriterBase &rewriter, scf::ForOp forOp);
 
-  void distributeScfYield(RewriterBase &rewriter, scf::YieldOp yieldOp);
+  LogicalResult distributeScfYield(RewriterBase &rewriter,
+                                   scf::YieldOp yieldOp);
 
-  void distributeReductions(RewriterBase &rewriter,
-                            vector::MultiDimReductionOp reductionOp);
+  LogicalResult distributeReductions(RewriterBase &rewriter,
+                                     vector::MultiDimReductionOp reductionOp);
 
-  void distributeBroadcasts(RewriterBase &rewriter,
-                            vector::BroadcastOp broadcastOp);
+  LogicalResult distributeBroadcasts(RewriterBase &rewriter,
+                                     vector::BroadcastOp broadcastOp);
 
   TypedValue<VectorType> reshapeVector(RewriterBase &rewriter,
                                        TypedValue<VectorType> src,
@@ -325,7 +339,7 @@ SmallVector<Value> VectorDistribution::getIndices(
   return simdIndices;
 }
 
-void VectorDistribution::distributeTransferReads(
+LogicalResult VectorDistribution::distributeTransferReads(
     RewriterBase &rewriter, vector::TransferReadOp transferReadOp) {
   TypedValue<VectorType> result = transferReadOp.getResult();
   Value source = transferReadOp.getSource();
@@ -362,9 +376,10 @@ void VectorDistribution::distributeTransferReads(
   LayoutAttr::Iterator iterator = layout.getIterator(steps);
   layout.map(loadFn, iterator);
   replaceOpWithDistributedValues(rewriter, transferReadOp, provider, vector);
+  return success();
 }
 
-void VectorDistribution::distributeTransferWrites(
+LogicalResult VectorDistribution::distributeTransferWrites(
     RewriterBase &rewriter, vector::TransferWriteOp transferWriteOp) {
   TypedValue<VectorType> vector = transferWriteOp.getVector();
   Value source = transferWriteOp.getSource();
@@ -402,28 +417,31 @@ void VectorDistribution::distributeTransferWrites(
   layout.map(storeFn, iterator);
   replaceOpWithDistributedValues(rewriter, transferWriteOp, provider,
                                  ValueRange());
+  return success();
 }
 
-void VectorDistribution::distributeConstants(RewriterBase &rewriter,
-                                             arith::ConstantOp constantOp) {
+LogicalResult
+VectorDistribution::distributeConstants(RewriterBase &rewriter,
+                                        arith::ConstantOp constantOp) {
   Value constantResult = constantOp.getResult();
   if (!isa<VectorType>(constantResult.getType()))
-    return;
+    return failure();
   auto constant = cast<TypedValue<VectorType>>(constantResult);
   auto attr = llvm::cast<DenseElementsAttr>(constantOp.getValue());
   // Only handle splat values for now
   if (!attr.isSplat())
-    return;
+    return failure();
   Type elementType = constant.getType().getElementType();
   auto vectorType =
       VectorType::get(provider->getDistributedShape(constant), elementType);
   replaceOpWithNewDistributedOp<arith::ConstantOp>(
       provider, rewriter, constantOp, vectorType,
       DenseElementsAttr::get(vectorType, attr.getSplatValue<APFloat>()));
+  return success();
 }
 
-void VectorDistribution::distributeElementwise(RewriterBase &rewriter,
-                                               Operation *op) {
+LogicalResult VectorDistribution::distributeElementwise(RewriterBase &rewriter,
+                                                        Operation *op) {
   assert(OpTrait::hasElementwiseMappableTraits(op) &&
          "expected elementwise op");
   // Replace vector operands with their distributed counter-parts.
@@ -455,6 +473,7 @@ void VectorDistribution::distributeElementwise(RewriterBase &rewriter,
                       resultTypes, op->getAttrs());
   replaceOpWithDistributedValues(rewriter, op, provider,
                                  distributedOp->getResults());
+  return success();
 }
 
 TypedValue<VectorType> VectorDistribution::reshapeVector(
@@ -494,7 +513,7 @@ TypedValue<VectorType> VectorDistribution::reshapeVector(
   return newVector;
 }
 
-void VectorDistribution::distributeResolutions(
+LogicalResult VectorDistribution::distributeResolutions(
     RewriterBase &rewriter,
     IREE::VectorExt::LayoutConflictResolutionOp resolutionOp) {
   TypedValue<VectorType> vector = resolutionOp.getInput();
@@ -502,24 +521,25 @@ void VectorDistribution::distributeResolutions(
   LayoutAttr currentLayout = cast<LayoutAttr>(resolutionOp.getSourceLayout());
   LayoutAttr targetLayout = cast<LayoutAttr>(resolutionOp.getDesiredLayout());
   if (currentLayout.hasLaneConflictWith(targetLayout))
-    return;
+    return failure();
   SmallVector<int64_t> currentVecShape =
       currentLayout.getSIMTVectorShape(provider->getSIMTLabels());
   SmallVector<int64_t> targetVecShape =
       targetLayout.getSIMTVectorShape(provider->getSIMTLabels());
   if (currentVecShape.size() != targetVecShape.size())
-    return;
+    return failure();
   auto numElements = [](ArrayRef<int64_t> vector) {
     return std::accumulate(vector.begin(), vector.end(), 1,
                            std::multiplies<int64_t>());
   };
   if (numElements(currentVecShape) != numElements(targetVecShape))
-    return;
+    return failure();
   Type elementType = llvm::cast<VectorType>(result.getType()).getElementType();
   Value newVector =
       reshapeVector(rewriter, getDistributed(rewriter, vector, provider),
                     currentLayout, targetLayout, elementType);
   replaceOpWithDistributedValues(rewriter, resolutionOp, provider, newVector);
+  return success();
 }
 
 /// Helper function for loop distribution. Given a list of bbArgs of the new
@@ -540,8 +560,8 @@ static SmallVector<Value> getBbArgsReplacements(RewriterBase &rewriter,
   return replacements;
 }
 
-void VectorDistribution::distributeScfFor(RewriterBase &rewriter,
-                                          scf::ForOp forOp) {
+LogicalResult VectorDistribution::distributeScfFor(RewriterBase &rewriter,
+                                                   scf::ForOp forOp) {
   Block *oldLoopBody = forOp.getBody();
 
   // The new vector init_args of the loop.
@@ -572,10 +592,11 @@ void VectorDistribution::distributeScfFor(RewriterBase &rewriter,
   // Rpleace loop results.
   replaceOpWithDistributedValues(rewriter, forOp, provider,
                                  newForOp.getResults());
+  return success();
 }
 
-void VectorDistribution::distributeScfYield(RewriterBase &rewriter,
-                                            scf::YieldOp yieldOp) {
+LogicalResult VectorDistribution::distributeScfYield(RewriterBase &rewriter,
+                                                     scf::YieldOp yieldOp) {
   SmallVector<Value> newOperands;
   for (Value operand : yieldOp.getOperands()) {
     if (auto vectorOperand = dyn_cast<TypedValue<VectorType>>(operand)) {
@@ -584,16 +605,17 @@ void VectorDistribution::distributeScfYield(RewriterBase &rewriter,
     newOperands.push_back(operand);
   }
   rewriter.replaceOpWithNewOp<scf::YieldOp>(yieldOp, newOperands);
+  return success();
 }
 
-void VectorDistribution::distributeReductions(
+LogicalResult VectorDistribution::distributeReductions(
     RewriterBase &rewriter, vector::MultiDimReductionOp reductionOp) {
   Location loc = reductionOp.getLoc();
   auto reductionDims = llvm::to_vector<4>(
       reductionOp.getReductionDims().getAsRange<IntegerAttr>());
   // Only support reduction on one dimension
   if (reductionDims.size() > 1)
-    return;
+    return failure();
   int reductionDim = reductionDims[0].getInt();
   // TODO: The following assumes only a 2D tensor
   int parallelDim = !reductionDim;
@@ -609,7 +631,7 @@ void VectorDistribution::distributeReductions(
   uint64_t offset{0};
   auto maybeReductionLaneDim = layout.getLaneId(reductionDim);
   if (!maybeReductionLaneDim)
-    return;
+    return failure();
   int64_t laneSize = *layout.getShape(*maybeReductionLaneDim);
   switch (*maybeReductionLaneDim) {
   case LayoutDimension::LANEX:
@@ -630,7 +652,7 @@ void VectorDistribution::distributeReductions(
   // For now, fail if result is not a vector.
   // TODO: Support this.
   if (!resultVec) {
-    return;
+    return failure();
   }
   auto storeVectorType =
       VectorType::get(provider->getDistributedShape(resultVec), elementType);
@@ -719,6 +741,7 @@ void VectorDistribution::distributeReductions(
   LayoutAttr::Iterator parallelIterator = layout.getDimIterator(parallelDim);
   layout.map(reduceFn, parallelIterator);
   replaceOpWithDistributedValues(rewriter, reductionOp, provider, storeVec);
+  return success();
 }
 
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
@@ -730,10 +753,12 @@ void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp) {
 
 // Distributed a broadcast + transpose which returns a 1D vector
 // to its original 2D shape (prior to be folded along the reduction dimension).
-void VectorDistribution::distributeBroadcasts(
-    RewriterBase &rewriter, vector::BroadcastOp broadcastOp) {
+LogicalResult
+VectorDistribution::distributeBroadcasts(RewriterBase &rewriter,
+                                         vector::BroadcastOp broadcastOp) {
   // Check if this is a broadcast with one use that is a transpose.
-  if (!broadcastOp.getResult().hasOneUse()) return;
+  if (!broadcastOp.getResult().hasOneUse())
+    return failure();
   vector::TransposeOp transposeOp;
   for (Operation *user : broadcastOp.getResult().getUsers()) {
     transposeOp = dyn_cast<vector::TransposeOp>(user);
@@ -741,7 +766,8 @@ void VectorDistribution::distributeBroadcasts(
       break;
     }
   }
-  if (!transposeOp) return;
+  if (!transposeOp)
+    return failure();
 
   TypedValue<VectorType> result = transposeOp.getResult();
   TypedValue<VectorType> source =
@@ -782,6 +808,7 @@ void VectorDistribution::distributeBroadcasts(
   layout.map(broadcastFn, parallelIterator);
   replaceOpWithDistributedValues(rewriter, transposeOp, provider,
                                  broadcastedVector);
+  return success();
 }
 
 } // namespace mlir::iree_compiler
