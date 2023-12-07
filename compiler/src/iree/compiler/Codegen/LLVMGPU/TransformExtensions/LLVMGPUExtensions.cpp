@@ -1510,5 +1510,10 @@ void transform_dialect::PackSharedMemoryAllocOp::getEffects(
   transform::modifiesPayload(effects);
 }
 
+void transform_dialect::FoldExtFIntoContractionOp::populatePatterns(
+  RewritePatternSet &patterns) {
+  mlir::vector::populateFoldArithExtensionPatterns(patterns);
+}
+
 #define GET_OP_CLASSES
 #include "iree/compiler/Codegen/LLVMGPU/TransformExtensions/LLVMGPUExtensionsOps.cpp.inc"
