@@ -744,7 +744,8 @@ void VectorDistribution::distributeBroadcasts(
   if (!transposeOp) return;
 
   TypedValue<VectorType> result = transposeOp.getResult();
-  TypedValue<VectorType> source = cast<TypedValue<VectorType>>(broadcastOp.getSource());
+  TypedValue<VectorType> source =
+      cast<TypedValue<VectorType>>(broadcastOp.getSource());
   auto layout = analysis.getLayout<LayoutAttr>(result);
   Type elementType = llvm::cast<ShapedType>(result.getType()).getElementType();
   auto vectorType =
@@ -770,7 +771,8 @@ void VectorDistribution::distributeBroadcasts(
       SmallVector<int64_t> indices;
       for (auto [a, b] : llvm::zip(parallelSimtIndices, reductionSimtIndices))
         indices.push_back(a + b);
-      broadcastedVector = rewriter.create<vector::InsertOp>(loc, value, broadcastedVector, indices);
+      broadcastedVector = rewriter.create<vector::InsertOp>(
+          loc, value, broadcastedVector, indices);
     };
     LayoutAttr::Iterator reductionIterator =
         layout.getDimIterator(reductionDim);
@@ -778,7 +780,8 @@ void VectorDistribution::distributeBroadcasts(
   };
   LayoutAttr::Iterator parallelIterator = layout.getDimIterator(parallelDim);
   layout.map(broadcastFn, parallelIterator);
-  replaceOpWithDistributedValues(rewriter, broadcastOp, provider, broadcastedVector);
+  replaceOpWithDistributedValues(rewriter, transposeOp, provider,
+                                 broadcastedVector);
 }
 
 } // namespace mlir::iree_compiler
