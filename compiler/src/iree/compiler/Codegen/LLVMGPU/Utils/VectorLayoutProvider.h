@@ -39,7 +39,8 @@ public:
   virtual SmallVector<int64_t>
   getDistributedShape(TypedValue<VectorType> val) = 0;
 
-  virtual SmallVector<IREE::VectorExt::LayoutDimension> getSIMTLabels() = 0;
+  virtual SmallVector<IREE::VectorExt::LayoutDimension>
+  getSIMTLabels(IREE::VectorExt::LayoutAttr layout) = 0;
 
   virtual IREE::VectorExt::LayoutDimension getInnerMostVecDim() const = 0;
 
@@ -63,6 +64,8 @@ public:
     // No specialization by default.
     return failure();
   }
+
+  virtual SmallVector<Value> getThreadGrid(RewriterBase &rewriter) = 0;
 
 protected:
   VectorLayoutAnalysis &analysis;
@@ -92,8 +95,28 @@ public:
   getDistributedShape(TypedValue<VectorType> val) override;
 
   virtual SmallVector<IREE::VectorExt::LayoutDimension>
-  getSIMTLabels() override {
-    return simtLabels;
+  getSIMTLabels(IREE::VectorExt::LayoutAttr layout) override {
+    // Intersect the labels of layout and simtLabels.
+    SmallVector<bool> layoutLabels(simtLabels.size());
+    for (auto layout : layout.getLayouts()) {
+      for (auto label : layout.getLabels()) {
+        // Check if this label is in simtLabels.
+        auto *it =
+            std::find(simtLabels.begin(), simtLabels.end(), label.getValue());
+        if (it != simtLabels.end()) {
+          layoutLabels[std::distance(simtLabels.begin(), it)] = true;
+        }
+      }
+    }
+
+    SmallVector<IREE::VectorExt::LayoutDimension> result;
+    for (int i = 0; i < simtLabels.size(); ++i) {
+      if (layoutLabels[i]) {
+        result.push_back(simtLabels[i]);
+      }
+    }
+
+    return result;
   }
 
   virtual LogicalResult specializedDistribution(RewriterBase &rewriter,
@@ -114,7 +137,7 @@ public:
   bool hasCanonicalShape(ContractMatrixType matrixType,
                          ArrayRef<int64_t> shape);
 
-  IREE::VectorExt::LayoutDimension getInnerMostVecDim() const {
+  IREE::VectorExt::LayoutDimension getInnerMostVecDim() const override {
     for (auto label : llvm::reverse(simtLabels)) {
       switch (label) {
       case IREE::VectorExt::LayoutDimension::VECTORX:
@@ -126,6 +149,21 @@ public:
       }
     }
     llvm_unreachable("layout has no vector dimensions!");
+  }
+
+  SmallVector<Value> getThreadGrid(RewriterBase &rewriter) override {
+    // We want a grid of 4 X 16, delinearized over the theadX.
+    SmallVector<Value> threadGrid(2);
+    Value threadX =
+        rewriter.create<gpu::ThreadIdOp>(root->getLoc(), gpu::Dimension::x);
+    // threadGrid[0] = threadX % 16
+    Value const16 = rewriter.create<arith::ConstantIndexOp>(root->getLoc(), 16);
+    threadGrid[0] =
+        rewriter.create<arith::RemUIOp>(root->getLoc(), threadX, const16);
+    // threadGrid[1] = threadX / 16
+    threadGrid[1] =
+        rewriter.create<arith::DivUIOp>(root->getLoc(), threadX, const16);
+    return threadGrid;
   }
 
 private:

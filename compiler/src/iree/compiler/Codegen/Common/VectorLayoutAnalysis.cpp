@@ -67,6 +67,9 @@ public:
   }
   void subscribeEnforcement(EnforceLayout *analysis) { enforcement = analysis; }
 
+  // TODO: This is really really really bad. Remove it!!!
+  friend class VectorLayoutAnalysis;
+
 private:
   /// When the lattice gets updated, propagate an update to users of the value
   /// using its use-def chain to subscribed analyses.
@@ -1004,10 +1007,19 @@ void VectorLayoutAnalysis::cloneLayoutInformationToNewValue(Value oldValue,
   DistributionLayout *newLayout =
       solver.getOrCreateState<DistributionLayout>(newValue);
   // Resolve this new layout to the old one.
-  newLayout->resolve(getLayout(oldValue));
+  newLayout->setInnerLayout(getLayout(oldValue));
   // We don't need to propagate the change, since it is same as the old layout.
   // TODO: If we try to propagate/enforce this layout again, we will
   // need to subscribe it to enforcement and propagation.
+}
+
+void VectorLayoutAnalysis::cloneLayoutInformationToNewValue(
+    VectorLayoutInterface layout, Value val) {
+  DistributionLayout *newLayout =
+      solver.getOrCreateState<DistributionLayout>(val);
+  // Resolve this new layout to the old one.
+  // TODO: Use resolve here please.
+  newLayout->setInnerLayout(layout);
 }
 
 void VectorLayoutAnalysis::print(raw_ostream &os) {

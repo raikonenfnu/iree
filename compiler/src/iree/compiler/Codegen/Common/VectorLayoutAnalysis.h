@@ -135,10 +135,9 @@ public:
     return cast<T>(layout);
   }
 
-  // Duplicate the layout information of oldValue to newValue. This operation
-  // assumes that oldValue already has a layout known the analysis. newValue
-  // must not have a layout known to the analysis.
   void cloneLayoutInformationToNewValue(Value oldValue, Value newValue);
+  void cloneLayoutInformationToNewValue(VectorLayoutInterface layout,
+                                        Value val);
 
   void print(raw_ostream &os);
   void dump() {

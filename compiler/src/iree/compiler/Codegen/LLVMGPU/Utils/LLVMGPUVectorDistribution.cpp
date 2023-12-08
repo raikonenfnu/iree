@@ -18,6 +18,7 @@
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/Verifier.h"
 
 using namespace mlir::iree_compiler::IREE::VectorExt;
 
@@ -146,7 +147,12 @@ public:
       }
     });
 
-    // 2. Distribute all operations in the worklist until we reach a fixed
+    // 2. Set the insertion point to the beginning of the root, and build the
+    // thread grid.
+    rewriter.setInsertionPointToStart(&root.getBody().getBlocks().front());
+    threadGrid = provider->getThreadGrid(rewriter);
+
+    // 3. Distribute all operations in the worklist until we reach a fixed
     // point.
     bool changed = true;
     while (changed) {
@@ -207,7 +213,7 @@ public:
       }
     }
 
-    // 3. Ideally, we should error out here if everything was not distributed.
+    // 4. Ideally, we should error out here if everything was not distributed.
     // Currently, I'm not adding it for debugging purposes.
     // TODO: Add a check here if something was not distributed.
   }
@@ -226,6 +232,10 @@ private:
   LogicalResult distributeElementwise(RewriterBase &rewriter, Operation *op);
 
   LogicalResult distributeResolutions(
+      RewriterBase &rewriter,
+      IREE::VectorExt::LayoutConflictResolutionOp resolutionOp);
+
+  LogicalResult distributeTripToSharedMem(
       RewriterBase &rewriter,
       IREE::VectorExt::LayoutConflictResolutionOp resolutionOp);
 
@@ -251,35 +261,12 @@ private:
                                 SmallVector<Value> indices,
                                 AffineMap permutationMap, Location loc);
 
-  // We delinearize threadIdx to 2 thread indices.
-  Value getThreadIds(RewriterBase &rewriter, PerDimLayoutAttr &layout,
-                     Value lastShape, DenseMap<int64_t, Value> &laneIds,
-                     int64_t key, LayoutDimension dim) {
-    Location loc = root.getLoc();
-    Value threadX = rewriter.create<gpu::ThreadIdOp>(loc, gpu::Dimension::x);
-    auto possibleShape = layout.getShape(dim);
-    if (possibleShape) {
-      switch (dim) {
-      case LayoutDimension::LANEX: {
-        Value shapeValue =
-            rewriter.create<arith::ConstantIndexOp>(loc, *possibleShape);
-        laneIds[key] =
-            rewriter.create<arith::RemUIOp>(loc, threadX, shapeValue);
-        return shapeValue;
-      }
-      case LayoutDimension::LANEY:
-        laneIds[key] = rewriter.create<arith::DivUIOp>(loc, threadX, lastShape);
-        break;
-      default:
-        break;
-      }
-    }
-    return lastShape;
-  }
+  ArrayRef<Value> getThreadIds() { return threadGrid; }
 
   func::FuncOp root;
   VectorLayoutAnalysis &analysis;
   LayoutProvider *provider;
+  SmallVector<Value> threadGrid;
 }; // namespace
 
 } // namespace
@@ -315,18 +302,29 @@ SmallVector<Value> VectorDistribution::getIndices(
     RewriterBase &rewriter, LayoutAttr &layout, LayoutAttr::Iterator &iterator,
     SmallVector<Value> indices, AffineMap permutationMap, Location loc) {
   SmallVector<Value> simdIndices;
-  Value shape;
-  DenseMap<int64_t, Value> laneIds;
-  for (LayoutDimension dim : {LayoutDimension::LANEX, LayoutDimension::LANEY}) {
-    for (auto pair : llvm::enumerate(layout.getLayouts())) {
-      PerDimLayoutAttr perDimLayout = pair.value();
-      shape = getThreadIds(rewriter, perDimLayout, shape, laneIds, pair.index(),
-                           dim);
+
+  ArrayRef<Value> threadIds = getThreadIds();
+  SmallVector<Value> laneIds;
+  for (PerDimLayoutAttr dimLayout : layout.getLayouts()) {
+    for (LayoutDimensionAttr label : dimLayout.getLabels()) {
+      switch (label.getValue()) {
+      case LayoutDimension::LANEX:
+        laneIds.push_back(threadIds[0]);
+        break;
+      case LayoutDimension::LANEY:
+        laneIds.push_back(threadIds[1]);
+        break;
+      case LayoutDimension::LANEZ:
+        laneIds.push_back(threadIds[2]);
+        break;
+      default:
+        break;
+      }
     }
   }
 
   int i{0};
-  for (auto pair : llvm::zip(layout.getLayouts(), iterator.states)) {
+  for (auto pair : llvm::zip_equal(layout.getLayouts(), iterator.states)) {
     PerDimLayoutAttr perDimLayout = std::get<0>(pair);
     PerDimLayoutAttr::Iterator iterator = std::get<1>(pair);
     Value index = rewriter.create<affine::AffineApplyOp>(
@@ -356,7 +354,7 @@ LogicalResult VectorDistribution::distributeTransferReads(
         getIndices(rewriter, layout, iterator, transferReadOp.getIndices(),
                    transferReadOp.getPermutationMap(), loc);
     SmallVector<int64_t> simtIndices =
-        layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+        layout.computeSIMTIndex(iterator, provider->getSIMTLabels(layout));
     auto vectorType = VectorType::get({loadElements}, elementType);
     if (loadElements == 1) {
       Value element = rewriter.create<memref::LoadOp>(loc, source, simdIndices);
@@ -391,7 +389,7 @@ LogicalResult VectorDistribution::distributeTransferWrites(
         getIndices(rewriter, layout, iterator, transferWriteOp.getIndices(),
                    transferWriteOp.getPermutationMap(), loc);
     SmallVector<int64_t> simtIndices =
-        layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+        layout.computeSIMTIndex(iterator, provider->getSIMTLabels(layout));
     if (storeElements == 1) {
       Value result = rewriter.create<vector::ExtractOp>(
           loc, getDistributed(rewriter, vector, provider), simtIndices);
@@ -412,6 +410,8 @@ LogicalResult VectorDistribution::distributeTransferWrites(
     }
   };
   DenseMap<LayoutDimension, int64_t> steps;
+  // TODO: This is wrong. We should be using the innermost dimension for
+  // calculating this step instead.
   steps[LayoutDimension::VECTORX] = storeElements;
   LayoutAttr::Iterator iterator = layout.getIterator(steps);
   layout.map(storeFn, iterator);
@@ -480,7 +480,7 @@ TypedValue<VectorType> VectorDistribution::reshapeVector(
     RewriterBase &rewriter, TypedValue<VectorType> src,
     LayoutAttr &currentLayout, LayoutAttr &targetLayout, Type elementType) {
   SmallVector<int64_t> targetShape =
-      targetLayout.getSIMTVectorShape(provider->getSIMTLabels());
+      targetLayout.getSIMTVectorShape(provider->getSIMTLabels(targetLayout));
   auto newVectorType = VectorType::get(targetShape, elementType);
   Location loc = root->getLoc();
   arith::ConstantOp constantOp = rewriter.create<arith::ConstantOp>(
@@ -488,7 +488,7 @@ TypedValue<VectorType> VectorDistribution::reshapeVector(
   auto newVector = cast<TypedValue<VectorType>>(constantOp.getResult());
 
   SmallVector<int64_t> currentShape =
-      currentLayout.getSIMTVectorShape(provider->getSIMTLabels());
+      currentLayout.getSIMTVectorShape(provider->getSIMTLabels(currentLayout));
   int64_t innermostDim = targetShape.size() - 1;
   int64_t step =
       std::min(targetShape[innermostDim], currentShape[innermostDim]);
@@ -498,15 +498,15 @@ TypedValue<VectorType> VectorDistribution::reshapeVector(
   auto srcIterator = currentLayout.getIterator(steps);
   auto targetIterator = targetLayout.getIterator(steps);
   do {
-    auto srcOffset =
-        currentLayout.computeSIMTIndex(srcIterator, provider->getSIMTLabels());
+    auto srcOffset = currentLayout.computeSIMTIndex(
+        srcIterator, provider->getSIMTLabels(currentLayout));
     SmallVector<int64_t> sliceSize(srcOffset.size(), 1);
     SmallVector<int64_t> sliceStride(srcOffset.size(), 1);
     sliceSize[sliceSize.size() - 1] = step;
     Value slice = rewriter.create<vector::ExtractStridedSliceOp>(
         loc, src, srcOffset, sliceSize, sliceStride);
     auto targetOffset = targetLayout.computeSIMTIndex(
-        targetIterator, provider->getSIMTLabels());
+        targetIterator, provider->getSIMTLabels(targetLayout));
     newVector = rewriter.create<vector::InsertStridedSliceOp>(
         loc, slice, newVector, targetOffset, sliceStride);
   } while (!srcIterator.next() && !targetIterator.next());
@@ -521,11 +521,11 @@ LogicalResult VectorDistribution::distributeResolutions(
   LayoutAttr currentLayout = cast<LayoutAttr>(resolutionOp.getSourceLayout());
   LayoutAttr targetLayout = cast<LayoutAttr>(resolutionOp.getDesiredLayout());
   if (currentLayout.hasLaneConflictWith(targetLayout))
-    return failure();
+    return distributeTripToSharedMem(rewriter, resolutionOp);
   SmallVector<int64_t> currentVecShape =
-      currentLayout.getSIMTVectorShape(provider->getSIMTLabels());
+      currentLayout.getSIMTVectorShape(provider->getSIMTLabels(currentLayout));
   SmallVector<int64_t> targetVecShape =
-      targetLayout.getSIMTVectorShape(provider->getSIMTLabels());
+      targetLayout.getSIMTVectorShape(provider->getSIMTLabels(targetLayout));
   if (currentVecShape.size() != targetVecShape.size())
     return failure();
   auto numElements = [](ArrayRef<int64_t> vector) {
@@ -661,9 +661,9 @@ LogicalResult VectorDistribution::distributeReductions(
 
   auto reduceFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<int64_t> parallelSimtIndices =
-        layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+        layout.computeSIMTIndex(iterator, provider->getSIMTLabels(layout));
     auto projectedIndices = layout.projectSIMTVector(
-        provider->getSIMTLabels(), parallelSimtIndices, reductionDim);
+        provider->getSIMTLabels(layout), parallelSimtIndices, reductionDim);
     Value mEmpty = rewriter.create<vector::ExtractOp>(
         loc, getDistributed(rewriter, acc, provider), projectedIndices);
     int count{0};
@@ -678,7 +678,7 @@ LogicalResult VectorDistribution::distributeReductions(
 
     auto reduceLocalFn = [&](LayoutAttr::Iterator &iterator) {
       SmallVector<int64_t> reductionSimtIndices =
-          layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+          layout.computeSIMTIndex(iterator, provider->getSIMTLabels(layout));
       SmallVector<int64_t> indices;
       for (auto [a, b] : llvm::zip(parallelSimtIndices, reductionSimtIndices))
         indices.push_back(a + b);
@@ -785,15 +785,15 @@ VectorDistribution::distributeBroadcasts(RewriterBase &rewriter,
   int64_t parallelDim = 0;
   auto broadcastFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<int64_t> parallelSimtIndices =
-        layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+        layout.computeSIMTIndex(iterator, provider->getSIMTLabels(layout));
     auto projectedIndices = layout.projectSIMTVector(
-        provider->getSIMTLabels(), parallelSimtIndices, reductionDim);
+        provider->getSIMTLabels(layout), parallelSimtIndices, reductionDim);
     Value value = rewriter.create<vector::ExtractOp>(
         loc, getDistributed(rewriter, source, provider), projectedIndices);
 
     auto broadcastValue = [&](LayoutAttr::Iterator &iterator) {
       SmallVector<int64_t> reductionSimtIndices =
-          layout.computeSIMTIndex(iterator, provider->getSIMTLabels());
+          layout.computeSIMTIndex(iterator, provider->getSIMTLabels(layout));
       SmallVector<int64_t> indices;
       for (auto [a, b] : llvm::zip(parallelSimtIndices, reductionSimtIndices))
         indices.push_back(a + b);
@@ -808,6 +808,61 @@ VectorDistribution::distributeBroadcasts(RewriterBase &rewriter,
   layout.map(broadcastFn, parallelIterator);
   replaceOpWithDistributedValues(rewriter, transposeOp, provider,
                                  broadcastedVector);
+  return success();
+}
+
+LogicalResult VectorDistribution::distributeTripToSharedMem(
+    RewriterBase &rewriter,
+    IREE::VectorExt::LayoutConflictResolutionOp resolutionOp) {
+  TypedValue<VectorType> vector = resolutionOp.getInput();
+  TypedValue<VectorType> result = resolutionOp.getOutput();
+  VectorLayoutInterface targetLayout =
+      analysis.getLayout<VectorLayoutInterface>(result);
+
+  // We do a SIMD -> SIMD rewrite, and then distribute the result to get
+  // SIMD -> SIMT.
+  // TODO: Ideally, the distribution should know what is SIMD and what is SIMT.
+  // So we should just be able to do a SIMD -> SIMD rewrite here and the
+  // distribution should pickup on that.
+
+  // Create a alloca which can store the vector in shared memory.
+  // The alloca shape can be taken from the type of the output.
+  ArrayRef<int64_t> shape = result.getType().getShape();
+  Type elementType = result.getType().getElementType();
+  auto memSpace =
+      rewriter.getAttr<gpu::AddressSpaceAttr>(gpu::AddressSpace::Workgroup);
+  auto memType = MemRefType::get(shape, elementType,
+                                 MemRefLayoutAttrInterface{}, memSpace);
+  auto allocaOp =
+      rewriter.create<memref::AllocOp>(resolutionOp.getLoc(), memType);
+
+  // Create a transfer_write to this new alloca.
+  auto zeroIndex =
+      rewriter.create<arith::ConstantIndexOp>(resolutionOp.getLoc(), 0);
+  SmallVector<Value> indices(shape.size(), zeroIndex);
+  auto transferWriteOp = rewriter.create<vector::TransferWriteOp>(
+      resolutionOp.getLoc(), vector, allocaOp.getResult(), indices);
+
+  // Create a barrier over this transfer_read.
+  rewriter.create<gpu::BarrierOp>(resolutionOp.getLoc());
+
+  // Create a transfer_write from this new alloca.
+  SmallVector<VectorLayoutInterface> readLayouts = {targetLayout};
+  auto transferReadOp = createSIMDOp<vector::TransferReadOp>(
+      provider, rewriter, ArrayRef(readLayouts), resolutionOp.getLoc(),
+      result.getType(), allocaOp.getResult(), indices);
+
+  // Replace with the conflict result with the transfer_read result.
+  rewriter.replaceOp(resolutionOp, transferReadOp.getResult());
+
+  // Distribute the transfer_write.
+  rewriter.setInsertionPoint(transferWriteOp);
+  (void)distributeTransferWrites(rewriter, transferWriteOp);
+
+  // Distribute the transfer_read.
+  rewriter.setInsertionPoint(transferReadOp);
+  (void)distributeTransferReads(rewriter, transferReadOp);
+
   return success();
 }
 

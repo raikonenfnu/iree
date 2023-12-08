@@ -39,6 +39,19 @@ OpTy replaceOpWithNewDistributedOp(LayoutProvider *provider,
   return newOp;
 }
 
+template <typename OpTy, typename T, typename... Args>
+OpTy createSIMDOp(LayoutProvider *provider, RewriterBase &rewriter,
+                  ArrayRef<T> resultLayouts, Args &&...args) {
+  auto newOp = rewriter.create<OpTy>(std::forward<Args>(args)...);
+  assert(resultLayouts.size() == newOp->getNumResults() &&
+         "resultLayouts size must match the number of results of the op");
+  VectorLayoutAnalysis &analysis = provider->getAnalysis();
+  for (auto [index, result] : llvm::enumerate(newOp->getResults())) {
+    analysis.cloneLayoutInformationToNewValue(resultLayouts[index], result);
+  }
+  return newOp;
+}
+
 /// Function to do layout analysis and distribution. This is a rewrite of
 /// doLayoutAnalysisAndDistribution.
 void distributeVectors(RewriterBase &rewriter, func::FuncOp funcOp);

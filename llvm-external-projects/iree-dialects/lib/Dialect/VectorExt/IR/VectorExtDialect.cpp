@@ -293,7 +293,7 @@ void PerDimLayoutAttr::Iterator::print() {
   for (auto [label, value] : state) {
     if (isLane(label))
       continue;
-    llvm::outs() << stringifyLayoutDimension(label) << " : " << value.current
+    llvm::errs() << stringifyLayoutDimension(label) << " : " << value.current
                  << "->" << value.end << " [" << value.step << "] ,";
   }
 }
@@ -311,9 +311,9 @@ int64_t LayoutAttr::getBatchDim(int64_t dim) {
 void LayoutAttr::Iterator::print() {
   for (PerDimLayoutAttr::Iterator iterator : states) {
     iterator.print();
-    llvm::outs() << "\n";
+    llvm::errs() << "\n";
   }
-  llvm::outs() << "====================\n";
+  llvm::errs() << "====================\n";
 }
 
 void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback,
@@ -325,7 +325,7 @@ void LayoutAttr::map(std::function<void(LayoutAttr::Iterator &)> callback,
 
 // Check innermost vector dimension along cols to determine this value.
 int64_t LayoutAttr::getTransferElements() const {
-  PerDimLayoutAttr colAttr = getDimLayout(1);
+  PerDimLayoutAttr colAttr = getDimLayout(getLayouts().size() - 1);
   return getInnermostVectorShape(colAttr.getLabels(), colAttr.getShapes());
 }
 

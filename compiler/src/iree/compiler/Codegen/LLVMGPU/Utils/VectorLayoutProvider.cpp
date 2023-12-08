@@ -253,7 +253,7 @@ distributeContractionsToMFMA(RewriterBase &rewriter,
       loc, vectorType, rewriter.getZeroAttr(vectorType));
   auto contractFn = [&](LayoutAttr::Iterator &iterator) {
     SmallVector<int64_t> simtIndices = layout.computeIteratorProjectedSIMTIndex(
-        iterator, provider->getSIMTLabels());
+        iterator, provider->getSIMTLabels(layout));
     Value dMatrix = rewriter.create<vector::ExtractOp>(
         loc, getDistributed(rewriter, acc, provider), simtIndices);
     for (int k = 0; k < K; k++) {
