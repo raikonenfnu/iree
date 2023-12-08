@@ -33,6 +33,7 @@ iree_compiler_cc_library(
         "//compiler/src/iree/compiler/PluginAPI",
         "//compiler/src/iree/compiler/Utils",
         "//runtime/src/iree/schemas:rocm_executable_def_c_fbs",
+	"//llvm-external-projects/iree-dialects:IREEVectorExtDialect",
         "@llvm-project//llvm:AMDGPUCodeGen",
         "@llvm-project//llvm:Analysis",
         "@llvm-project//llvm:Core",

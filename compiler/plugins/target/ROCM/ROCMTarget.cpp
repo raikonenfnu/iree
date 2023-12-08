@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <mutex>
 
+#include "iree-dialects/Dialect/VectorExt/IR/VectorExtDialect.h"
 #include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
 #include "iree/compiler/Codegen/LLVMGPU/Passes.h"
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
@@ -101,6 +102,7 @@ public:
     mlir::registerROCDLDialectTranslation(registry);
     registry.insert<IREE::Codegen::IREECodegenDialect>();
     registry.insert<amdgpu::AMDGPUDialect>();
+    registry.insert<IREE::VectorExt::IREEVectorExtDialect>();
   }
 
   IREE::HAL::DeviceTargetAttr
