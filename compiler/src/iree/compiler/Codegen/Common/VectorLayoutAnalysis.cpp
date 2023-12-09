@@ -8,6 +8,7 @@
 #include "llvm/Support/Debug.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/Matchers.h"
 
 #define DEBUG_TYPE "iree-vector-layout-analysis"
 
@@ -465,6 +466,49 @@ static void propagateLayoutToMultiReductionOp(
   update(result, changed);
 }
 
+static void propagateLayoutToMultiReductionBroadcastTransposeChain(
+    vector::TransposeOp transpose,
+    ArrayRef<DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
+    std::function<void(DistributionLayout *, ChangeResult)> update) {
+  // Check if this is a reduction-broadcast-transpose chain.
+  // TODO: We can use m_Op here.
+  auto broadcast = dyn_cast_or_null<vector::BroadcastOp>(
+      transpose.getOperand().getDefiningOp());
+  if (!broadcast) {
+    return;
+  }
+  auto reduction = dyn_cast_or_null<vector::MultiDimReductionOp>(
+      broadcast.getOperand().getDefiningOp());
+  if (!reduction) {
+    return;
+  }
+
+  // Check if the input to reduction and the output to transpose have the same
+  // shape.
+  // TODO: The true check is to check if the dims that the new dims
+  // that were reduced by the reduction, are the ones that are broadcasted +
+  // transposed.
+  if (transpose.getResultVectorType() != reduction.getSourceVectorType()) {
+    return;
+  }
+
+  // Propagate the layout of the input to reduction to the result of the
+  // transpose.
+  DistributionLayout *result = resultLattices[0];
+  const DistributionLayout *reductionLayout = getLayout(reduction.getSource());
+
+  // If the result already has a layout, we cannot do anything. We do not
+  // impose layout conflicts on results.
+  if (result->hasLayout()) {
+    return;
+  }
+
+  // Try to resolve with the layout of the input to reduction.
+  ChangeResult changed = result->resolve(reductionLayout);
+  update(result, changed);
+}
+
 static void propagateLayoutToTransposeOp(
     vector::TransposeOp transpose,
     ArrayRef<DistributionLayout *> resultLattices,
@@ -536,6 +580,9 @@ void propagationTransferFunction(
 
   if (auto transpose = dyn_cast<vector::TransposeOp>(op)) {
     propagateLayoutToTransposeOp(transpose, resultLattices, getLayout, update);
+    // Handle reduction-broadcast-transpose chains.
+    propagateLayoutToMultiReductionBroadcastTransposeChain(
+        transpose, resultLattices, getLayout, update);
     return;
   }
 
