@@ -395,8 +395,8 @@ static void enforceSameLayoutForOperands(
 /// ==========================================================================
 
 static void propagateLayoutToElementwiseOp(
-    Operation *op, ArrayRef<const DistributionLayout *> operandLattices,
-    ArrayRef<DistributionLayout *> resultLattices,
+    Operation *op, ArrayRef<DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // All operands and results must agree on the same layout.
 
@@ -413,6 +413,14 @@ static void propagateLayoutToElementwiseOp(
     return;
   }
 
+  // Get layout for all vector operands.
+  SmallVector<const DistributionLayout *> operandLattices;
+  for (OpOperand &operand : op->getOpOperands()) {
+    if (operand.get().getType().isa<VectorType>()) {
+      operandLattices.push_back(getLayout(operand.get()));
+    }
+  }
+
   // Check if all vector operands agree on the same layout.
   const DistributionLayout *chosenOperandLayout =
       getAgreedLayout(operandLattices);
@@ -426,15 +434,15 @@ static void propagateLayoutToElementwiseOp(
 
 static void propagateLayoutToMultiReductionOp(
     vector::MultiDimReductionOp multiReduce,
-    ArrayRef<const DistributionLayout *> operandLattices,
     ArrayRef<DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // Multi reduce has only one vector result.
   DistributionLayout *result = resultLattices[0];
   // Multi reduce has first vector operands as the value being reduced.
-  const DistributionLayout *vector = operandLattices[0];
+  const DistributionLayout *vector = getLayout(multiReduce.getOperand(0));
   // Multi reduce has second operand as init.
-  const DistributionLayout *init = operandLattices[1];
+  const DistributionLayout *init = getLayout(multiReduce.getOperand(1));
 
   // If result lattice already has a layout, we cannot do anything. We do not
   // impose layout conflicts on results.
@@ -459,13 +467,13 @@ static void propagateLayoutToMultiReductionOp(
 
 static void propagateLayoutToTransposeOp(
     vector::TransposeOp transpose,
-    ArrayRef<const DistributionLayout *> operandLattices,
     ArrayRef<DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // Transpose has only one vector result.
   DistributionLayout *result = resultLattices[0];
   // Transpose has only one vector operand.
-  const DistributionLayout *value = operandLattices[0];
+  const DistributionLayout *value = getLayout(transpose.getOperand());
 
   // If result lattice already has a layout, we cannot do anything. We do not
   // impose layout conflicts on results.
@@ -490,13 +498,13 @@ static void propagateLayoutToTransposeOp(
 
 static void propagateLayoutToContractionOp(
     vector::ContractionOp contraction,
-    ArrayRef<const DistributionLayout *> operandLattices,
     ArrayRef<DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // Contraction has only one vector result.
   DistributionLayout *result = resultLattices[0];
   // Get the init value of the contraction.
-  const DistributionLayout *init = operandLattices[2];
+  const DistributionLayout *init = getLayout(contraction.getAcc());
 
   // If result lattice already has a layout, we cannot do anything. We do not
   // impose layout conflicts on results.
@@ -510,30 +518,29 @@ static void propagateLayoutToContractionOp(
 }
 
 void propagationTransferFunction(
-    Operation *op, ArrayRef<const DistributionLayout *> operandLattices,
-    ArrayRef<DistributionLayout *> resultLattices,
+    Operation *op, ArrayRef<DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
 
   // Propagate layout to elementwise operations.
   if (OpTrait::hasElementwiseMappableTraits(op)) {
-    propagateLayoutToElementwiseOp(op, operandLattices, resultLattices, update);
+    propagateLayoutToElementwiseOp(op, resultLattices, getLayout, update);
     return;
   }
 
   if (auto multiReduce = dyn_cast<vector::MultiDimReductionOp>(op)) {
-    propagateLayoutToMultiReductionOp(multiReduce, operandLattices,
-                                      resultLattices, update);
+    propagateLayoutToMultiReductionOp(multiReduce, resultLattices, getLayout,
+                                      update);
     return;
   }
 
   if (auto transpose = dyn_cast<vector::TransposeOp>(op)) {
-    propagateLayoutToTransposeOp(transpose, operandLattices, resultLattices,
-                                 update);
+    propagateLayoutToTransposeOp(transpose, resultLattices, getLayout, update);
     return;
   }
 
   if (auto contraction = dyn_cast<vector::ContractionOp>(op)) {
-    propagateLayoutToContractionOp(contraction, operandLattices, resultLattices,
+    propagateLayoutToContractionOp(contraction, resultLattices, getLayout,
                                    update);
     return;
   }
@@ -547,16 +554,16 @@ void propagationTransferFunction(
 
 static void enforceLayoutToElementwiseOp(
     Operation *op, ArrayRef<DistributionLayout *> operandLattices,
-    ArrayRef<const DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // All operands and results must agree on the same layout.
 
   // We do not support multiple results yet.
-  if (resultLattices.size() != 1)
+  if (op->getNumResults() != 1)
     return;
 
   // Try to enforce the layout of the result on operands.
-  const DistributionLayout *result = resultLattices[0];
+  const DistributionLayout *result = getLayout(op->getResult(0));
   if (result->hasLayout()) {
     // Note that the operand lattice is not updated. So using the operand
     // lattice again can cause bugs.
@@ -574,11 +581,11 @@ static void enforceLayoutToElementwiseOp(
 static void enforceLayoutToMultiReductionOp(
     vector::MultiDimReductionOp multiReduce,
     ArrayRef<DistributionLayout *> operandLattices,
-    ArrayRef<const DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // Reductions should always propagate value layout to result. Result can
   // enforce it's layout on init.
-  const DistributionLayout *result = resultLattices[0];
+  const DistributionLayout *result = getLayout(multiReduce.getResult());
   DistributionLayout *init = operandLattices[1];
 
   // Enforce the result layout on init.
@@ -590,10 +597,10 @@ static void enforceLayoutToMultiReductionOp(
 static void enforceLayoutToTransposeOp(
     vector::TransposeOp transpose,
     ArrayRef<DistributionLayout *> operandLattices,
-    ArrayRef<const DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // Transpose has only one vector result.
-  const DistributionLayout *result = resultLattices[0];
+  const DistributionLayout *result = getLayout(transpose.getResult());
   // Transpose has only one vector operand.
   DistributionLayout *value = operandLattices[0];
 
@@ -616,10 +623,10 @@ static void enforceLayoutToTransposeOp(
 static void enforceLayoutToBroadcastOp(
     vector::BroadcastOp broadcast,
     ArrayRef<DistributionLayout *> operandLattices,
-    ArrayRef<const DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // Broadcast has only one vector result.
-  const DistributionLayout *result = resultLattices[0];
+  const DistributionLayout *result = getLayout(broadcast.getResult());
   // Broadcast has only one vector operand.
   DistributionLayout *value = operandLattices[0];
 
@@ -662,10 +669,10 @@ static void enforceLayoutToBroadcastOp(
 static void enforceLayoutToContractionOp(
     vector::ContractionOp contraction,
     ArrayRef<DistributionLayout *> operandLattices,
-    ArrayRef<const DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // Contraction has only one vector result.
-  const DistributionLayout *result = resultLattices[0];
+  const DistributionLayout *result = getLayout(contraction.getResult());
   // Contraction has init value at position 2.
   DistributionLayout *value = operandLattices[2];
 
@@ -682,35 +689,33 @@ static void enforceLayoutToContractionOp(
 
 void enforcementTransferFunction(
     Operation *op, ArrayRef<DistributionLayout *> operandLattices,
-    ArrayRef<const DistributionLayout *> resultLattices,
+    std::function<const DistributionLayout *(Value)> getLayout,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
 
   // Propagate layout to elementwise operations.
   if (OpTrait::hasElementwiseMappableTraits(op)) {
-    enforceLayoutToElementwiseOp(op, operandLattices, resultLattices, update);
+    enforceLayoutToElementwiseOp(op, operandLattices, getLayout, update);
     return;
   }
 
   if (auto multiReduce = dyn_cast<vector::MultiDimReductionOp>(op)) {
-    enforceLayoutToMultiReductionOp(multiReduce, operandLattices,
-                                    resultLattices, update);
+    enforceLayoutToMultiReductionOp(multiReduce, operandLattices, getLayout,
+                                    update);
     return;
   }
 
   if (auto transpose = dyn_cast<vector::TransposeOp>(op)) {
-    enforceLayoutToTransposeOp(transpose, operandLattices, resultLattices,
-                               update);
+    enforceLayoutToTransposeOp(transpose, operandLattices, getLayout, update);
     return;
   }
 
   if (auto broadcast = dyn_cast<vector::BroadcastOp>(op)) {
-    enforceLayoutToBroadcastOp(broadcast, operandLattices, resultLattices,
-                               update);
+    enforceLayoutToBroadcastOp(broadcast, operandLattices, getLayout, update);
     return;
   }
 
   if (auto contraction = dyn_cast<vector::ContractionOp>(op)) {
-    enforceLayoutToContractionOp(contraction, operandLattices, resultLattices,
+    enforceLayoutToContractionOp(contraction, operandLattices, getLayout,
                                  update);
     return;
   }
@@ -769,18 +774,6 @@ void PropagateLayout::visitOperation(Operation *op) {
 
   // TODO: Handle BranchOpInterface also.
 
-  // Grab the lattice elements of the operands.
-  SmallVector<const DistributionLayout *> operandLattices;
-  operandLattices.reserve(op->getNumOperands());
-  for (Value operand : op->getOperands()) {
-    if (!isa<VectorType>(operand.getType())) {
-      continue;
-    }
-
-    DistributionLayout *operandLattice = getLatticeElement(operand);
-    operandLattices.push_back(operandLattice);
-  }
-
   // Get the result lattices.
   SmallVector<DistributionLayout *> resultLattices;
   resultLattices.reserve(op->getNumResults());
@@ -802,7 +795,11 @@ void PropagateLayout::visitOperation(Operation *op) {
     this->propagateIfChanged(lattice, changed);
   };
 
-  propagationTransferFunction(op, operandLattices, resultLattices, changeFunc);
+  auto getLayout = [&](Value val) -> const DistributionLayout * {
+    return getLatticeElement(val);
+  };
+
+  propagationTransferFunction(op, resultLattices, getLayout, changeFunc);
 }
 
 void PropagateLayout::visitRegionSuccessors(RegionBranchOpInterface branch,
@@ -923,7 +920,11 @@ void EnforceLayout::visitOperation(Operation *op) {
     this->propagateIfChanged(lattice, changed);
   };
 
-  enforcementTransferFunction(op, operandLattices, resultLattices, changeFunc);
+  auto getLayout = [&](Value val) -> const DistributionLayout * {
+    return getLatticeElement(val);
+  };
+
+  enforcementTransferFunction(op, operandLattices, getLayout, changeFunc);
 }
 
 void EnforceLayout::visitRegionSuccessors(RegionBranchOpInterface branch,
