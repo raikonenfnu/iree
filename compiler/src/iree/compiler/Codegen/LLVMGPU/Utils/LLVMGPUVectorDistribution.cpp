@@ -132,6 +132,7 @@ public:
     provider->setAnchorOps();
     if (failed(analysis.run()))
       return;
+    analysis.dump();
   }
 
   void distribute() {
@@ -520,20 +521,24 @@ LogicalResult VectorDistribution::distributeResolutions(
   TypedValue<VectorType> result = resolutionOp.getOutput();
   LayoutAttr currentLayout = cast<LayoutAttr>(resolutionOp.getSourceLayout());
   LayoutAttr targetLayout = cast<LayoutAttr>(resolutionOp.getDesiredLayout());
-  if (currentLayout.hasLaneConflictWith(targetLayout))
+  if (currentLayout.hasLaneConflictWith(targetLayout)) {
+    llvm::errs() << "lane conflict?\n";
     return distributeTripToSharedMem(rewriter, resolutionOp);
+  }
   SmallVector<int64_t> currentVecShape =
       currentLayout.getSIMTVectorShape(provider->getSIMTLabels(currentLayout));
   SmallVector<int64_t> targetVecShape =
       targetLayout.getSIMTVectorShape(provider->getSIMTLabels(targetLayout));
-  if (currentVecShape.size() != targetVecShape.size())
+  if (currentVecShape.size() != targetVecShape.size()) {
     return failure();
+  }
   auto numElements = [](ArrayRef<int64_t> vector) {
     return std::accumulate(vector.begin(), vector.end(), 1,
                            std::multiplies<int64_t>());
   };
-  if (numElements(currentVecShape) != numElements(targetVecShape))
+  if (numElements(currentVecShape) != numElements(targetVecShape)) {
     return failure();
+  }
   Type elementType = llvm::cast<VectorType>(result.getType()).getElementType();
   Value newVector =
       reshapeVector(rewriter, getDistributed(rewriter, vector, provider),

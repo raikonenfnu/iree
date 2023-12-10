@@ -363,15 +363,23 @@ LayoutAttr::projectSIMTVector(ArrayRef<LayoutDimension> labels,
 bool LayoutAttr::hasLaneConflictWith(const LayoutAttr &other) {
   SmallVector<LayoutDimension> laneDims{
       LayoutDimension::LANEX, LayoutDimension::LANEY, LayoutDimension::LANEZ};
-  for (auto dim : laneDims) {
-    auto shape0 = getShape(dim);
-    auto shape1 = other.getShape(dim);
-    if ((shape0 && !shape1) || (shape1 && !shape0))
-      return true;
-    if (shape0 && shape1)
-      if (*shape0 != *shape1)
+
+  if (getLayouts().size() != other.getLayouts().size())
+    return true;
+
+  for (auto [dimLayout, otherDimLayout] :
+       llvm::zip_equal(getLayouts(), other.getLayouts())) {
+    for (auto dim : laneDims) {
+      auto shape0 = dimLayout.getShape(dim);
+      auto shape1 = otherDimLayout.getShape(dim);
+      if ((shape0 && !shape1) || (shape1 && !shape0))
         return true;
+      if (shape0 && shape1)
+        if (*shape0 != *shape1)
+          return true;
+    }
   }
+
   return false;
 }
 
