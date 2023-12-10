@@ -1072,6 +1072,7 @@ void VectorLayoutAnalysis::cloneLayoutInformationToNewValue(
 
 void VectorLayoutAnalysis::print(raw_ostream &os) {
   // Annotate each operation with the layout of it's result.
+  llvm::outs()<<"start\n";
   root->walk([&](Operation *op) {
     if (op->getNumResults() == 0) {
       return;
@@ -1090,6 +1091,8 @@ void VectorLayoutAnalysis::print(raw_ostream &os) {
       op->setAttr("layout_result_" + std::to_string(index), layout);
     }
   });
+  llvm::outs()<<"finish\n";
+  llvm::outs()<<*root<<"\n";
 
   root->dump();
 }

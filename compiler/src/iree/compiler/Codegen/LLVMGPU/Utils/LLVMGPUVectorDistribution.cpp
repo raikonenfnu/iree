@@ -132,7 +132,9 @@ public:
     provider->setAnchorOps();
     if (failed(analysis.run()))
       return;
-    analysis.dump();
+    llvm::outs()<<"Analysis:\n";
+    analysis.print(llvm::outs());
+    llvm::outs()<<"\n";
   }
 
   void distribute() {
