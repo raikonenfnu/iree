@@ -147,6 +147,7 @@ iree_status_t iree_hal_rocm_native_executable_create(
         params->block_size[1] = block_sizes_vec[i].y;
         params->block_size[2] = block_sizes_vec[i].z;
         params->shared_memory_size = shared_memory_sizes[i];
+        params->dispatch_name = strdup(entry_name);
         // Stash the entry point name in the string table for use when tracing.
         IREE_TRACE({
           iree_host_size_t entry_name_length =

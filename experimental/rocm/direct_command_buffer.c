@@ -367,6 +367,8 @@ static iree_status_t iree_hal_rocm_direct_command_buffer_dispatch(
 
   // TODO(raikonenfnu): Currently using NULL stream, need to figure out way to
   // access proper stream from command buffer
+  printf("fn name:%s\n", kernel_params.dispatch_name);
+  printf("gridX:%d, gridY:%d, gridZ:%d, x:%d, y:%d, z:%d, shared_mem:%d\n", workgroup_x, workgroup_y, workgroup_z, kernel_params.block_size[0], kernel_params.block_size[1], kernel_params.block_size[2], kernel_params.shared_memory_size);
   ROCM_RETURN_IF_ERROR(
       command_buffer->context->syms,
       hipModuleLaunchKernel(
