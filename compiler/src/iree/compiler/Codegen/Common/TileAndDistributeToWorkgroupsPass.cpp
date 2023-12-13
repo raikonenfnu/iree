@@ -307,6 +307,12 @@ void TileAndDistributeToWorkgroupsPass::runOnOperation() {
       return signalPassFailure();
     }
 
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After get tile and distribute configuration ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
     IRRewriter rewriter(context);
     // If there are no compute ops, nothing more to do.
     if (!dispatchRootOp || computeOps.empty()) {
@@ -357,6 +363,11 @@ void TileAndDistributeToWorkgroupsPass::runOnOperation() {
       funcOp.emitOpError("Tile+Distribute failed");
       return signalPassFailure();
     }
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After Tile and fuse dispatch with scf ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
 
     // Materialize the computation for workgroup counts.
     auto workgroupCountOfr =
@@ -367,6 +378,11 @@ void TileAndDistributeToWorkgroupsPass::runOnOperation() {
       funcOp.emitOpError("workgroup count lowering failed");
       return signalPassFailure();
     }
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After Lower Wg Count ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
 
     // Resolve the `tensor.dim` operations in workgroup count region.
     {
@@ -377,6 +393,11 @@ void TileAndDistributeToWorkgroupsPass::runOnOperation() {
         return signalPassFailure();
       }
     }
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After Resolve Ranks ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
 
     {
       RewritePatternSet patterns(context);
