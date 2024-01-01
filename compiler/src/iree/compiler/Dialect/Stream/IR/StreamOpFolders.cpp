@@ -1359,11 +1359,12 @@ void TensorSplatOp::getCanonicalizationPatterns(RewritePatternSet &results,
 //===----------------------------------------------------------------------===//
 
 OpFoldResult TensorCloneOp::fold(FoldAdaptor operands) {
-  auto users = getResult().getUsers();
-  if (!users.empty() && std::next(users.begin()) == users.end()) {
-    // If the second user is the end it means there's one user.
-    return getSource();
-  }
+  // TODO: Add logic if source slice and user is update
+  // auto users = getResult().getUsers();
+  // if (!users.empty() && std::next(users.begin()) == users.end()) {
+  //   // If the second user is the end it means there's one user.
+  //   return getSource();
+  // }
   return {};
 }
 
@@ -1391,7 +1392,8 @@ void TensorCloneOp::getCanonicalizationPatterns(RewritePatternSet &results,
   // TODO(benvanik): if both operand and result are used once then elide.
   //                 (if not tied block/fn arguments)
   results.insert<PropagateClonableOps<TensorCloneOp>>(context);
-  results.insert<ElideUnneededTensorClones>(context);
+  // TODO: Add logic if source slice and user is update on ElideUnneededTensorClones.
+  // results.insert<ElideUnneededTensorClones>(context);
 }
 
 //===----------------------------------------------------------------------===//
