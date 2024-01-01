@@ -163,6 +163,26 @@ struct ConvertTensorUpdateOp
   }
 };
 
+struct ConvertTensorMoveOp
+    : public OpConversionPattern<IREE::Flow::TensorMoveOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult
+  matchAndRewrite(IREE::Flow::TensorMoveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto update =
+        consumeTensorOperand(op.getLoc(), adaptor.getUpdate(), rewriter);
+    auto target =
+        consumeTensorOperand(op.getLoc(), adaptor.getTarget(), rewriter);
+    rewriter.replaceOpWithNewOp<IREE::Stream::TensorMoveOp>(
+        op, target.resource.getType(), target.resource,
+        op.getTarget().getType(), adaptor.getTargetDims(), target.resourceSize,
+        adaptor.getStartIndices(), update.resource, op.getUpdate().getType(),
+        op.getUpdateDims(), update.resourceSize,
+        IREE::Stream::AffinityAttr::lookup(op));
+    return success();
+  }
+};
+
 struct ConvertTensorLoadOp
     : public OpConversionPattern<IREE::Flow::TensorLoadOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -892,8 +912,8 @@ void populateFlowToStreamConversionPatterns(MLIRContext *context,
               ConvertTensorCastLikeOp<IREE::Flow::TensorBitCastOp>,
               ConvertTensorAllocaOp, ConvertTensorEmptyOp, ConvertTensorSplatOp,
               ConvertTensorCloneOp, ConvertTensorSliceOp, ConvertTensorUpdateOp,
-              ConvertTensorLoadOp, ConvertTensorStoreOp, ConvertTensorTraceOp>(
-          typeConverter, context);
+              ConvertTensorMoveOp, ConvertTensorLoadOp, ConvertTensorStoreOp,
+              ConvertTensorTraceOp>(typeConverter, context);
   patterns.insert<ConvertChannelDefaultOp, ConvertChannelSplitOp,
                   ConvertChannelRankOp, ConvertChannelCountOp>(typeConverter,
                                                                context);

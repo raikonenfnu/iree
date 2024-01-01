@@ -1582,6 +1582,36 @@ SmallVector<int64_t> TensorUpdateOp::getTiedResultOperandIndices() {
 }
 
 //===----------------------------------------------------------------------===//
+// stream.tensor.update
+//===----------------------------------------------------------------------===//
+
+LogicalResult TensorMoveOp::verify() {
+  TensorMoveOp op = *this;
+  if (failed(verifyOpDynamicDims(op, op.getUpdateEncoding(),
+                                 op.getUpdateEncodingDims())) ||
+      failed(verifyOpDynamicDims(op, op.getTargetEncoding(),
+                                 op.getTargetEncodingDims())) ||
+      failed(verifyOpValueSizes(op, op.getUpdate(), op.getUpdateSize())) ||
+      failed(verifyOpValueSizes(op, op.getResult(), op.getTargetSize()))) {
+    return failure();
+  }
+  return success();
+}
+
+Value TensorMoveOp::getTiedResult(unsigned resultIndex) {
+  return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
+}
+
+::std::optional<unsigned>
+TensorMoveOp::getTiedResultOperandIndex(unsigned resultIndex) {
+  return {0}; // target
+}
+
+SmallVector<int64_t> TensorMoveOp::getTiedResultOperandIndices() {
+  return {0}; // target
+}
+
+//===----------------------------------------------------------------------===//
 // stream.tensor.fill
 //===----------------------------------------------------------------------===//
 

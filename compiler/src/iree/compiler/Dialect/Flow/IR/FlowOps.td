@@ -1577,6 +1577,67 @@ def FLOW_TensorUpdateOp : FLOW_PureOp<"tensor.update", [
   let hasFolder = 1;
 }
 
+def FLOW_TensorMoveOp : FLOW_PureOp<"tensor.move", [
+  FLOW_StreamableOp,
+  AllRanksMatch<["update", "target", "result"]>,
+  AllTypesMatch<["target", "result"]>,
+  AllElementTypesMatch<["update", "target", "result"]>,
+  AttrSizedOperandSegments,
+  DeclareOpInterfaceMethods<Util_TiedOpInterface, [
+      "getTiedResult",
+      "getTiedResultOperandIndex",
+      "getTiedResultOperandIndices",
+  ]>,
+  Util_ShapeAwareOp,
+]> {
+  let summary = [{Moves contents of a tensor to another tensor with an intermediate buffer.}];
+  let description = [{
+    Updates the target tensor with the contents of the update tensor at the
+    given offset indices. Updates takes place as if an intermediate buffer were used,
+    allowing the destination and source to overlap.
+  }];
+
+  let arguments = (ins
+    FLOW_Tensor:$target,
+    FLOW_ShapeDynamicDims:$target_dims,
+    Variadic<FLOW_Dim>:$start_indices,
+    FLOW_Tensor:$update,
+    FLOW_ShapeDynamicDims:$update_dims
+  );
+  let results = (outs
+    FLOW_Tensor:$result
+  );
+
+  let assemblyFormat = [{
+    $update `,` $target `[` $start_indices `]` `:`
+    type($update) (`{` $update_dims^ `}`)? `->`
+    custom<ShapedTiedResult>(type($result), $target_dims)
+    attr-dict-with-keyword
+  }];
+
+  let builders = [
+    OpBuilder<(ins
+      "Value":$target,
+      "ValueRange":$start_indices,
+      "Value":$update)>,
+  ];
+
+  let extraClassDeclaration = [{
+    // StreamableOpInterface:
+    bool isTransfer() { return true; }
+
+    ValueRange getOperandDynamicDims(unsigned idx) {
+      return idx == 0 ? getTargetDims() : getUpdateDims();
+    }
+    ValueRange getResultDynamicDims(unsigned idx) { return getTargetDims(); }
+  }];
+
+  let hasVerifier = 1;
+
+  let hasCanonicalizer = 1;
+  let hasFolder = 1;
+}
+
 def FLOW_TensorTraceOp : FLOW_Op<"tensor.trace", [
   AttrSizedOperandSegments,
   DeclareOpInterfaceMethods<Util_ShapeAwareOp>,

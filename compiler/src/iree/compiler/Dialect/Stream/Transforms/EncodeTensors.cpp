@@ -517,6 +517,44 @@ struct EncodeTensorUpdateOp
 };
 
 //===----------------------------------------------------------------------===//
+// stream.tensor.move
+//===----------------------------------------------------------------------===//
+
+struct EncodeTensorMoveOp
+    : public OpRewritePattern<IREE::Stream::TensorMoveOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(IREE::Stream::TensorMoveOp op,
+                                PatternRewriter &rewriter) const override {
+    auto updateType = llvm::cast<RankedTensorType>(op.getUpdateEncoding());
+    auto updateDims = op.getUpdateEncodingDims();
+    if (failed(checkEncoding(op, updateType, updateDims, rewriter))) {
+      return failure();
+    }
+    auto targetType = llvm::cast<RankedTensorType>(op.getTargetEncoding());
+    auto targetDims = op.getTargetEncodingDims();
+    if (failed(checkEncoding(op, targetType, targetDims, rewriter))) {
+      return failure();
+    }
+
+    // Dense:
+    auto intermediateBuffer = rewriter.create<IREE::Stream::AsyncCloneOp>(
+        op.getLoc(), op.getUpdate().getType(), op.getUpdate(), op.getUpdateSize(),
+        op.getUpdateSize(), op.getAffinityAttr());
+
+    auto targetOffset = calculateElementByteOffset(
+        op.getLoc(), targetType, targetDims, op.getStartIndices(), rewriter);
+    auto targetEnd = rewriter.createOrFold<arith::AddIOp>(
+        op.getLoc(), targetOffset, op.getUpdateSize());
+    rewriter.replaceOpWithNewOp<IREE::Stream::AsyncUpdateOp>(
+        op, op.getResult().getType(), op.getTarget(), op.getTargetSize(),
+        targetOffset, targetEnd, intermediateBuffer, op.getUpdateSize(),
+        op.getAffinityAttr());
+
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // stream.tensor.load
 //===----------------------------------------------------------------------===//
 
@@ -602,8 +640,8 @@ struct EncodeHostTensorsPass
         EncodeTensorImportOp, EncodeTensorExportOp, EncodeTensorSizeOfOp,
         EncodeTensorEmptyOp, EncodeTensorConstantOp, EncodeTensorSplatOp,
         EncodeTensorCloneOp, EncodeTensorSliceOp, EncodeTensorFillOp,
-        EncodeTensorUpdateOp, EncodeTensorLoadOp, EncodeTensorStoreOp>(
-        &getContext());
+        EncodeTensorUpdateOp, EncodeTensorMoveOp, EncodeTensorLoadOp,
+        EncodeTensorStoreOp>(&getContext());
     FrozenRewritePatternSet frozenPatterns(std::move(patterns));
     if (failed(applyPatternsAndFoldGreedily(getOperation(), frozenPatterns))) {
       return signalPassFailure();

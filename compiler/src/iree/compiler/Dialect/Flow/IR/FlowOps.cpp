@@ -1808,6 +1808,44 @@ SmallVector<int64_t> TensorUpdateOp::getTiedResultOperandIndices() {
 }
 
 //===----------------------------------------------------------------------===//
+// flow.tensor.move
+//===----------------------------------------------------------------------===//
+
+void TensorMoveOp::build(OpBuilder &builder, OperationState &state,
+                           Value target, ValueRange startIndices,
+                           Value update) {
+  auto targetDims =
+      IREE::Util::buildDynamicDimsForValue(state.location, target, builder);
+  auto updateDims =
+      IREE::Util::buildDynamicDimsForValue(state.location, update, builder);
+  build(builder, state, target.getType(), target, targetDims, startIndices,
+        update, updateDims);
+}
+
+LogicalResult TensorMoveOp::verify() {
+  if (failed(verifyOpDynamicDims(getOperation(), {getUpdate()},
+                                 getUpdateDims())) ||
+      failed(verifyOpDynamicDims(getOperation(), {getTarget()},
+                                 getTargetDims()))) {
+    return failure();
+  }
+  return success();
+}
+
+Value TensorMoveOp::getTiedResult(unsigned resultIndex) {
+  return IREE::Util::TiedOpInterface::findTiedBaseValue(getTarget());
+}
+
+::std::optional<unsigned>
+TensorMoveOp::getTiedResultOperandIndex(unsigned resultIndex) {
+  return {0}; // target
+}
+
+SmallVector<int64_t> TensorMoveOp::getTiedResultOperandIndices() {
+  return {0}; // target
+}
+
+//===----------------------------------------------------------------------===//
 // flow.tensor.trace
 //===----------------------------------------------------------------------===//
 

@@ -129,6 +129,20 @@ struct ReplaceOpIfTensorOperandEmpty : public OpRewritePattern<Op> {
   }
 };
 
+template <typename Op, int SrcIdx, int DstIdx>
+struct ReplaceOpWithDstIfSrcIsZeroElements
+    : public OpRewritePattern<Op> {
+  using OpRewritePattern<Op>::OpRewritePattern;
+  LogicalResult matchAndRewrite(Op op,
+                                PatternRewriter &rewriter) const override {
+    auto operand = op->getOperand(SrcIdx);
+    if (!isTensorOperandZeroElements(operand))
+      return failure();
+    rewriter.replaceOp(op, op->getOperand(DstIdx));
+    return success();
+  }
+};
+
 // Returns a new set of dynamic dimensions for a shape carrying op when a type
 // is being changed. This attempts to reuse the existing dimension values if
 // they are available and will drop/insert new ones as required.
@@ -776,6 +790,52 @@ static bool compareShapesEqual(ShapedType lhsType, ValueRange lhsDynamicDims,
   return true;
 }
 
+
+static ElementsAttr tensorUpdate(ElementsAttr update, ElementsAttr target,
+                                 ArrayRef<Attribute> startIndicesAttrs) {
+  auto updateType = llvm::cast<ShapedType>(update.getType());
+  auto targetType = llvm::cast<ShapedType>(target.getType());
+  // If either target or update has zero element, then no update happens.
+  if (updateType.getNumElements() == 0 || targetType.getNumElements() == 0) {
+    return target;
+  }
+
+  int64_t rank = targetType.getRank();
+  // If target is scalar, update is also scalar and is the new content.
+  if (rank == 0) {
+    return update;
+  }
+
+  auto startIndex = llvm::map_to_vector(startIndicesAttrs, [](Attribute value) {
+    return llvm::cast<IntegerAttr>(value).getValue().getZExtValue();
+  });
+  auto targetValues = llvm::to_vector(target.getValues<Attribute>());
+  // target indices start from startIndicesAttrs and update indices start from
+  // all zeros.
+  llvm::SmallVector<uint64_t> targetIndex(startIndex);
+  llvm::SmallVector<uint64_t> updateIndex(rank, 0);
+  int64_t numElements = updateType.getNumElements();
+  while (numElements--) {
+    targetValues[getFlattenedIndex(targetType, targetIndex)] =
+        update.getValues<Attribute>()[updateIndex];
+    // Increment the index at last dim.
+    ++updateIndex.back();
+    ++targetIndex.back();
+    // If the index in dim j exceeds dim size, reset dim j and
+    // increment dim (j-1).
+    for (int64_t j = rank - 1;
+         j >= 0 && updateIndex[j] >= updateType.getDimSize(j); --j) {
+      updateIndex[j] = 0;
+      targetIndex[j] = startIndex[j];
+      if (j - 1 >= 0) {
+        ++updateIndex[j - 1];
+        ++targetIndex[j - 1];
+      }
+    }
+  }
+  return DenseElementsAttr::get(targetType, targetValues);
+}
+
 //===----------------------------------------------------------------------===//
 // flow.tensor.constant
 //===----------------------------------------------------------------------===//
@@ -1215,51 +1275,6 @@ void TensorSliceOp::getCanonicalizationPatterns(RewritePatternSet &results,
 // flow.tensor.update
 //===----------------------------------------------------------------------===//
 
-static ElementsAttr tensorUpdate(ElementsAttr update, ElementsAttr target,
-                                 ArrayRef<Attribute> startIndicesAttrs) {
-  auto updateType = llvm::cast<ShapedType>(update.getType());
-  auto targetType = llvm::cast<ShapedType>(target.getType());
-  // If either target or update has zero element, then no update happens.
-  if (updateType.getNumElements() == 0 || targetType.getNumElements() == 0) {
-    return target;
-  }
-
-  int64_t rank = targetType.getRank();
-  // If target is scalar, update is also scalar and is the new content.
-  if (rank == 0) {
-    return update;
-  }
-
-  auto startIndex = llvm::map_to_vector(startIndicesAttrs, [](Attribute value) {
-    return llvm::cast<IntegerAttr>(value).getValue().getZExtValue();
-  });
-  auto targetValues = llvm::to_vector(target.getValues<Attribute>());
-  // target indices start from startIndicesAttrs and update indices start from
-  // all zeros.
-  llvm::SmallVector<uint64_t> targetIndex(startIndex);
-  llvm::SmallVector<uint64_t> updateIndex(rank, 0);
-  int64_t numElements = updateType.getNumElements();
-  while (numElements--) {
-    targetValues[getFlattenedIndex(targetType, targetIndex)] =
-        update.getValues<Attribute>()[updateIndex];
-    // Increment the index at last dim.
-    ++updateIndex.back();
-    ++targetIndex.back();
-    // If the index in dim j exceeds dim size, reset dim j and
-    // increment dim (j-1).
-    for (int64_t j = rank - 1;
-         j >= 0 && updateIndex[j] >= updateType.getDimSize(j); --j) {
-      updateIndex[j] = 0;
-      targetIndex[j] = startIndex[j];
-      if (j - 1 >= 0) {
-        ++updateIndex[j - 1];
-        ++targetIndex[j - 1];
-      }
-    }
-  }
-  return DenseElementsAttr::get(targetType, targetValues);
-}
-
 OpFoldResult TensorUpdateOp::fold(FoldAdaptor operands) {
   bool allIndicesConstant =
       llvm::count(operands.getStartIndices(), nullptr) == 0;
@@ -1334,7 +1349,41 @@ void TensorUpdateOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.insert<ReplaceOpIfTensorOperandZeroElements<TensorUpdateOp, 0>>(
       context);
   // update:
-  results.insert<ReplaceOpIfTensorUpdateOperandZeroElements>(context);
+  results.insert<ReplaceOpWithDstIfSrcIsZeroElements<TensorUpdateOp, 1, 0>>(context);
+}
+
+//===----------------------------------------------------------------------===//
+// flow.tensor.move
+//===----------------------------------------------------------------------===//
+
+OpFoldResult TensorMoveOp::fold(FoldAdaptor operands) {
+  bool allIndicesConstant =
+      llvm::count(operands.getStartIndices(), nullptr) == 0;
+  if (operands.getUpdate() && operands.getTarget() && allIndicesConstant) {
+    // Fully constant arguments so we can perform the update here.
+    return tensorUpdate(llvm::cast<ElementsAttr>(operands.getUpdate()),
+                        llvm::cast<ElementsAttr>(operands.getTarget()),
+                        operands.getStartIndices());
+  } else {
+    // Replace the entire tensor when the sizes match.
+    auto updateType = llvm::cast<ShapedType>(getUpdate().getType());
+    auto targetType = llvm::cast<ShapedType>(getTarget().getType());
+    if (updateType.hasStaticShape() && targetType.hasStaticShape() &&
+        updateType == targetType) {
+      return getUpdate();
+    }
+  }
+  return {};
+}
+
+void TensorMoveOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                 MLIRContext *context) {
+  // TODO(raikonenfnu): If guaranteed no overlap then convert to TensorUpdateOp.
+  // target:
+  results.insert<ReplaceOpIfTensorOperandZeroElements<TensorMoveOp, 0>>(
+      context);
+  // update:
+  results.insert<ReplaceOpWithDstIfSrcIsZeroElements<TensorUpdateOp, 1, 0>>(context);
 }
 
 //===----------------------------------------------------------------------===//

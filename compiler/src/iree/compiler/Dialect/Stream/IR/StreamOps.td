@@ -1638,6 +1638,76 @@ def Stream_TensorUpdateOp : Stream_Op<"tensor.update", [
   let hasFolder = 1;
 }
 
+def Stream_TensorMoveOp : Stream_Op<"tensor.move", [
+  AttrSizedOperandSegments,
+  AllTypesMatch<["target", "result"]>,
+  Stream_AffinityOp,
+  Stream_StreamableOp,
+  Stream_TensorPhaseOp,
+  Util_ShapeAwareOp,
+  Util_SizeAwareOp,
+  DeclareOpInterfaceMethods<Util_TiedOpInterface, [
+    "getTiedResult",
+    "getTiedResultOperandIndex",
+    "getTiedResultOperandIndices",
+  ]>,
+]> {
+  let summary = [{updates a slice of a subview of a resource in-place with intermediate buffer}];
+  let description = [{
+    Copies a value into an intermediate buffer, and then update target
+    resource based on tensor encodings. The returned value is the entire
+    updated target value.
+
+    Unlike tensor.update/memcpy, this supports overlapping of data between
+    update and target, since it utilizes an intermediate buffer.
+  }];
+
+  let arguments = (ins
+    Stream_AnyStreamResource:$target,
+    TypeAttr:$target_encoding,
+    Stream_ShapeDynamicDims:$target_encoding_dims,
+    Stream_Size:$target_size,
+    Variadic<Stream_Dim>:$start_indices,
+    Stream_AnyStreamResource:$update,
+    TypeAttr:$update_encoding,
+    Stream_ShapeDynamicDims:$update_encoding_dims,
+    Stream_Size:$update_size,
+    OptionalAttr<Stream_AffinityAttr>:$affinity
+  );
+  let results = (outs
+    Stream_AnyStreamResource:$result
+  );
+
+  let assemblyFormat = [{
+    (`on` `(` $affinity^ `)`)?
+    $update `,` $target `[` $start_indices `]` `:`
+    $update_encoding (`` `{` $update_encoding_dims^ `}`)?
+    `in`
+    type($update) `` `{` $update_size `}`
+    `->`
+    $target_encoding (`` `{` $target_encoding_dims^ `}`)?
+    `in`
+    custom<ShapedTiedResult>(type($target), $target_size)
+    attr-dict-with-keyword
+  }];
+
+  let extraClassDeclaration = [{
+    ValueRange getOperandDynamicDims(unsigned idx) {
+      return idx == 0 ? getTargetEncodingDims() : getUpdateEncodingDims();
+    }
+    ValueRange getResultDynamicDims(unsigned idx) { return getTargetEncodingDims(); }
+    Value getOperandSize(unsigned idx) {
+      return idx == 0 ? getTargetSize() : getUpdateSize();
+    }
+    Value getResultSize(unsigned idx) { return getTargetSize(); }
+  }];
+
+  let hasVerifier = 1;
+
+  let hasCanonicalizer = 1;
+  let hasFolder = 1;
+}
+
 def Stream_TensorLoadOp : Stream_PureOp<"tensor.load", [
   AttrSizedOperandSegments,
   Stream_TensorPhaseOp,

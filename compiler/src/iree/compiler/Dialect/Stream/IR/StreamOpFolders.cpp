@@ -1438,6 +1438,20 @@ void TensorUpdateOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 //===----------------------------------------------------------------------===//
+// stream.tensor.move
+//===----------------------------------------------------------------------===//
+
+OpFoldResult TensorMoveOp::fold(FoldAdaptor operands) {
+  // TODO(raikonenfnu): fold if target_size == update_size and affinity/lifetime.
+  return {};
+}
+
+void TensorMoveOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                 MLIRContext *context) {
+  // TODO(raikonenfnu): turn into tensor.update iff guaranteed no overlap.
+}
+
+//===----------------------------------------------------------------------===//
 // stream.tensor.load
 //===----------------------------------------------------------------------===//
 
