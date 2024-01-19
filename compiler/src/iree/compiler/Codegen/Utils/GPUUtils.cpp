@@ -863,6 +863,12 @@ bool hasSharedMemoryAddressSpace(MemRefType memrefType) {
          addrSpace.getValue() == gpu::GPUDialect::getWorkgroupAddressSpace();
 }
 
+bool hasGlobalMemoryAddressSpace(MemRefType memrefType) {
+  auto addrSpace = llvm::dyn_cast_if_present<gpu::AddressSpaceAttr>(
+      memrefType.getMemorySpace());
+  return addrSpace && addrSpace.getValue() == gpu::AddressSpace::Global;
+}
+
 //===----------------------------------------------------------------------===//
 // GPU CodeGen op filter
 //===----------------------------------------------------------------------===//

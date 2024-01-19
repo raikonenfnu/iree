@@ -47,7 +47,8 @@ struct LLVMGPUCastAddressSpaceFunctionPass
       bool anyCasted = false;
       for (auto operand : operands) {
         if (auto memrefType = dyn_cast<mlir::MemRefType>(operand.getType())) {
-          if (hasSharedMemoryAddressSpace(memrefType)) {
+          if (hasSharedMemoryAddressSpace(memrefType) ||
+              hasGlobalMemoryAddressSpace(memrefType)) {
             mlir::MemRefType new_memrefType = mlir::MemRefType::get(
                 memrefType.getShape(), memrefType.getElementType(),
                 memrefType.getLayout());
