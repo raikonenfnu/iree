@@ -14,6 +14,8 @@
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#define DEBUG_TYPE "iree-spirv-vector-to-gpu-subgroup-mma-ops"
+
 namespace mlir::iree_compiler {
 
 namespace {
@@ -34,6 +36,12 @@ struct SPIRVVectorToGPUSubgroupMMAPass final
       return signalPassFailure();
     }
 
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After vector transfer ops to mma preparations ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
     RewritePatternSet patterns(funcOp.getContext());
     mlir::vector::populateCastAwayVectorLeadingOneDimPatterns(patterns);
     populatePrepareVectorToMMAPatterns(patterns, /*useNvGpu=*/false);
@@ -42,11 +50,23 @@ struct SPIRVVectorToGPUSubgroupMMAPass final
       return signalPassFailure();
     }
 
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After misc vector ops to mma preparations ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
+
     IRRewriter rewriter(&getContext());
     if (failed(convertVectorToMMAOps(rewriter, funcOp))) {
       funcOp->emitError("failed conversion to GPU subgroup MMA ops");
       return signalPassFailure();
     }
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "--- After converting vector to MMA ---\n";
+      funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+      llvm::dbgs() << "\n\n";
+    });
 
     // Make sure we actually generate GPU subgroup mma ops.
     WalkResult result = funcOp.walk([](Operation *op) {

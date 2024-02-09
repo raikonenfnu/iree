@@ -443,6 +443,15 @@ public:
 
     debugPrint(funcOp, "after unrolling vector ops");
 
+    {
+      RewritePatternSet patterns(context);
+      vector::populateDropUnitDimWithShapeCastPatterns(patterns);
+      if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+        return signalPassFailure();
+      }
+    }
+    debugPrint(funcOp, "after cleaning vector unit dims");
+
     // When using cooperative matrix we don't want to lower the contract,
     // instead we want to merge contract and transpose so that they can be
     // converted to cooperative matrix matmul op.

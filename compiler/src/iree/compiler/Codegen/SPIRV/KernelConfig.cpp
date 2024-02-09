@@ -996,11 +996,22 @@ LogicalResult setCooperativeMatrixConfig(
   Value init = op.getDpsInitOperand(0)->get();
 
   int lastParallelDim = -1;
-  const auto [bIndex, mIndex, nIndex, kIndex] =
-      getMatmulBMNKIndex(op, &lastParallelDim);
-  if (mIndex < 0 || nIndex < 0 || kIndex < 0)
+  getMatmulBMNKIndex(op, &lastParallelDim);
+  FailureOr<mlir::linalg::ContractionDimensions> contractionDims =
+      mlir::linalg::inferContractionDims(op);
+  if (failed(contractionDims))
     return failure();
-  const bool isBM = bIndex >= 0;
+  if (contractionDims->m.size() != 1 || contractionDims->n.size() != 1 ||
+      contractionDims->k.size() == 0)
+    return failure();
+  int bIndex = -1;
+  const bool isBM = contractionDims->batch.size() == 1;
+  const int numReductionDims = contractionDims->k.size();
+  if (isBM)
+    bIndex = contractionDims->batch[0];
+  const int mIndex = contractionDims->m[0];
+  const int nIndex = contractionDims->n[0];
+  const int kIndex = contractionDims->k[numReductionDims - 1];
 
   SmallVector<int64_t> loopRanges = op.getStaticLoopRanges();
 
@@ -1048,7 +1059,10 @@ LogicalResult setCooperativeMatrixConfig(
     vectorSizes[bIndex] = 1;
   vectorSizes[mIndex] = coopMatSize->mSize;
   vectorSizes[nIndex] = coopMatSize->nSize;
-  vectorSizes[kIndex] = coopMatSize->kSize;
+  for (int i = 0; i < numReductionDims; i++) {
+    vectorSizes[contractionDims->k[i]] =
+        i == numReductionDims - 1 ? coopMatSize->kSize : 1;
+  }
 
   SmallVector<int64_t> subgroupTileSizes(lastParallelDim + 1, 0);
   if (isBM)
@@ -1067,9 +1081,13 @@ LogicalResult setCooperativeMatrixConfig(
   // Also create one level for reduction. This is needed because of
   // SPIRVTileAndPromotePass requires it.
   // TODO(#10499): Consolidate tiling configuration across different pipelines.
-  SmallVector<int64_t> reductionTileSizes;
-  reductionTileSizes.append(kIndex, 0);
-  reductionTileSizes.push_back(coopMatSize->kTileCount * coopMatSize->kSize);
+  SmallVector<int64_t> reductionTileSizes(kIndex + 1, 0);
+  // reductionTileSizes[kIndex] = coopMatSize->kTileCount * coopMatSize->kSize;
+  for (int i = 0; i < numReductionDims; i++) {
+    reductionTileSizes[contractionDims->k[i]] =
+        i == numReductionDims - 1 ? coopMatSize->kTileCount * coopMatSize->kSize
+                                  : 1;
+  }
 
   TileSizesListType tileSizes;
   tileSizes.reserve(3);

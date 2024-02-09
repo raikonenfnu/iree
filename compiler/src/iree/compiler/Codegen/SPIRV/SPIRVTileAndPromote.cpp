@@ -165,6 +165,12 @@ void SPIRVTileAndPromotePass::runOnOperation() {
   if (failed(doPromoteCMatrix(funcOp)))
     return signalPassFailure();
 
+  LLVM_DEBUG({
+    llvm::dbgs() << "--- After promote C matrix ---\n";
+    funcOp.print(llvm::dbgs(), OpPrintingFlags().useLocalScope());
+    llvm::dbgs() << "\n\n";
+  });
+
   StringLiteral markerAttrName =
       IREE::LinalgExt::LinalgTransforms::kLinalgTransformMarker;
   auto workgroupMarker = StringAttr::get(context, getWorkgroupMemoryMarker());
@@ -315,6 +321,10 @@ LogicalResult SPIRVTileAndPromotePass::doPromoteCMatrix(
 
   auto matmulOp = cast<linalg::LinalgOp>(linalgOps.front());
   auto genericOp = cast<linalg::GenericOp>(*linalgOps.back());
+  // If matmulOp is not producer skip.
+  if (!linalg::isaContractionOpInterface(matmulOp)) {
+    return success();
+  }
 
   auto matmulType =
       llvm::cast<MemRefType>(matmulOp.getDpsInitOperand(0)->get().getType());
