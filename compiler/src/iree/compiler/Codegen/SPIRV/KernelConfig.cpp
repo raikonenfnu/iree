@@ -1070,21 +1070,15 @@ LogicalResult setCooperativeMatrixConfig(
   subgroupTileSizes[mIndex] = coopMatSize->mTileCount * vectorSizes[mIndex];
   subgroupTileSizes[nIndex] = coopMatSize->nTileCount * vectorSizes[nIndex];
 
-  SmallVector<int64_t> workgroupTileSizes(lastParallelDim + 1, 0);
+  SmallVector<int64_t> workgroupTileSizes(kIndex + 1, 0);
   if (isBM)
     workgroupTileSizes[bIndex] = 1;
   workgroupTileSizes[mIndex] =
       coopMatSize->mWarpCount * subgroupTileSizes[mIndex];
   workgroupTileSizes[nIndex] =
       coopMatSize->nWarpCount * subgroupTileSizes[nIndex];
-
-  // Also create one level for reduction. This is needed because of
-  // SPIRVTileAndPromotePass requires it.
-  // TODO(#10499): Consolidate tiling configuration across different pipelines.
-  SmallVector<int64_t> reductionTileSizes(kIndex + 1, 0);
-  // reductionTileSizes[kIndex] = coopMatSize->kTileCount * coopMatSize->kSize;
   for (int i = 0; i < numReductionDims; i++) {
-    reductionTileSizes[contractionDims->k[i]] =
+    workgroupTileSizes[contractionDims->k[i]] =
         i == numReductionDims - 1 ? coopMatSize->kTileCount * coopMatSize->kSize
                                   : 1;
   }
@@ -1093,7 +1087,6 @@ LogicalResult setCooperativeMatrixConfig(
   tileSizes.reserve(3);
   tileSizes.push_back(workgroupTileSizes);
   tileSizes.push_back(subgroupTileSizes);
-  tileSizes.push_back(reductionTileSizes);
   tileSizes.push_back(vectorSizes);
 
   // Don't do multibuffering if the inner reduction loop is folded out.
@@ -1111,7 +1104,7 @@ LogicalResult setCooperativeMatrixConfig(
   const int maxBytes = limits.getMaxComputeSharedMemorySize();
   auto usedBytes =
       getTileBytes(workgroupTileSizes[mIndex], workgroupTileSizes[nIndex],
-                   reductionTileSizes[kIndex],
+                   workgroupTileSizes[kIndex],
                    IREE::Util::getTypeBitWidth(getElementType(lhs)), promoteC);
 
   while (pipelineDepth > 0 &&

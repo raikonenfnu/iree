@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "iree/compiler/Codegen/Transforms/Transforms.h"
+#include "iree/compiler/Codegen/Utils/GPUUtils.h"
 
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenOps.h"
 #include "llvm/Support/Debug.h"
@@ -113,7 +114,8 @@ std::optional<Value> hoistOneStaticallyBoundAllocation(
     builder.setInsertionPointToStart(&funcOp.getFunctionBody().front());
     Value allocation =
         builder.create<AllocLikeOpType>(loc, allocLikeType, alignmentAttr);
-    if (std::is_same<AllocLikeOpType, memref::AllocOp>::value) {
+    if (std::is_same<AllocLikeOpType, memref::AllocOp>::value &&
+        !hasSharedMemoryAddressSpace(allocLikeType)) {
       builder.setInsertionPoint(
           funcOp.getFunctionBody().front().getTerminator());
       builder.create<memref::DeallocOp>(loc, allocation);

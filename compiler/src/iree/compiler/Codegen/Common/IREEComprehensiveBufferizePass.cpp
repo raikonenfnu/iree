@@ -237,6 +237,8 @@ std::unique_ptr<OperationPass<ModuleOp>> createIREEComprehensiveBufferizePass(
 
 void addIREEPostBufferizationPasses(OpPassManager &passManager) {
   passManager.addPass(memref::createResolveShapedTypeResultDimsPass());
+  passManager.addNestedPass<func::FuncOp>(
+      createHoistStaticallyBoundAllocationsPass());
   passManager.addNestedPass<func::FuncOp>(createCanonicalizerPass());
   passManager.addNestedPass<func::FuncOp>(createCSEPass());
   // There are redundant memcpy (with linalg.generic form) ops created, which

@@ -62,7 +62,7 @@ void debugPrint(Operation *op, const char *message) {
 /// Gets the chosen hardware cooperative op size attached to the given `op`
 /// as CodeGen lowering configuration.
 static SmallVector<int64_t> getTargetCooperativeOpSize(linalg::LinalgOp op) {
-  return getTileSizes(op, 3); // For native vector sizes
+  return getTileSizes(op, 2); // For native vector sizes
 }
 
 constexpr char coopMatTypeAttrName[] = "iree.spirv.coopmatrix.type";
@@ -109,16 +109,24 @@ getSPIRVCooperativeMatrixShape(mlir::FunctionOpInterface funcOp) {
 static SmallVector<int64_t> deduceSubgroupCounts(linalg::LinalgOp op) {
   SmallVector<int64_t> workgroupTileSizes = getTileSizes(op, 0);
   SmallVector<int64_t> subgroupTileSizes = getTileSizes(op, 1);
-  assert(workgroupTileSizes.size() == subgroupTileSizes.size());
+  SmallVector<int64_t> parallelWorkgroupTileSizes;
+  SmallVector<unsigned> partitionedLoops =
+      cast<PartitionableLoopsInterface>(op.getOperation())
+          .getPartitionableLoops(kNumMaxParallelDims);
+  for (int64_t loopIndex : partitionedLoops) {
+    parallelWorkgroupTileSizes.push_back(workgroupTileSizes[loopIndex]);
+  }
+  assert(parallelWorkgroupTileSizes.size() == subgroupTileSizes.size());
 
   SmallVector<int64_t> subgroupCounts;
-  for (int i = 0, e = workgroupTileSizes.size(); i < e; ++i) {
+  for (int i = 0, e = parallelWorkgroupTileSizes.size(); i < e; ++i) {
     if (subgroupTileSizes[i] == 0)
       continue;
     if (linalg::isReductionIterator(op.getIteratorTypesArray()[i]))
       continue;
-    assert(workgroupTileSizes[i] % subgroupTileSizes[i] == 0);
-    subgroupCounts.push_back(workgroupTileSizes[i] / subgroupTileSizes[i]);
+    assert(parallelWorkgroupTileSizes[i] % subgroupTileSizes[i] == 0);
+    subgroupCounts.push_back(parallelWorkgroupTileSizes[i] /
+                             subgroupTileSizes[i]);
   }
   LLVM_DEBUG({
     llvm::dbgs() << "deduced subgroup counts (X, Y, Z) = [";
@@ -230,7 +238,8 @@ getCooperativeOpVectorShape(Operation *op, ArrayRef<int64_t> nativeShape) {
     // There can exist vector.transfer_write for initializing output. Unroll
     // them to native shape. Native shape is for ([B, ]M, N, K), here we only
     // need ([B, ]M, N).
-    return llvm::to_vector(nativeShape.drop_back());
+    // TODO(raikonenfnu): Query iterator types to select shape.
+    return llvm::to_vector(nativeShape.take_front(2));
   }
 
   if (auto readOp = dyn_cast<vector::TransferReadOp>(op)) {
@@ -362,6 +371,9 @@ public:
     // given that after tiling and vectorization we won't have the root Linalg
     // op anymore.
     SmallVector<int64_t> cooperativeOpSize = getTargetCooperativeOpSize(rootOp);
+    // TODO(raikonenfnu): Add setting of loop iterator type to query.
+    // SmallVector<int64_t> cooperativeOpSize =
+    // getTargetCooperativeOpSize(rootOp);
     setSPIRVCooperativeMatrixInfo(funcOp, rootOp, cooperativeOpSize);
 
     SmallVector<int64_t> subgroupCounts = deduceSubgroupCounts(rootOp);

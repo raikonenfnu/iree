@@ -13,6 +13,7 @@
 #include "iree/compiler/Codegen/Transforms/Transforms.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Codegen/Utils/MarkerUtils.h"
+#include "iree/compiler/Dialect/Flow/Transforms/RegionOpUtils.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -189,6 +190,20 @@ LogicalResult tileReductionToSerialLoops(mlir::FunctionOpInterface funcOp,
                                             std::move(wgTilingPatterns)))) {
       return failure();
     }
+  }
+
+  // Attach markers to ops without them to drive tiling next.
+  {
+    StringLiteral markerAttrName =
+        IREE::LinalgExt::LinalgTransforms::kLinalgTransformMarker;
+    auto workgroupMarker =
+        StringAttr::get(funcOp.getContext(), getWorkgroupMemoryMarker());
+    funcOp.walk([&](linalg::LinalgOp op) {
+      auto marker = op->getAttrOfType<StringAttr>(markerAttrName);
+      if (!marker || marker.getValue() != getCopyToWorkgroupMemoryMarker()) {
+        op->setAttr(markerAttrName, workgroupMarker);
+      }
+    });
   }
 
   {

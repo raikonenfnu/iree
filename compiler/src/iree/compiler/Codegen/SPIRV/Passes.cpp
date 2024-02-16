@@ -408,13 +408,23 @@ void addSPIRVCooperativeMatrixVectorizePassPipeline(OpPassManager &pm,
 
   auto &nestedModulePM = pm.nest<ModuleOp>();
 
-  addBufferizePasses(nestedModulePM, gpuAllocateWorkgroupMemoryFn);
-
-  // Tile to GPU workgroups and promote.
-  nestedModulePM.addNestedPass<func::FuncOp>(createSPIRVTileAndPromotePass(
-      /*promoteCMatrix=*/true, /*skipThreadLevel=*/true));
+  // Promote to workgroups and tile to threads.
+  // TODO: Rework createGPUTensorTile + createGPUDistribute to replace
+  // SPIRVTileToCooperativeOp.
+  nestedModulePM.addNestedPass<func::FuncOp>(
+      createGPUTensorTileToSerialLoops());
+  nestedModulePM.addNestedPass<func::FuncOp>(createGPUTensorAlloc());
   nestedModulePM.addNestedPass<func::FuncOp>(
       createRemoveSingleIterationLoopPass());
+  //   nestedModulePM.addNestedPass<func::FuncOp>(
+  //       createGPUTensorTile(/*distributeToWarp=*/true));
+
+  // Bufferize.
+  addBufferizePasses(nestedModulePM, gpuAllocateWorkgroupMemoryFn);
+
+  // Distribute scf.forall to GPU threads.
+  //   nestedModulePM.addNestedPass<func::FuncOp>(createGPUDistribute());
+
   // Run canonicalization patterns to propagate constant shape sizes after
   // removing trip-one loops.
   nestedModulePM.addPass(createCanonicalizerPass());
