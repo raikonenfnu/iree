@@ -39,6 +39,13 @@ def CleanupBufferAllocView :
   let constructor = "mlir::iree_compiler::createCleanupBufferAllocViewPass()";
 }
 
+def CollapseNestedTiledForOps :
+    InterfacePass<"iree-codegen-collapse-nested-tiled-for-ops", "mlir::FunctionOpInterface"> {
+  let summary =
+      "Pass to collapses tiled nested forOps into a single forOp";
+  let constructor = "mlir::iree_compiler::createCollapseNestedTiledForOpsPass()";
+}
+
 def ConcretizePadResultShape :
     InterfacePass<"iree-codegen-concretize-pad-result-shape", "mlir::FunctionOpInterface"> {
   let summary =

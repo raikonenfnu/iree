@@ -64,6 +64,11 @@ createBufferizeCopyOnlyDispatchesPass();
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
 createCleanupBufferAllocViewPass();
 
+/// Pass to collapses tiled nested forOps into a single forOp.
+/// This pass also handles delinearization of indices.
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createCollapseNestedTiledForOpsPass();
+
 /// Concretizes tensor.pad op's result shape if its source op implements
 /// OffsetSizeAndStrideOpInterface. For example, pad(extract_slice).
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
