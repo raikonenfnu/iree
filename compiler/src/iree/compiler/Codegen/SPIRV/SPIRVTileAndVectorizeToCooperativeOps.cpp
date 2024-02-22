@@ -110,11 +110,10 @@ static SmallVector<int64_t> deduceSubgroupCounts(linalg::LinalgOp op) {
   SmallVector<int64_t> workgroupTileSizes = getTileSizes(op, 0);
   SmallVector<int64_t> subgroupTileSizes = getTileSizes(op, 1);
   SmallVector<int64_t> parallelWorkgroupTileSizes;
-  SmallVector<unsigned> partitionedLoops =
-      cast<PartitionableLoopsInterface>(op.getOperation())
-          .getPartitionableLoops(kNumMaxParallelDims);
-  for (int64_t loopIndex : partitionedLoops) {
-    parallelWorkgroupTileSizes.push_back(workgroupTileSizes[loopIndex]);
+  SmallVector<unsigned> parallelDims;
+  op.getParallelDims(parallelDims);
+  for (int64_t dim : parallelDims) {
+    parallelWorkgroupTileSizes.push_back(workgroupTileSizes[dim]);
   }
   assert(parallelWorkgroupTileSizes.size() == subgroupTileSizes.size());
 
@@ -229,17 +228,30 @@ getCooperativeOpVectorShape(Operation *op, ArrayRef<int64_t> nativeShape) {
   // the corresponding cooperative matrix configuration.
 
   if (auto writeOp = dyn_cast<vector::TransferWriteOp>(op)) {
+    // Handling case where src is from InsertStridedSliceOp:
     auto insert =
         writeOp.getVector().getDefiningOp<vector::InsertStridedSliceOp>();
     if (insert) {
       return llvm::to_vector(insert.getSourceVectorType().getShape());
     }
 
+    // Handling case where src is from contractionOp:
+    auto contract = writeOp.getVector().getDefiningOp<vector::ContractionOp>();
+    if (contract && contract.getIteratorTypes().size() == nativeShape.size()) {
+      SmallVector<int64_t> writeNativeShape;
+      for (auto [index, iter] : llvm::enumerate(contract.getIteratorTypes())) {
+        if (vector::isParallelIterator(iter)) {
+          writeNativeShape.push_back(nativeShape[index]);
+        }
+      }
+      return writeNativeShape;
+    }
+
+    // Handling default case:
     // There can exist vector.transfer_write for initializing output. Unroll
     // them to native shape. Native shape is for ([B, ]M, N, K), here we only
     // need ([B, ]M, N).
-    // TODO(raikonenfnu): Query iterator types to select shape.
-    return llvm::to_vector(nativeShape.take_front(2));
+    return llvm::to_vector(nativeShape.drop_back());
   }
 
   if (auto readOp = dyn_cast<vector::TransferReadOp>(op)) {
@@ -371,9 +383,6 @@ public:
     // given that after tiling and vectorization we won't have the root Linalg
     // op anymore.
     SmallVector<int64_t> cooperativeOpSize = getTargetCooperativeOpSize(rootOp);
-    // TODO(raikonenfnu): Add setting of loop iterator type to query.
-    // SmallVector<int64_t> cooperativeOpSize =
-    // getTargetCooperativeOpSize(rootOp);
     setSPIRVCooperativeMatrixInfo(funcOp, rootOp, cooperativeOpSize);
 
     SmallVector<int64_t> subgroupCounts = deduceSubgroupCounts(rootOp);

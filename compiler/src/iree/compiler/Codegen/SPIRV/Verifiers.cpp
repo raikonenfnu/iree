@@ -213,7 +213,7 @@ LogicalResult verifySPIRVCooperativeMatrixVectorizePassPipeline(
   }
 
   // Verify that there are four level of tile sizes.
-  if (loweringConfig.getTilingLevels().size() != 4) {
+  if (loweringConfig.getTilingLevels().size() != 3) {
     return op->emitOpError("expected 4 levels of tiling sizes, got ")
            << loweringConfig.getTilingLevels().size();
   }
@@ -227,9 +227,7 @@ LogicalResult verifySPIRVCooperativeMatrixVectorizePassPipeline(
       loweringConfig.getTileSizeVals(kWorkgroupTileLevel);
   SmallVector<int64_t> subgroupTileSizes =
       loweringConfig.getTileSizeVals(kThreadTileLevel);
-  SmallVector<int64_t> reductionTileSizes =
-      loweringConfig.getTileSizeVals(kReductionTileLevel);
-  SmallVector<int64_t> nativeVectorSizes = loweringConfig.getTileSizeVals(3);
+  SmallVector<int64_t> nativeVectorSizes = loweringConfig.getTileSizeVals(2);
 
   // For BatchMatmul, the first dimension is the batch dimension.
   // We don't check the batch.
@@ -238,7 +236,6 @@ LogicalResult verifySPIRVCooperativeMatrixVectorizePassPipeline(
     rhsShape = rhsShape.drop_front(1);
     workgroupTileSizes.erase(workgroupTileSizes.begin());
     subgroupTileSizes.erase(subgroupTileSizes.begin());
-    reductionTileSizes.erase(reductionTileSizes.begin());
     nativeVectorSizes.erase(nativeVectorSizes.begin());
   }
 
@@ -268,7 +265,7 @@ LogicalResult verifySPIRVCooperativeMatrixVectorizePassPipeline(
       isNativeVectorSizeAccepted = true;
       if (subgroupTileSizes[0] % p.getMSize() != 0 ||
           subgroupTileSizes[1] % p.getNSize() != 0 ||
-          reductionTileSizes[2] % p.getKSize() != 0) {
+          workgroupTileSizes[2] % p.getKSize() != 0) {
         return op->emitOpError(
                    "expected subgroup tile sizes to be multiple of ")
                << "[" << p.getMSize() << ", " << p.getNSize() << ", "
@@ -285,10 +282,10 @@ LogicalResult verifySPIRVCooperativeMatrixVectorizePassPipeline(
 
   // Verify the tile size divides the matmul inputs A [M x K] & B [K x N].
   const int64_t dimM = lhsShape[0], dimN = rhsShape[1], dimK = lhsShape[1];
-  if (dimM % workgroupTileSizes[0] != 0 || dimK % reductionTileSizes[2] != 0) {
+  if (dimM % workgroupTileSizes[0] != 0 || dimK % workgroupTileSizes[2] != 0) {
     return op->emitOpError("LHS shape is indivisible by first level tile size");
   }
-  if (dimK % reductionTileSizes[2] != 0 || dimN % workgroupTileSizes[1] != 0) {
+  if (dimK % workgroupTileSizes[2] != 0 || dimN % workgroupTileSizes[1] != 0) {
     return op->emitOpError("RHS shape is indivisible by first level tile size");
   }
 
