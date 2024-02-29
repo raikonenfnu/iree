@@ -9,6 +9,7 @@
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALTypes.h"
 #include "llvm/Support/Debug.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
@@ -227,9 +228,11 @@ static bool setPipeliningMarkers(scf::ForOp forOp, bool pipelineStoreStage) {
     if (!ld)
       continue;
     auto ldSrcType = llvm::cast<MemRefType>(ld.getSource().getType());
-    if (!hasDefaultOrHALAddressSpace(ldSrcType) || !ld->hasOneUse())
+    if (!hasDefaultOrHALAddressSpace(ldSrcType))
       continue;
-    auto st = dyn_cast<vector::TransferWriteOp>(ld->use_begin()->getOwner());
+    SetVector<Operation *> intermediateOps;
+    mlir::getForwardSlice(ld.getOperation(), &intermediateOps);
+    auto st = dyn_cast<vector::TransferWriteOp>(intermediateOps.back());
     if (!st)
       continue;
     auto stSrcType = llvm::cast<MemRefType>(st.getSource().getType());

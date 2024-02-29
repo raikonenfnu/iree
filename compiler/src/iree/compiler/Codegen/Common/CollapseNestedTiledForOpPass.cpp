@@ -9,6 +9,7 @@
 #include "iree/compiler/Codegen/Common/PassDetail.h"
 #include "iree/compiler/Codegen/Common/Passes.h"
 #include "mlir/Dialect/Affine/Transforms/Transforms.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Builders.h"
@@ -150,7 +151,6 @@ struct SinkAndCollapseForOpToChildForOp final
 
     // Sink non-forOps of parentForOp into the childForOp.
     // TODO: Maybe make two pattern, 1.Sink, 2.Collapse, to prevent one-shotty.
-    int numSunkenOps = 0;
     Operation *recentChildOp = &childForOp.getBody()->front();
     for (Operation &childOp :
          llvm::make_early_inc_range(parentForOp.getOps())) {
@@ -159,10 +159,7 @@ struct SinkAndCollapseForOpToChildForOp final
         continue;
       }
       rewriter.moveOpBefore(&childOp, recentChildOp);
-      numSunkenOps++;
     }
-    if (numSunkenOps < 1)
-      return failure();
 
     // Flatten the loop bounds and steps.
     int64_t collapsedUbInt = childUbInt.value() * parentUbInt.value();

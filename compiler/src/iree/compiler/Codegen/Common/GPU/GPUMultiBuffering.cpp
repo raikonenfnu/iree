@@ -7,7 +7,9 @@
 #include "iree/compiler/Codegen/Common/GPU/PassDetail.h"
 #include "iree/compiler/Codegen/Common/GPU/Passes.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
+#include "iree/compiler/Codegen/Utils/MarkerUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/IR/Dominance.h"
@@ -15,6 +17,21 @@
 namespace mlir::iree_compiler {
 
 namespace {
+/// Filter to decide which contraction ops need allocations.
+static bool writeToWorkgroupMemory(linalg::GenericOp op) {
+  // If write to workgroup memory.
+  if (!hasMarker(op, getCopyToWorkgroupMemoryMarker()))
+    return false;
+  for (auto dpsInit : op.getDpsInits()) {
+    if (auto dpsInitMemrefType =
+            llvm::dyn_cast<MemRefType>(dpsInit.getType())) {
+      if (hasSharedMemoryAddressSpace(dpsInitMemrefType))
+        return true;
+    }
+  }
+  return false;
+}
+
 struct GPUMultiBufferingPass
     : public GPUMultiBufferingBase<GPUMultiBufferingPass> {
   GPUMultiBufferingPass(unsigned numBuffers) : numBuffers(numBuffers) {}
@@ -65,6 +82,22 @@ struct GPUMultiBufferingPass
         alloc.emitOpError("cannot be multi-buffered");
         return signalPassFailure();
       }
+    }
+
+    // Add sync for genericOps with writes to shared memory.
+    SmallVector<linalg::GenericOp> opsToSync;
+    funcOp.walk([&](linalg::GenericOp op) {
+      if (writeToWorkgroupMemory(op))
+        opsToSync.push_back(op);
+    });
+    for (linalg::GenericOp genericOp : opsToSync) {
+      OpBuilder builder(genericOp);
+      // Insert Barrier before write to wait for memory allocs.
+      builder.setInsertionPoint(genericOp);
+      builder.create<gpu::BarrierOp>(genericOp->getLoc());
+      // Insert Barrier after write to ensure it's ready.
+      builder.setInsertionPointAfter(genericOp);
+      builder.create<gpu::BarrierOp>(genericOp->getLoc());
     }
   }
 

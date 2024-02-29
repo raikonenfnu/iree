@@ -120,7 +120,7 @@ static int getBaseVectorSize(linalg::GenericOp genericOp) {
     operandBW = std::min(operandBW, b);
   }
   int vectorSize = copyVectorNumBits / resultBW;
-  if (operandBW < resultBW && operandBW < 8) {
+  if (operandBW < resultBW && vectorSize * operandBW < 8) {
     // Scale up to make sure we read at least a full byte for the
     // sub-byte-element operand.
     vectorSize *= 8 / operandBW;

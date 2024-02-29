@@ -251,6 +251,11 @@ getCooperativeOpVectorShape(Operation *op, ArrayRef<int64_t> nativeShape) {
     // There can exist vector.transfer_write for initializing output. Unroll
     // them to native shape. Native shape is for ([B, ]M, N, K), here we only
     // need ([B, ]M, N).
+    // TODO: Get better defaultshape, with current default shape.
+    //       we are not unrolling some cases properly
+    //       => cannot fold transfer_read %cst - transfer_write to just cst.
+    // SmallVector<int64_t> defaultNativeShape = {16,16};
+    // return defaultNativeShape;
     return llvm::to_vector(nativeShape.drop_back());
   }
 
