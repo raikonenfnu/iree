@@ -21,6 +21,12 @@ def Convert1X1FilterConv2DToMatmul:
   let constructor = "mlir::iree_compiler::GlobalOptimization::createConvert1X1FilterConv2DToMatmulPass()";
 }
 
+def ConvertMemoryEfficientQK:
+    InterfacePass<"iree-global-opt-convert-memory-efficient-qk", "mlir::FunctionOpInterface"> {
+  let summary = "Converts/rewrite QK formation and computation into a memory efficient form.";
+  let constructor = "mlir::iree_compiler::GlobalOptimization::createConvertMemoryEfficientQKPass()";
+}
+
 def DecomposeConcat :
     Pass<"iree-global-opt-decompose-concat", ""> {
   let summary = "Decomposes concatenations into a destination and a sequence of slice inserts";
