@@ -56,6 +56,8 @@ int getComputeVectorSize(int64_t size) {
 }
 
 int getMemoryVectorSize(Value source, Type scalarType, int64_t size) {
+  // llvm::outs()<<"source:"<<source<<"\n";
+  llvm::outs() << "type:" << scalarType << "\n";
   int bitwidth = scalarType.getIntOrFloatBitWidth();
   while (auto sliceOp = source.getDefiningOp<tensor::ExtractSliceOp>())
     source = sliceOp.getSource();

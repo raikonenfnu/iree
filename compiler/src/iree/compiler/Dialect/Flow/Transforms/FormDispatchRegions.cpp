@@ -553,6 +553,15 @@ isFusableWithConsumer(OpOperand &fusedOperand,
         .Default([](Operation *) { return false; });
   }
 
+  // Insert_slice should be fused with producers if it's producer only has one
+  // use. This help save allocs of transient memory, as well as avoid slow
+  // memcopies.
+  if (auto insertOp = dyn_cast<tensor::InsertSliceOp>(consumer)) {
+    if (producer == insertOp.getSource().getDefiningOp()) {
+      return producer->hasOneUse();
+    }
+  }
+
   // By default, padding should be fused with producers. It is hard to square
   // this with fusion of pad with consumer. So for now split the difference.
   // Either fuse pad with producer or with consumer.

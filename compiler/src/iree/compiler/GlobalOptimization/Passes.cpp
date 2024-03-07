@@ -23,6 +23,11 @@ static llvm::cl::opt<bool> clEnableQuantizedMatmulReassociation(
     llvm::cl::desc(
         "Enables reassociation of quantized matmul ops (experimental)."),
     llvm::cl::init(false));
+static llvm::cl::opt<bool> clEnableConvertMemoryEfficientQKPass(
+    "iree-global-opt-enable-convert-memory-efficient-qk",
+    llvm::cl::desc("Enables rewrite of QK computation for better memory "
+                   "efficiency(experimental)."),
+    llvm::cl::init(false));
 static llvm::cl::opt<bool> clEnableFuseSiluHorizontalMatmul(
     "iree-global-opt-enable-fuse-silu-horizontal-matmul",
     llvm::cl::desc(
@@ -226,7 +231,10 @@ void buildGlobalOptimizationPassPipeline(
       // Strip std.assert & co after we perform optimizations; prior to this we
       // may use the assertions to derive information during analysis.
       .addPredicatedPass(transformOptions.options.stripAssertions,
-                         IREE::Util::createStripDebugOpsPass);
+                         IREE::Util::createStripDebugOpsPass)
+      // Run memory efficinet QK compute rewrite.
+      .addPredicatedPass(clEnableConvertMemoryEfficientQKPass,
+                         createConvertMemoryEfficientQKPass);
 }
 
 namespace {

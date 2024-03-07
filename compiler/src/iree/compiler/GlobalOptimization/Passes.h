@@ -47,6 +47,10 @@ std::unique_ptr<Pass> createCleanupNumericNarrowingPass();
 /// Converts linalg convolution ops with 1x1 kernels into linalg.matmul.
 std::unique_ptr<Pass> createConvert1X1FilterConv2DToMatmulPass();
 
+/// Fuses two matmul ops and a linalg.generic Silu op
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createConvertMemoryEfficientQKPass();
+
 /// Fuses dequantization and matmul linalg.generic ops
 std::unique_ptr<Pass>
 createDecomposeConcatPass(bool enableConcatTransposition = false);
