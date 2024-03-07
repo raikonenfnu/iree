@@ -55,8 +55,8 @@ int getComputeVectorSize(int64_t size) {
   return 1;
 }
 
-int getMemoryVectorSize(Value source, Type scalarType, int64_t size) {
-  int bitwidth = scalarType.getIntOrFloatBitWidth();
+int getMemoryVectorSize(Value source, Type scalarType, int64_t size, unsigned indexBits) {
+  int bitwidth = scalarType.isIndex() ? indexBits : scalarType.getIntOrFloatBitWidth();
   while (auto sliceOp = source.getDefiningOp<tensor::ExtractSliceOp>())
     source = sliceOp.getSource();
   if (!matchPattern(source, m_Constant())) {
@@ -75,7 +75,7 @@ int getMemoryVectorSize(Value source, Type scalarType, int64_t size) {
   return size % 2 == 0 ? 2 : 1;
 }
 
-SmallVector<int64_t> getNativeVectorShapeImpl(VectorTransferOpInterface op) {
+SmallVector<int64_t> getNativeVectorShapeImpl(VectorTransferOpInterface op, unsigned indexBits) {
   auto vecType = op.getVectorType();
   SmallVector<int64_t> nativeSize(vecType.getRank(), 1);
   for (const auto &[index, dim] :
@@ -84,7 +84,7 @@ SmallVector<int64_t> getNativeVectorShapeImpl(VectorTransferOpInterface op) {
       if (dimExpr.getPosition() == op.getPermutationMap().getNumDims() - 1) {
         nativeSize[index] =
             getMemoryVectorSize(op.getSource(), vecType.getElementType(),
-                                vecType.getShape()[index]);
+                                vecType.getShape()[index], indexBits);
       }
     }
   }
@@ -231,7 +231,7 @@ SmallVector<int64_t> getNativeVectorShapeImpl(vector::GatherOp op) {
 }
 
 std::optional<SmallVector<int64_t>>
-getNativeVectorShape(Operation *op, bool targetSupportsDotProd) {
+getNativeVectorShape(Operation *op, bool targetSupportsDotProd, unsigned indexBits) {
   if (OpTrait::hasElementwiseMappableTraits(op) && op->getNumResults() == 1) {
     if (auto vecType = llvm::dyn_cast<VectorType>(op->getResultTypes()[0])) {
       SmallVector<int64_t> nativeSize(vecType.getRank(), 1);
@@ -241,20 +241,22 @@ getNativeVectorShape(Operation *op, bool targetSupportsDotProd) {
   }
 
   return TypeSwitch<Operation *, std::optional<SmallVector<int64_t>>>(op)
-      .Case<VectorTransferOpInterface, vector::MultiDimReductionOp,
-            vector::ReductionOp, vector::TransposeOp, vector::GatherOp>(
+      .Case<vector::MultiDimReductionOp, vector::ReductionOp,
+            vector::TransposeOp, vector::GatherOp>(
           [](auto typedOp) { return getNativeVectorShapeImpl(typedOp); })
       .Case<vector::ContractionOp>([=](auto contract) {
         return getNativeVectorShapeImpl(contract, targetSupportsDotProd);
       })
+      .Case<VectorTransferOpInterface>([&](auto transferOp) {return getNativeVectorShapeImpl(transferOp, indexBits);})
       .Default([](Operation *) { return std::nullopt; });
 }
 
 /// Adds patterns to unroll vector ops to SPIR-V native vector size.
 void populateVectorUnrollPatterns(RewritePatternSet &patterns,
-                                  bool targetSupportsDotProd) {
+                                  bool targetSupportsDotProd,
+                                  unsigned indexBits) {
   auto options = vector::UnrollVectorOptions().setNativeShapeFn(
-      [=](auto op) { return getNativeVectorShape(op, targetSupportsDotProd); });
+      [=](auto op) { return getNativeVectorShape(op, targetSupportsDotProd, indexBits); });
   vector::populateVectorUnrollPatterns(patterns, options);
 }
 
@@ -294,6 +296,9 @@ public:
     registry.insert<linalg::LinalgDialect, vector::VectorDialect,
                     scf::SCFDialect>();
   }
+
+  explicit SPIRVInitialLoweringPass(unsigned indexBits)
+        : indexBits(indexBits) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -409,7 +414,7 @@ public:
     // vectors for memory access and 4/2/1 vector sizes for computation.
     {
       RewritePatternSet patterns(context);
-      populateVectorUnrollPatterns(patterns, emitIntegerDotProdOps);
+      populateVectorUnrollPatterns(patterns, emitIntegerDotProdOps, indexBits);
       if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
         return signalPassFailure();
       }
@@ -504,13 +509,16 @@ public:
       debugPrint(funcOp, "after lowering to SPIR-V dot product");
     }
   }
+  private:
+    // Use 64 bits for index widths.
+    unsigned indexBits;
 };
 
 } // namespace
 
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
-createSPIRVInitialVectorLoweringPass() {
-  return std::make_unique<SPIRVInitialLoweringPass>();
+createSPIRVInitialVectorLoweringPass(unsigned indexBits) {
+  return std::make_unique<SPIRVInitialLoweringPass>(indexBits);
 }
 
 } // namespace mlir::iree_compiler

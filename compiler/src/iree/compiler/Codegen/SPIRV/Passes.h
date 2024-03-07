@@ -110,7 +110,7 @@ createSPIRVFoldProcessorIDUsesPass();
 
 /// Pass to perform initial vector ops lowering to meet SPIR-V requirements.
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
-createSPIRVInitialVectorLoweringPass();
+createSPIRVInitialVectorLoweringPass(unsigned indexWidth = 32);
 
 /// Links SPIR-V HAL executables within the top-level program module.
 std::unique_ptr<OperationPass<mlir::ModuleOp>> createSPIRVLinkExecutablesPass();

@@ -123,7 +123,7 @@ static void addTileAndDistributeToWorkgroupsPasses(
 
 /// Adds passes to lower vector ops to meet SPIR-V requirements.
 static void addSPIRVVectorLoweringPasses(OpPassManager &modulePM) {
-  modulePM.addNestedPass<func::FuncOp>(createSPIRVInitialVectorLoweringPass());
+  modulePM.addNestedPass<func::FuncOp>(createSPIRVInitialVectorLoweringPass(clSPIRVIndexingBits));
   modulePM.addNestedPass<func::FuncOp>(
       createOptimizeTensorInsertExtractSlicesPass());
   modulePM.addNestedPass<func::FuncOp>(createSPIRVFinalVectorLoweringPass());
