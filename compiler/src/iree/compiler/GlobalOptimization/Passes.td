@@ -129,6 +129,12 @@ def SetEncoding : Pass<"iree-global-opt-set-encoding", ""> {
   let constructor = "mlir::iree_compiler::GlobalOptimization::createSetEncodingPass()";
 }
 
+def SimplifyExtArgmax:
+    InterfacePass<"iree-global-opt-simplify-ext-argmax", "mlir::FunctionOpInterface"> {
+  let summary = "Converts/rewrite QK formation and computation into a memory efficient form.";
+  let constructor = "mlir::iree_compiler::GlobalOptimization::createSimplifyExtArgmaxPass()";
+}
+
 def SimplifyPackUnpack : Pass<"iree-global-opt-simplify-pack-unpack", ""> {
   let summary = "Simplifies tensor pack and unpack ops";
   let constructor = "mlir::iree_compiler::GlobalOptimization::createSimplifyPackUnpackPass()";

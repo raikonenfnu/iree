@@ -60,6 +60,7 @@ iree_cc_library(
     "RaiseSpecialOps.cpp"
     "RemoveZeroExtentTensors.cpp"
     "SetEncoding.cpp"
+    "SimplifyExtArgmax.cpp"
     "SimplifyPackUnpack.cpp"
     "Utils.cpp"
   DEPS

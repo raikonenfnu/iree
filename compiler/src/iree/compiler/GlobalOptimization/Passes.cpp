@@ -39,6 +39,11 @@ static llvm::cl::opt<bool> clEnableTransposePropagation(
     llvm::cl::desc(
         "Enables propagation of transpose ops to improve fusion chances."),
     llvm::cl::init(false));
+static llvm::cl::opt<bool>
+    clEnableSimplifyExtArgmax("iree-global-opt-enable-simplify-ext-argmax",
+                              llvm::cl::desc("Simplifies ext-argmax for better"
+                                             "efficiency(experimental)."),
+                              llvm::cl::init(false));
 
 static llvm::cl::opt<bool> clEnableDemoteContractionInputsToBF16(
     "iree-global-opt-enable-demote-contraction-inputs-to-bf16",
@@ -121,6 +126,7 @@ void buildGlobalOptimizationPassPipeline(
                          createFuseSiluHorizontalMatmulPass)
       .addPredicatedPass(clEnableDemoteContractionInputsToBF16,
                          createDemoteContractionInputsToBF16Pass)
+      .addPredicatedPass(clEnableSimplifyExtArgmax, createSimplifyExtArgmaxPass)
       .addPass([&]() {
         return createFuseDequantizationMatmulPass(
             clEnableQuantizedMatmulReassociation);

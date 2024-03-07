@@ -111,6 +111,10 @@ createRemoveZeroExtentTensorsPass();
 /// Sets encoding for tensors to allow tiled execution of operations.
 std::unique_ptr<Pass> createSetEncodingPass();
 
+/// Simplifies ext-argmax.
+std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
+createSimplifyExtArgmaxPass();
+
 /// Simplifies tensor pack/unpack ops to reshape ops.
 std::unique_ptr<Pass> createSimplifyPackUnpackPass();
 
