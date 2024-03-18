@@ -13,7 +13,7 @@ extern "C" __device__ __attribute__((const))
 int64_t __ockl_wfred_min_i64(int64_t);
 extern "C" __device__ __attribute__((const))
 int32_t __ockl_wfred_min_i32(int32_t);
-
+#define WARP_SIZE 64
 /*
 Constraint/Tiling note:
 For simplicity, we distribute all parallel dim across different workgroup, and

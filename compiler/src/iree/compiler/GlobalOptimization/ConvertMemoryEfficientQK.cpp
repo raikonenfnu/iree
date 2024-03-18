@@ -30,16 +30,17 @@ namespace GlobalOptimization {
 namespace {
 
 class ConvertMemoryEfficientKVUpdatePattern final
-    : public OpRewritePattern<flow::TensorUpdateOp> {
+    : public OpRewritePattern<IREE::Flow::TensorUpdateOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(flow::TensorUpdateOp updateOp,
+  LogicalResult matchAndRewrite(IREE::Flow::TensorUpdateOp updateOp,
                                 PatternRewriter &rewriter) const override {
     //   %expanded_1351 = tensor.expand_shape %extracted_slice_1350 [[0, 1, 2],
     //   [3]] : tensor<32x128xf16> into tensor<1x1x32x128xf16>
+    // Check for pattern.
     auto expandOp = dyn_cast_or_null<tensor::ExpandShapeOp>(
-        updateOp.getSource().getDefiningOp());
+        updateOp.getUpdate().getDefiningOp());
     if (!expandOp)
       return failure();
 
@@ -57,8 +58,62 @@ public:
         insertKSliceOp.getDest().getDefiningOp());
     if (!insertKCacheOp)
       return failure();
-    llvm::outs() << updateOp << "\n";
-    return failure();
+
+    // Get shapes of tensors.
+    auto targetType = dyn_cast<TensorType>(updateOp.getTarget().getType());
+    if (!targetType)
+      return failure();
+    auto targetShape = targetType.getShape();
+    if (targetType.getRank() != 4) {
+      return failure();
+    }
+    int64_t numHeads = targetShape[2];
+    int64_t hiddenDim = targetShape[3];
+
+    // Check for shapes of inserts K-Cache.
+    ArrayRef<int64_t> KCacheStaticSize = insertKCacheOp.getStaticSizes();
+    if (KCacheStaticSize.size() != 4)
+      return failure();
+    if (KCacheStaticSize[0] != 1 || KCacheStaticSize[1] != numHeads ||
+        KCacheStaticSize[3] != hiddenDim)
+      return failure();
+    if (insertKCacheOp.getSizes().size() != 1)
+      return failure();
+    auto seqLen = insertKCacheOp.getSizes()[0];
+
+    // Check shapes and offsets of insertNewKSliceOp.
+    auto kSliceSourceType =
+        dyn_cast<TensorType>(insertKSliceOp.getSource().getType());
+    if (!kSliceSourceType)
+      return failure();
+    if (kSliceSourceType.getRank() != 2)
+      return failure();
+    if (kSliceSourceType.getShape()[0] != numHeads ||
+        kSliceSourceType.getShape()[1] != hiddenDim)
+      return failure();
+
+    // Check that insert K-slice is indeed concat.
+    if (insertKSliceOp.getOffsets().size() != 1)
+      return failure();
+    if (insertKSliceOp.getOffsets()[0] != seqLen) {
+      return failure();
+    }
+
+    // Check shape of expandShape
+    auto expandSrcType = dyn_cast<TensorType>(expandOp.getSrc().getType());
+    if (!expandSrcType)
+      return failure();
+    if (expandSrcType.getRank() != 2)
+      return failure();
+    if (expandSrcType.getShape()[0] != numHeads ||
+        expandSrcType.getShape()[1] != hiddenDim)
+      return failure();
+
+    // Use K-Slice directly rather than the data concat and slice.
+    rewriter.startOpModification(expandOp);
+    expandOp.setOperand(insertKSliceOp.getSource());
+    rewriter.finalizeOpModification(expandOp);
+    return success();
   }
 };
 
