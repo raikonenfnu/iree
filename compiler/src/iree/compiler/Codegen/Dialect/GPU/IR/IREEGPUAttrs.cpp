@@ -569,6 +569,7 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
   SmallVector<int64_t, 2> aPermute = {aM, aK};
   SmallVector<int64_t, 2> bPermute = {bK, bN};
   SmallVector<int64_t, 2> cPermute = {cM, cN};
+  llvm::outs()<<"[cM, cN] :"<<cM << "," << cN <<"\n";
 
   auto mfmaAttr = llvm::cast<MFMAAttr>(getIntrinsic());
   MLIRContext *context = getContext();
@@ -595,29 +596,38 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
   SmallVector<int64_t, 2> batchMSizes;
   int64_t currMCount = getSubgroupMCount();
   int64_t currMBatch = getSubgroupMTileCount();
+  llvm::outs()<<"M:";
   for (auto dim : opInfo.getMDims()) {
     int64_t threads = std::gcd(currMCount, bounds[dim]);
     subgroupMBasis.push_back(threads);
     currMCount /= threads;
+    llvm::outs()<<bounds[dim]<<",";
     int64_t batchCount = bounds[dim] / threads;
     batchCount = batchCount >= currMBatch ? currMBatch : batchCount;
     batchMSizes.push_back(batchCount);
     currMBatch /= batchCount;
   }
+  llvm::outs()<<"\n";
 
   SmallVector<int64_t, 2> subgroupNBasis;
   SmallVector<int64_t, 2> batchNSizes;
   int64_t currNCount = getSubgroupNCount();
   int64_t currNBatch = getSubgroupNTileCount();
+  llvm::outs()<<"thread counts:"<<currMCount<<" VS "<<currNCount<<"\n";
+  llvm::outs()<<"batch counts:"<<getSubgroupMTileCount()<<" VS "<<getSubgroupNTileCount()<<"\n";
+  llvm::outs()<<"N:";
+  // batch = [64 / (2), 2
   for (auto dim : opInfo.getNDims()) {
     int64_t threads = std::gcd(currNCount, bounds[dim]);
     subgroupNBasis.push_back(threads);
     currNCount /= threads;
     int64_t batchCount = bounds[dim] / threads;
+    llvm::outs()<<bounds[dim]<<",";
     batchCount = batchCount >= currNBatch ? currNBatch : batchCount;
     batchNSizes.push_back(batchCount);
     currNBatch /= batchCount;
   }
+  llvm::outs()<<"\n";
 
   SmallVector<int64_t> subgroupBasis;
   auto mDimVec = opInfo.getMDims();
@@ -668,6 +678,12 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
   SmallVector<int64_t> cBatchSizes(cRank, 1);
   SmallVector<int64_t> cSubgroupSizes(cRank, 1);
   SmallVector<int64_t> cOverallOrder(cRank, 0);
+  llvm::outs()<<"cMDims:";
+  llvm::interleaveComma(cMDims, llvm::outs());
+  llvm::outs()<<"\n";
+  llvm::outs()<<"cNDims:";
+  llvm::interleaveComma(cNDims, llvm::outs());
+  llvm::outs()<<"\n";
   for (auto [i, dim] : llvm::enumerate(cMDims)) {
     cBatchSizes[dim] = batchMSizes[i];
     cSubgroupSizes[dim] = subgroupMBasis[i];
@@ -685,6 +701,17 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
   SmallVector<bool> cActiveSubgroups(cRank + 1, true);
   cActiveSubgroups.back() = false;
 
+  // auto cLayout = permuteAndCreateNestedLayout(
+  //     context, cRank, m, n, cPermute,
+  //     /*subgroupCount=*/{getSubgroupMCount(), getSubgroupNCount()},
+  //     /*subgroupOrder=*/{0, 1},
+  //     /*batchCount=*/{getSubgroupMTileCount(), getSubgroupNTileCount()},
+  //     /*batchOrder=*/{0, 1}, /*outerCount=*/cCounts.outer,
+  //     /*outerOrder=*/cOrders.outer, /*threadCount=*/cCounts.thread,
+  //     /*threadOrder=*/cOrders.thread,
+  //     /*elementCount=*/cCounts.element, /*elementOrder=*/cOrders.element,
+  //     subgroupBasis, cActiveSubgroups);
+  llvm::outs() << "M spec:" << getSubgroupMCount() << "*" << getSubgroupMTileCount() << "\n";
   auto cLayout =
       permuteAndCreateNestedLayout(context, cRank, m, n, cPermute,
                                    /*subgroupCount=*/cSubgroupSizes,
@@ -692,7 +719,15 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
                                    /*batchCount=*/cBatchSizes,
                                    /*batchOrder=*/cOverallOrder, cCounts,
                                    cOrders, subgroupBasis, cActiveSubgroups);
-  LLVM_DEBUG({ llvm::errs() << "C layout: " << cLayout << "\n"; });
+  // auto cLayout =
+  //     permuteAndCreateNestedLayout(context, cRank, m, n, cPermute,
+  //                                  /*subgroupCount=*/{getSubgroupMCount(), getSubgroupNCount()},
+  //                                  /*subgroupOrder=*/{0, 1},
+  //                                  /*batchCount=*/{getSubgroupMTileCount(), getSubgroupNTileCount()},
+  //                                  /*batchOrder=*/{0, 1}, cCounts,
+  //                                  cOrders, subgroupBasis, cActiveSubgroups);
+  // llvm::outs() << "C layout: " << cLayout << "\n";
+  // LLVM_DEBUG({ llvm::errs() << "C layout: " << cLayout << "\n"; });
 
   // A matrix layout
   MFMAAttr::SingleSubgroupLayout aCounts =

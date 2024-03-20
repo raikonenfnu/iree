@@ -101,15 +101,15 @@ private:
   /// Otherwise, the resolve-like functions should be used.
   void setInnerLayout(const VectorLayoutInterface &layout) {
     if (layout && !layout.isValidLayout(getValue().getType().getShape())) {
-      Location loc = getValue().getLoc();
-      emitError(loc)
+      // Location loc = getValue().getLoc();
+      llvm::outs()
           << "Attempting to assign an invalid or incompatible layout: "
-          << layout;
-      emitRemark(loc) << "To value: " << getValue();
+          << layout <<"\n";
+      llvm::outs() << "To value: " << getValue() <<"\n";
       std::string buf;
       llvm::raw_string_ostream os(buf);
-      llvm::interleaveComma(getValue().getType().getShape(), os);
-      emitRemark(loc) << "Of shape: [" << os.str() << "]";
+      llvm::interleaveComma(getValue().getType().getShape(), llvm::outs());
+      llvm::outs() << "Of shape: [" << os.str() << "]\n";
       // TODO(https://github.com/openxla/iree/issues/16119): We shouldn't crash
       // here.
       llvm::report_fatal_error("Invalid layout assignment");
@@ -489,6 +489,7 @@ static void propagateLayoutToTransposeOp(
   }
 
   // Build a transposed layout.
+  llvm::outs()<<"going permute!\n";
   SmallVector<unsigned> permutation;
   ArrayRef<int64_t> perm = transpose.getPermutation();
   VectorLayoutInterface permutedLayout = value->getLayout().permute(perm);
@@ -602,17 +603,21 @@ static void enforceLayoutToTransposeOp(
     ArrayRef<DistributionLayout *> operandLattices,
     ArrayRef<const DistributionLayout *> resultLattices,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
+  llvm::outs()<<"enforce transpose!\n";
   // Transpose has only one vector result.
   const DistributionLayout *result = resultLattices[0];
   // Transpose has only one vector operand.
   DistributionLayout *value = operandLattices[0];
 
   // Cannot enforce layout if result is uninitialized.
+  llvm::outs()<<"uninitialized!\n";
   if (result->isUninitialized()) {
     return;
   }
+  llvm::outs()<<"init!\n";
 
   // Build a transposed layout.
+  llvm::outs()<<"enforce permute!\n";
   SmallVector<unsigned> permutation;
   ArrayRef<int64_t> perm = transpose.getPermutation();
   VectorLayoutInterface permutedLayout =
@@ -686,8 +691,10 @@ static void enforceLayoutToContractionOp(
   }
 
   // True to resolve the init value with the result layout.
+  llvm::outs()<<"resolving contract!\n";
   ChangeResult changed =
       value->resolveWithPossibleConflict(result, getOpOperand(contraction, 2));
+  llvm::outs()<<"success contract!\n";
   update(value, changed);
 }
 
@@ -759,6 +766,14 @@ void enforcementTransferFunction(
 
 LogicalResult PropagateLayout::initialize(Operation *root) {
   // Set layout for anchor ops.
+  for (auto [val, layout] : anchors) {
+    // llvm::outs()<<"Value:"<<val<<"\n";
+    // llvm::outs()<<"Anchor:"<<layout<<"\n";
+    DistributionLayout *latticeEl = getLatticeElement(val);
+    ChangeResult changed = latticeEl->resolve(layout);
+    propagateIfChanged(latticeEl, changed);
+  }
+
   for (auto [val, layout] : anchors) {
     DistributionLayout *latticeEl = getLatticeElement(val);
     ChangeResult changed = latticeEl->resolve(layout);
@@ -888,6 +903,8 @@ DistributionLayout *PropagateLayout::getLatticeElement(Value val) {
 
 LogicalResult EnforceLayout::initialize(Operation *root) {
   root->walk([&](Operation *traversed) { visitOperation(traversed); });
+  // llvm::outs()<<"---After Initialize---\n";
+  // llvm::outs()<<*root<<"\n";
   return success();
 }
 

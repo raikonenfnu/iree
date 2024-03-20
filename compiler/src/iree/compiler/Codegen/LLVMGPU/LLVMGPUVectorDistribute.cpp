@@ -108,6 +108,7 @@ private:
     analysis.setAnchor(contract.getRhs(), bLayout);
     analysis.setAnchor(contract.getAcc(), cLayout);
     analysis.setAnchor(contract.getResult(), cLayout);
+    llvm::outs()<<"C LAYOUT:"<<cLayout<<"\n";
     contract->setAttr("iree.amdgpu.mfma", schedule.getIntrinsic());
     if (printLayout) {
       llvm::outs() << "contract A vector layout: " << aLayout << "\n";

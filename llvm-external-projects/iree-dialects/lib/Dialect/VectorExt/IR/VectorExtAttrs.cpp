@@ -51,7 +51,9 @@ std::optional<int64_t> LayoutAttr::getShape(const LayoutDimension &dim) const {
 // Get the SIMT Vector shape in the order specified by dims. If no dims are
 // specified, then return an empty vector.
 bool LayoutAttr::isValidLayout(ArrayRef<int64_t> shape) const {
+  llvm::outs()<<"testing valid layout!\n";
   for (auto perDimLayout : llvm::enumerate(getLayouts())) {
+    llvm::outs()<<"per dim:"<<perDimLayout.value()<<"\n";
     ArrayRef<int64_t> layoutShape = perDimLayout.value().getShapes();
     int64_t computedShape =
         std::reduce(layoutShape.begin(), layoutShape.end(),
@@ -93,6 +95,8 @@ VectorLayoutInterface LayoutAttr::permute(ArrayRef<int64_t> permutation) const {
     assert(index >= 0 && index < layouts.size());
     newLayouts.push_back(layouts[index]);
   }
+  llvm::outs()<<"old:"<<this<<"\n";
+  llvm::outs()<<"new:"<<LayoutAttr::get(getContext(), newLayouts)<<"\n";
   return LayoutAttr::get(getContext(), newLayouts);
 }
 
@@ -345,6 +349,19 @@ SmallVector<int64_t> NestedLayoutAttr::getDistributedShape() const {
 
 bool NestedLayoutAttr::isValidLayout(ArrayRef<int64_t> shape) const {
   // Multiply all shapes in the layout.
+  llvm::outs()<<"expected:";
+  for (int i = 0, e = shape.size(); i < e; ++i) {
+    int64_t expectedShape = getSubgroupsPerWorkgroup()[i] *
+                            getBatchesPerSubgroup()[i] *
+                            getOutersPerBatch()[i] * getThreadsPerOuter()[i] *
+                            getElementsPerThread()[i];
+    llvm::outs()<<expectedShape<<",";
+  }
+  llvm::outs()<<"\n";
+  llvm::outs()<<"actual shape:";
+  llvm::interleaveComma(shape, llvm::outs());
+  llvm::outs()<<"\n";
+
   for (int i = 0, e = shape.size(); i < e; ++i) {
     int64_t expectedShape = getSubgroupsPerWorkgroup()[i] *
                             getBatchesPerSubgroup()[i] *
