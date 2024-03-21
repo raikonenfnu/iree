@@ -319,11 +319,13 @@ std::string createHsaco(Location loc, const std::string isa, StringRef name) {
     return {};
   }
   std::vector<llvm::StringRef> lldArgs{
-      lldProgram,
+      // lldProgram,
+      llvm::StringRef("/opt/rocm/bin/hipcc"),
       llvm::StringRef("-flavor"),
       llvm::StringRef("gnu"),
       llvm::StringRef("-shared"),
       tempIsaBinaryFilename.str(),
+      llvm::StringRef("/home/stwinata/nod/ukernel_sample/kernels/ukernel.co"),
       llvm::StringRef("-o"),
       tempHsacoFilename.str(),
   };
