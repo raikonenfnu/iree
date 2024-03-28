@@ -129,6 +129,7 @@ def IREEGPU_MFMAAttr : IREEGPU_MmaVectorLayoutAttr<"MFMA", "MFMAIntrinsicAttr"> 
     SmallVector<int64_t> getADataDuplicate() const;
     SmallVector<int64_t> getBDataDuplicate() const;
     SmallVector<int64_t> getCDataDuplicate() const;
+    SmallVector<bool> getBActiveThreadIds() const;
 
     // Partial nested layout for an MMA intrinsic's matrix input/output inside
     // a single subgroup.

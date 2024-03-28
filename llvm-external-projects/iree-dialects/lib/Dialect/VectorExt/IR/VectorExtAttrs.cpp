@@ -345,11 +345,13 @@ SmallVector<int64_t> NestedLayoutAttr::getDistributedShape() const {
 bool NestedLayoutAttr::isValidLayout(ArrayRef<int64_t> shape) const {
   // Multiply all shapes in the layout.
   for (int i = 0, e = shape.size(); i < e; ++i) {
-    int64_t expectedShape = getSubgroupsPerWorkgroup()[i] *
-                            getBatchesPerSubgroup()[i] *
-                            getOutersPerBatch()[i] * getThreadsPerOuter()[i] *
-                            getElementsPerThread()[i];
+    int64_t threadsPerOuter =
+        getThreadActiveIds()[i] ? getThreadsPerOuter()[i] : 1;
+    int64_t expectedShape =
+        getSubgroupsPerWorkgroup()[i] * getBatchesPerSubgroup()[i] *
+        getOutersPerBatch()[i] * threadsPerOuter * getElementsPerThread()[i];
     if (expectedShape != shape[i]) {
+      llvm::outs() << expectedShape << " VS " << shape[i] << "\n";
       return false;
     }
   }

@@ -406,7 +406,7 @@ SmallVector<int64_t> MFMAAttr::getADataDuplicate() const {
   }
   case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
   case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return {2, 1};
+    return {1, 1};
   }
   }
   // This should not happen but just to make GCC happy.
@@ -421,7 +421,7 @@ SmallVector<int64_t> MFMAAttr::getBDataDuplicate() const {
   }
   case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
   case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return {1, 2};
+    return {1, 1};
   }
   }
   // This should not happen but just to make GCC happy.
@@ -435,6 +435,21 @@ SmallVector<int64_t> MFMAAttr::getCDataDuplicate() const {
   case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
   case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
     break;
+  }
+  }
+  // This should not happen but just to make GCC happy.
+  return {1, 1};
+}
+
+SmallVector<bool> MFMAAttr::getBActiveThreadIds() const {
+  switch (getIntrinsic().getValue()) {
+  case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
+  case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
+    break;
+  }
+  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return {true, true};
   }
   }
   // This should not happen but just to make GCC happy.
@@ -537,7 +552,8 @@ NestedLayoutAttr permuteAndCreateNestedLayout(
     SmallVector<int64_t, 2> outerOrder, SmallVector<int64_t, 2> threadCount,
     SmallVector<int64_t, 2> threadOrder, SmallVector<int64_t, 2> elementCount,
     SmallVector<int64_t, 2> elementOrder, ArrayRef<int64_t> subgroupBasis,
-    ArrayRef<int64_t> threadBasis, SmallVector<int64_t, 2> dataDuplicate) {
+    ArrayRef<int64_t> threadBasis, SmallVector<int64_t, 2> dataDuplicate,
+    ArrayRef<bool> threadActiveIds) {
   if (!isIdentityPermutation(permute)) {
     applyPermutationToVector(subgroupCount, permute);
     applyPermutationToVector(subgroupOrder, permute);
@@ -556,7 +572,7 @@ NestedLayoutAttr permuteAndCreateNestedLayout(
       context, subgroupCount, subgroupOrder, batchCount, batchOrder, outerCount,
       outerOrder, threadCount, threadOrder, elementCount, elementOrder,
       subgroupBasis, SmallVector<bool>(subgroupBasis.size(), true), threadBasis,
-      SmallVector<bool>(threadBasis.size(), true), dataDuplicate);
+      threadActiveIds, dataDuplicate);
 }
 
 std::optional<std::tuple<VectorExt::VectorLayoutInterface,
@@ -627,7 +643,7 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
       /*outerOrder=*/cOrders.outer, /*threadCount=*/cCounts.thread,
       /*threadOrder=*/cOrders.thread,
       /*elementCount=*/cCounts.element, /*elementOrder=*/cOrders.element,
-      subgroupBasis, cThreadBasis, cDataDuplicate);
+      subgroupBasis, cThreadBasis, cDataDuplicate, SmallVector<bool>(2, true));
 
   // A matrix layout
   MFMAAttr::SingleSubgroupLayout aCounts =
@@ -648,7 +664,7 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
       /*outerOrder=*/aOrders.outer, /*threadCount=*/aCounts.thread,
       /*threadOrder=*/aOrders.thread,
       /*elementCount=*/aCounts.element, /*elementOrder=*/aOrders.element,
-      subgroupBasis, aThreadBasis, aDataDuplicate);
+      subgroupBasis, aThreadBasis, aDataDuplicate, SmallVector<bool>(2, true));
 
   // B matrix layout
   MFMAAttr::SingleSubgroupLayout bCounts =
@@ -656,9 +672,12 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
   MFMAAttr::SingleSubgroupLayout bOrders =
       mfmaAttr.getBSingleSubgroupLayoutOrder();
   SmallVector<int64_t, 2> bDataDuplicate = mfmaAttr.getBDataDuplicate();
+  SmallVector<bool> bThreadActiveId = mfmaAttr.getBActiveThreadIds();
 
   SmallVector<int64_t, 2> bThreadBasis = bCounts.thread;
   applyPermutationToVector(bThreadBasis, bOrders.thread);
+  bThreadBasis.append(bDataDuplicate);
+  bThreadActiveId.append({false, false});
 
   auto bLayout = permuteAndCreateNestedLayout(
       context, bPermute,
@@ -669,7 +688,7 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
       /*outerOrder=*/bOrders.outer, /*threadCount=*/bCounts.thread,
       /*threadOrder=*/bOrders.thread,
       /*elementCount=*/bCounts.element, /*elementOrder=*/bOrders.element,
-      subgroupBasis, bThreadBasis, bDataDuplicate);
+      subgroupBasis, bThreadBasis, bDataDuplicate, bThreadActiveId);
 
   return std::make_tuple(aLayout, bLayout, cLayout);
 }
