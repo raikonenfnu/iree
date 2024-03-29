@@ -26,6 +26,7 @@ class IREEGPU_MmaVectorLayoutAttr<string attrname, string mmaintrinsic> :
     "getMNKShape",
   ]>
 ]> {
+  let mnemonic = "mma_layout";
   let cppNamespace = "::mlir::iree_compiler::IREE::GPU";
 
   string baseDescription = [{
@@ -87,15 +88,11 @@ class IREEGPU_MmaEnumAttr<EnumAttrInfo enumInfo, string name = "">
 
 def MFMA_F16_16x16x16_F32 : I32EnumAttrCase<"MFMA_F16_16x16x16_F32", 0>;
 def MFMA_F16_32x32x8_F32 : I32EnumAttrCase<"MFMA_F16_32x32x8_F32", 1>;
-def WMMA_F16_16x16x16_F16 : I32EnumAttrCase<"WMMA_F16_16x16x16_F16", 2>;
-def WMMA_F16_16x16x16_F32 : I32EnumAttrCase<"WMMA_F16_16x16x16_F32", 3>;
 
 def IREEGPU_MFMAIntrinsic : IREEGPU_I32MmaEnumAttr<"MFMAIntrinsic",
     "Descriptor for different MFMA operations", [
       MFMA_F16_16x16x16_F32,
-      MFMA_F16_32x32x8_F32,
-      WMMA_F16_16x16x16_F16,
-      WMMA_F16_16x16x16_F32
+      MFMA_F16_32x32x8_F32
     ]>;
 
 def IREEGPU_MFMAIntrinsicAttr
@@ -121,6 +118,79 @@ def IREEGPU_MFMAAttr : IREEGPU_MmaVectorLayoutAttr<"MFMA", "MFMAIntrinsicAttr"> 
   let skipDefaultBuilders = 1;
   let builders = [
     AttrBuilder<(ins "MFMAIntrinsic":$intrinsic)>
+  ];
+
+  let extraClassDeclaration = !strconcat(baseExtraClassDeclaration, [{
+    int64_t getBlockSize() const;
+    StringRef getComputeType() const;
+    SmallVector<int64_t> getADataDuplicate() const;
+    SmallVector<int64_t> getBDataDuplicate() const;
+    SmallVector<int64_t> getCDataDuplicate() const;
+
+    // Partial nested layout for an MMA intrinsic's matrix input/output inside
+    // a single subgroup.
+    //
+    // Note that this is just a container used by the following methods; it can
+    // contain both the shape and the order.
+    struct SingleSubgroupLayout {
+      SmallVector<int64_t, 2> outer;
+      SmallVector<int64_t, 2> thread;
+      SmallVector<int64_t, 2> element;
+    };
+
+    // Returns the A/B/C matrix's partial nested layout shape inside a single
+    // subgroup. Shape at each outer/thread/element level is a 2-D value,
+    // following canonical matmul order--(M, K) for A, (K, N) for B, and
+    // (M, N) for C.
+    SingleSubgroupLayout getASingleSubgroupLayoutCount() const;
+    SingleSubgroupLayout getBSingleSubgroupLayoutCount() const;
+    SingleSubgroupLayout getCSingleSubgroupLayoutCount() const;
+
+    // Returns the A/B/C matrix's partial nested layout order inside a single
+    // subgroup. Order at each outer/thread/element level is a 2-value
+    // permuation vector, following canonical matmul order--(M, K) for A,
+    // (K, N) for B, and (M, N) for C.
+    SingleSubgroupLayout getASingleSubgroupLayoutOrder() const;
+    SingleSubgroupLayout getBSingleSubgroupLayoutOrder() const;
+    SingleSubgroupLayout getCSingleSubgroupLayoutOrder() const;
+  }]);
+}
+
+//===----------------------------------------------------------------------===//
+// WMMA Attributes
+//===----------------------------------------------------------------------===//
+def WMMA_F16_16x16x16_F16 : I32EnumAttrCase<"WMMA_F16_16x16x16_F16", 0>;
+def WMMA_F16_16x16x16_F32 : I32EnumAttrCase<"WMMA_F16_16x16x16_F32", 1>;
+
+def IREEGPU_WMMAIntrinsic : IREEGPU_I32MmaEnumAttr<"WMMAIntrinsic",
+    "Descriptor for different WMMA operations", [
+      WMMA_F16_16x16x16_F16,
+      WMMA_F16_16x16x16_F32
+    ]>;
+
+def IREEGPU_WMMAIntrinsicAttr
+  : IREEGPU_MmaEnumAttr<IREEGPU_WMMAIntrinsic, "wmma_intrinsic">;
+
+def IREEGPU_WMMAAttr : IREEGPU_MmaVectorLayoutAttr<"WMMA", "WMMAIntrinsicAttr"> {
+  let mnemonic = "wmma_layout";
+  let cppNamespace = "::mlir::iree_compiler::IREE::GPU";
+
+  let description = !strconcat(baseDescription, [{
+    This mma variant describes configurations for WMMA ops. The |intrinsic|
+    field specifies which particular WMMA intrinsic this refers to, with each
+    intrinsic implicating a specific MNK shape and operand types. The intrinsic
+    enum name describes these fields as
+
+    <InputType>_MxNxK_<CType>
+
+    Where the element type for the `A` and `B` matrices are both `InputType`.
+  }]);
+
+  let hasCustomAssemblyFormat = 1;
+
+  let skipDefaultBuilders = 1;
+  let builders = [
+    AttrBuilder<(ins "WMMAIntrinsic":$intrinsic)>
   ];
 
   let extraClassDeclaration = !strconcat(baseExtraClassDeclaration, [{
