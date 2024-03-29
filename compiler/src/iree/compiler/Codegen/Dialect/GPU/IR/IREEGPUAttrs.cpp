@@ -201,14 +201,24 @@ static OpaqueMmaLayout getOpaqueMFMALayout(MLIRContext *context,
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     return OpaqueMmaLayout{32, 32, 8, f16, f16, f32};
   }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16: {
-    return OpaqueMmaLayout{16, 16, 16, f16, f16, f32};
-  }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return OpaqueMmaLayout{16, 16, 16, f16, f16, f32};
-  }
   }
   llvm_unreachable("unhandled mfma layout type");
+  return OpaqueMmaLayout{};
+}
+
+static OpaqueMmaLayout getOpaqueWMMALayout(MLIRContext *context,
+                                           WMMAIntrinsic type) {
+  Type f16 = Float16Type::get(context);
+  Type f32 = Float32Type::get(context);
+  switch (type) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16: {
+    return OpaqueMmaLayout{16, 16, 16, f16, f16, f32};
+  }
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return OpaqueMmaLayout{16, 16, 16, f16, f16, f32};
+  }
+  }
+  llvm_unreachable("unhandled wmma layout type");
   return OpaqueMmaLayout{};
 }
 
@@ -269,8 +279,31 @@ static ConcreteMmaLayout getConcreteMFMALayout(MLIRContext *context,
     return ConcreteMmaLayout{opaqueLayout, aMLayout, aKLayout, bKLayout,
                              bNLayout,     cMLayout, cNLayout};
   }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
+  }
+  llvm_unreachable("unhandled concrete mfma type");
+  return ConcreteMmaLayout{};
+}
+
+static ConcreteMmaLayout getConcreteWMMALayout(MLIRContext *context,
+                                               WMMAIntrinsic type) {
+  auto opaqueLayout = getOpaqueWMMALayout(context, type);
+
+  LayoutDimensionAttr laneX =
+      LayoutDimensionAttr::get(context, LayoutDimension::LANEX);
+  LayoutDimensionAttr laneY =
+      LayoutDimensionAttr::get(context, LayoutDimension::LANEY);
+  LayoutDimensionAttr laneZ =
+      LayoutDimensionAttr::get(context, LayoutDimension::LANEZ);
+  LayoutDimensionAttr vectorX =
+      LayoutDimensionAttr::get(context, LayoutDimension::VECTORX);
+  LayoutDimensionAttr vectorY =
+      LayoutDimensionAttr::get(context, LayoutDimension::VECTORY);
+  LayoutDimensionAttr vectorZ =
+      LayoutDimensionAttr::get(context, LayoutDimension::VECTORZ);
+  (void)laneZ, (void)vectorY, (void)vectorZ;
+  switch (type) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
     // #outer = #iree_vector_ext.per_dim_layout<[LANEX], [16]>
     // #inner = #iree_vector_ext.per_dim_layout<[LANEY, VECTORX], [4, 4]>
     // #layout_a = #iree_vector_ext.layout<#outer, #inner>
@@ -292,7 +325,7 @@ static ConcreteMmaLayout getConcreteMFMALayout(MLIRContext *context,
     break;
   }
   }
-  llvm_unreachable("unhandled concrete mfma type");
+  llvm_unreachable("unhandled concrete wmma type");
   return ConcreteMmaLayout{};
 }
 
@@ -350,13 +383,6 @@ MFMAAttr::getABCVectorTypes() const {
     auto cType = VectorType::get({16}, getCType());
     return std::make_tuple(aType, bType, cType);
   }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    auto aType = VectorType::get({16}, getAType());
-    auto bType = VectorType::get({16}, getBType());
-    auto cType = VectorType::get({8}, getCType());
-    return std::make_tuple(aType, bType, cType);
-  }
   }
   // This should not happen but just to make GCC happy.
   return std::make_tuple(VectorType{}, VectorType{}, VectorType{});
@@ -373,9 +399,7 @@ MFMAAttr::getContractionLayout(vector::ContractionOp contract) const {
 int64_t MFMAAttr::getBlockSize() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
-  case MFMAIntrinsic::MFMA_F16_32x32x8_F32:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
+  case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     return 1;
   }
   }
@@ -389,10 +413,6 @@ StringRef MFMAAttr::getComputeType() const {
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     return "MFMA";
   }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return "WMMA";
-  }
   }
   // This should not happen but just to make GCC happy.
   return "";
@@ -403,10 +423,6 @@ SmallVector<int64_t> MFMAAttr::getADataDuplicate() const {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     break;
-  }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return {2, 1};
   }
   }
   // Defaults to no data duplication.
@@ -419,10 +435,6 @@ SmallVector<int64_t> MFMAAttr::getBDataDuplicate() const {
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     break;
   }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return {1, 2};
-  }
   }
   // Defaults to no data duplication.
   return {1, 1};
@@ -431,9 +443,7 @@ SmallVector<int64_t> MFMAAttr::getBDataDuplicate() const {
 SmallVector<int64_t> MFMAAttr::getCDataDuplicate() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
-  case MFMAIntrinsic::MFMA_F16_32x32x8_F32:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
+  case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     break;
   }
   }
@@ -449,10 +459,6 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutCount() const {
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     return {/*outer=*/{1, 1}, /*thread=*/{32, 2}, /*element=*/{1, 4}};
   }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return {/*outer=*/{1, 1}, /*thread=*/{16, 1}, /*element=*/{1, 16}};
-  }
   }
   return {};
 }
@@ -464,10 +470,6 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutCount() const {
   }
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     return {/*outer=*/{1, 1}, /*thread=*/{2, 32}, /*element=*/{4, 1}};
-  }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return {/*outer=*/{1, 1}, /*thread=*/{1, 16}, /*element=*/{16, 1}};
   }
   }
   return {};
@@ -481,10 +483,6 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getCSingleSubgroupLayoutCount() const {
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     return {/*outer=*/{4, 1}, /*thread=*/{2, 32}, /*element=*/{4, 1}};
   }
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
-    return {/*outer=*/{8, 1}, /*thread=*/{2, 16}, /*element=*/{1, 1}};
-  }
   }
   return {};
 }
@@ -492,9 +490,7 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getCSingleSubgroupLayoutCount() const {
 MFMAAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
-  case MFMAIntrinsic::MFMA_F16_32x32x8_F32:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
+  case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     return {/*outer=*/{0, 1}, /*thread=*/{1, 0}, /*element=*/{0, 1}};
   }
   }
@@ -504,9 +500,7 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutOrder() const {
 MFMAAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
-  case MFMAIntrinsic::MFMA_F16_32x32x8_F32:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
+  case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
     return {/*outer=*/{0, 1}, /*thread=*/{0, 1}, /*element=*/{1, 0}};
   }
   }
@@ -516,9 +510,184 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutOrder() const {
 MFMAAttr::SingleSubgroupLayout MFMAAttr::getCSingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
-  case MFMAIntrinsic::MFMA_F16_32x32x8_F32:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F16:
-  case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
+  case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
+    return {/*outer=*/{0, 1}, /*thread=*/{0, 1}, /*element=*/{1, 0}};
+  }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// WMMA Attributes
+//===----------------------------------------------------------------------===//
+
+Attribute WMMAAttr::parse(AsmParser &p, Type type) {
+  if (failed(p.parseLess()))
+    return {};
+
+  FailureOr<WMMAIntrinsicAttr> wmmaIntrinsic =
+      FieldParser<WMMAIntrinsicAttr>::parse(p);
+  if (failed(wmmaIntrinsic)) {
+    p.emitError(p.getCurrentLocation(), "failed to parse mfma type identifier");
+    return {};
+  }
+
+  if (failed(p.parseGreater()))
+    return {};
+
+  return get(p.getContext(), wmmaIntrinsic->getValue());
+}
+
+void WMMAAttr::print(AsmPrinter &p) const {
+  auto &os = p.getStream();
+  os << "<";
+  os << stringifyWMMAIntrinsic(getIntrinsic().getValue());
+  os << ">";
+}
+
+WMMAAttr WMMAAttr::get(MLIRContext *context, WMMAIntrinsic type) {
+  auto layout = getOpaqueWMMALayout(context, type);
+  return Base::get(context, WMMAIntrinsicAttr::get(context, type), layout.mSize,
+                   layout.nSize, layout.kSize, layout.aType, layout.bType,
+                   layout.cType);
+}
+
+std::tuple<VectorType, VectorType, VectorType>
+WMMAAttr::getABCVectorTypes() const {
+  // Check https://github.com/ROCm/amd_matrix_instruction_calculator for
+  // instruction details. Note here we are returning the number elements, while
+  // amd_matrix_instruction_calculator tells us about the number of 32-bit
+  // registers. So need to adjust accordingly. All vectors should be 1-D.
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    auto aType = VectorType::get({16}, getAType());
+    auto bType = VectorType::get({16}, getBType());
+    auto cType = VectorType::get({8}, getCType());
+    return std::make_tuple(aType, bType, cType);
+  }
+  }
+  // This should not happen but just to make GCC happy.
+  return std::make_tuple(VectorType{}, VectorType{}, VectorType{});
+}
+
+FailureOr<std::tuple<VectorLayoutInterface, VectorLayoutInterface,
+                     VectorLayoutInterface>>
+WMMAAttr::getContractionLayout(vector::ContractionOp contract) const {
+  ConcreteMmaLayout layout =
+      getConcreteWMMALayout(contract->getContext(), getIntrinsic().getValue());
+  return IREE::GPU::getContractionLayout(contract, layout);
+}
+
+int64_t WMMAAttr::getBlockSize() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return 1;
+  }
+  }
+  // This should not happen but just to make GCC happy.
+  return 0;
+}
+
+StringRef WMMAAttr::getComputeType() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return "WMMA";
+  }
+  }
+  // This should not happen but just to make GCC happy.
+  return "";
+}
+
+SmallVector<int64_t> WMMAAttr::getADataDuplicate() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return {2, 1};
+  }
+  }
+  // Defaults to no data duplication.
+  return {1, 1};
+}
+
+SmallVector<int64_t> WMMAAttr::getBDataDuplicate() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return {1, 2};
+  }
+  }
+  // Defaults to no data duplication.
+  return {1, 1};
+}
+
+SmallVector<int64_t> WMMAAttr::getCDataDuplicate() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    break;
+  }
+  }
+  // Defaults to no data duplication.
+  return {1, 1};
+}
+
+WMMAAttr::SingleSubgroupLayout WMMAAttr::getASingleSubgroupLayoutCount() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return {/*outer=*/{1, 1}, /*thread=*/{16, 1}, /*element=*/{1, 16}};
+  }
+  }
+  return {};
+}
+
+WMMAAttr::SingleSubgroupLayout WMMAAttr::getBSingleSubgroupLayoutCount() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return {/*outer=*/{1, 1}, /*thread=*/{1, 16}, /*element=*/{16, 1}};
+  }
+  }
+  return {};
+}
+
+WMMAAttr::SingleSubgroupLayout WMMAAttr::getCSingleSubgroupLayoutCount() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return {/*outer=*/{8, 1}, /*thread=*/{2, 16}, /*element=*/{1, 1}};
+  }
+  }
+  return {};
+}
+
+WMMAAttr::SingleSubgroupLayout WMMAAttr::getASingleSubgroupLayoutOrder() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return {/*outer=*/{0, 1}, /*thread=*/{1, 0}, /*element=*/{0, 1}};
+  }
+  }
+  return {};
+}
+
+WMMAAttr::SingleSubgroupLayout WMMAAttr::getBSingleSubgroupLayoutOrder() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
+    return {/*outer=*/{0, 1}, /*thread=*/{0, 1}, /*element=*/{1, 0}};
+  }
+  }
+  return {};
+}
+
+WMMAAttr::SingleSubgroupLayout WMMAAttr::getCSingleSubgroupLayoutOrder() const {
+  switch (getIntrinsic().getValue()) {
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
+  case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
     return {/*outer=*/{0, 1}, /*thread=*/{0, 1}, /*element=*/{1, 0}};
   }
   }
@@ -573,6 +742,10 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
   SmallVector<int64_t, 2> bPermute = {bK, bN};
   SmallVector<int64_t, 2> cPermute = {cM, cN};
 
+  // TODO: This is causing segfault. We may need to introduce these methods
+  //        to the MmaAttr interface:
+  //        getXSingleSubgroupLayoutCount, getXSingleSubgroupLayoutOrder,
+  //        getXDataDUplicate for it to work.
   auto mfmaAttr = llvm::cast<MFMAAttr>(getIntrinsic());
   MLIRContext *context = getContext();
 

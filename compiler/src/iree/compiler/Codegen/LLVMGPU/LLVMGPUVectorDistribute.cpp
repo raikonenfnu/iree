@@ -108,7 +108,7 @@ private:
     analysis.setAnchor(contract.getRhs(), bLayout);
     analysis.setAnchor(contract.getAcc(), cLayout);
     analysis.setAnchor(contract.getResult(), cLayout);
-    contract->setAttr("iree.amdgpu.mfma", schedule.getIntrinsic());
+    contract->setAttr("iree.amdgpu.mma", schedule.getIntrinsic());
     if (printLayout) {
       llvm::outs() << "contract A vector layout: " << aLayout << "\n";
       llvm::outs() << "contract B vector layout: " << bLayout << "\n";
@@ -121,10 +121,10 @@ private:
       llvm::dbgs() << "anchor set on contract: " << contract << "\n";
     });
 
-    if (isa<IREE::GPU::MFMAAttr>(schedule.getIntrinsic())) {
-      if (!populatedMfma) {
+    if (isa<IREE::GPU::MmaAttr>(schedule.getIntrinsic())) {
+      if (!populatedMma) {
         populateGPUDistributeNestedLayoutContractAMDGPUPatterns(patterns);
-        populatedMfma = true;
+        populatedMma = true;
       }
     } else {
       llvm_unreachable("Unsupported mma type");
@@ -320,7 +320,7 @@ private:
   // Whether to print the chosen layout for testing purposes
   bool printLayout;
 
-  bool populatedMfma = false;
+  bool populatedMma = false;
   RewritePatternSet patterns;
 };
 
