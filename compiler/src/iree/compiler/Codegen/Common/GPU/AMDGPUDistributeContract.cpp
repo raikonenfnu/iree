@@ -224,6 +224,10 @@ struct DistributeContract final : OpDistributionPattern<vector::ContractionOp> {
     uint32_t blocks = 0;
   };
 
+  // a = bitcast(lhs) 16xf16 -> 8xf32
+  // b = trunc 8xf32 -> 8xf16
+  // a = ext(lhs) 8xf16 -> 8xf32
+  // b = bitcast 8xf32 -> 16xf16
   // Generates amdgpu.mfma operation on the given inputs for the given MFMA
   // |intrinsic|.
   Value computeMMA(OpBuilder &builder, Location loc,
@@ -234,12 +238,37 @@ struct DistributeContract final : OpDistributionPattern<vector::ContractionOp> {
     Value bCast = builder.create<vector::ShapeCastOp>(b.getLoc(), bType, b);
     Value cCast = builder.create<vector::ShapeCastOp>(c.getLoc(), cType, c);
     Value mmaOp;
+    // Seem to get all 0 if subwordOffset == 0, and -Inf if subwordOffset == 1.
+    // Maybe need to canonicalize out the bitcast -> truncf -> extf -> bitcast.
+    // This is to handle issue brought up in
+    // https://github.com/llvm/llvm-project/blob/b05c15259bcbe3eba353b77ca4fc9ec2a81dd3fb/mlir/include/mlir/Dialect/AMDGPU/IR/AMDGPU.td#L564-L567
+    // - If `subwordOffset` is 0, then the output is stored at indices 0, 2, 4,
+    // ..., 14.
+    // - If `subwordOffset` is 1, then the output is stored at indices 1, 3, 5,
+    // ..., 15.
     if (computeType == "MFMA") {
       mmaOp = builder.create<amdgpu::MFMAOp>(
           loc, cType, mfmaParams.m, mfmaParams.n, mfmaParams.k,
           mfmaParams.blocks, aCast, bCast, cCast);
     } else if (computeType == "WMMA") {
-      mmaOp = builder.create<amdgpu::WMMAOp>(loc, cType, aCast, bCast, cCast);
+      VectorType resType = cType;
+      int subwordOffset = 0;
+      if (cType.getElementType().isF16() && cType.getNumElements() == 8) {
+        Value ext = builder.create<arith::ExtFOp>(
+            loc, VectorType::get({8}, builder.getF32Type()), cCast);
+        resType = VectorType::get({16}, builder.getF16Type());
+        cCast = builder.create<vector::BitCastOp>(loc, resType, ext);
+        subwordOffset = 1;
+      }
+      mmaOp = builder.create<amdgpu::WMMAOp>(loc, resType, aCast, bCast, cCast,
+                                             subwordOffset);
+      if (resType.getElementType().isF16() && resType.getNumElements() == 16) {
+        auto mmaCast = builder.create<vector::BitCastOp>(
+            loc, VectorType::get(cType.getShape(), builder.getF32Type()),
+            mmaOp);
+        mmaOp = builder.create<arith::TruncFOp>(
+            loc, VectorType::get({8}, builder.getF16Type()), mmaCast);
+      }
     }
     return builder.create<vector::ShapeCastOp>(c.getLoc(), c.getType(), mmaOp);
   }

@@ -202,7 +202,7 @@ static OpaqueMmaLayout getOpaqueMFMALayout(MLIRContext *context,
     return OpaqueMmaLayout{32, 32, 8, f16, f16, f32};
   }
   case MFMAIntrinsic::WMMA_F16_16x16x16_F16: {
-    return OpaqueMmaLayout{16, 16, 16, f16, f16, f32};
+    return OpaqueMmaLayout{16, 16, 16, f16, f16, f16};
   }
   case MFMAIntrinsic::WMMA_F16_16x16x16_F32: {
     return OpaqueMmaLayout{16, 16, 16, f16, f16, f32};

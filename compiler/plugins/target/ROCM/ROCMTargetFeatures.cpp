@@ -32,7 +32,7 @@ ArrayAttr getROCMSupportedMmaAttrs(MLIRContext *context, StringRef targetArch) {
   } else if (targetArch == "gfx1100") { // RDNA3
     return getMfmaArrayAttr(context,
                             {IREE::GPU::MFMAIntrinsic::WMMA_F16_16x16x16_F16,
-                             IREE::GPU::MFMAIntrinsic::WMMA_F16_16x16x16_F16});
+                             IREE::GPU::MFMAIntrinsic::WMMA_F16_16x16x16_F32});
   }
   return ArrayAttr();
 }
