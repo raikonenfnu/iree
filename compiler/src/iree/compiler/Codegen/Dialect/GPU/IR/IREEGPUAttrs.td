@@ -63,6 +63,12 @@ class IREEGPU_MmaVectorLayoutAttr<string attrname, string mmaintrinsic> :
   );
 
   string baseExtraClassDeclaration = [{
+    struct SingleSubgroupLayout {
+      SmallVector<int64_t, 2> outer;
+      SmallVector<int64_t, 2> thread;
+      SmallVector<int64_t, 2> element;
+    };
+
     ::std::tuple<Type, Type, Type> getABCElementTypes() {
       return ::std::make_tuple(getAType(), getBType(), getCType());
     }
@@ -70,6 +76,25 @@ class IREEGPU_MmaVectorLayoutAttr<string attrname, string mmaintrinsic> :
     ::std::tuple<int64_t, int64_t, int64_t> getMNKShape() {
       return ::std::make_tuple(getMSize(), getNSize(), getKSize());
     }
+
+    // subgroup. Shape at each outer/thread/element level is a 2-D value,
+    // following canonical matmul order--(M, K) for A, (K, N) for B, and
+    // (M, N) for C.
+    MmaAttr::SingleSubgroupLayout getASingleSubgroupLayoutCount() const;
+    MmaAttr::SingleSubgroupLayout getBSingleSubgroupLayoutCount() const;
+    MmaAttr::SingleSubgroupLayout getCSingleSubgroupLayoutCount() const;
+
+    // Returns the A/B/C matrix's partial nested layout order inside a single
+    // subgroup. Order at each outer/thread/element level is a 2-value
+    // permuation vector, following canonical matmul order--(M, K) for A,
+    // (K, N) for B, and (M, N) for C.
+    MmaAttr::SingleSubgroupLayout getASingleSubgroupLayoutOrder() const;
+    MmaAttr::SingleSubgroupLayout getBSingleSubgroupLayoutOrder() const;
+    MmaAttr::SingleSubgroupLayout getCSingleSubgroupLayoutOrder() const;
+
+    SmallVector<int64_t> getADataDuplicate() const;
+    SmallVector<int64_t> getBDataDuplicate() const;
+    SmallVector<int64_t> getCDataDuplicate() const;
   }];
 }
 
@@ -123,36 +148,9 @@ def IREEGPU_MFMAAttr : IREEGPU_MmaVectorLayoutAttr<"MFMA", "MFMAIntrinsicAttr"> 
   let extraClassDeclaration = !strconcat(baseExtraClassDeclaration, [{
     int64_t getBlockSize() const;
     StringRef getComputeType() const;
-    SmallVector<int64_t> getADataDuplicate() const;
-    SmallVector<int64_t> getBDataDuplicate() const;
-    SmallVector<int64_t> getCDataDuplicate() const;
-
-    // Partial nested layout for an MMA intrinsic's matrix input/output inside
-    // a single subgroup.
-    //
-    // Note that this is just a container used by the following methods; it can
-    // contain both the shape and the order.
-    struct SingleSubgroupLayout {
-      SmallVector<int64_t, 2> outer;
-      SmallVector<int64_t, 2> thread;
-      SmallVector<int64_t, 2> element;
-    };
-
-    // Returns the A/B/C matrix's partial nested layout shape inside a single
-    // subgroup. Shape at each outer/thread/element level is a 2-D value,
-    // following canonical matmul order--(M, K) for A, (K, N) for B, and
-    // (M, N) for C.
-    SingleSubgroupLayout getASingleSubgroupLayoutCount() const;
-    SingleSubgroupLayout getBSingleSubgroupLayoutCount() const;
-    SingleSubgroupLayout getCSingleSubgroupLayoutCount() const;
-
-    // Returns the A/B/C matrix's partial nested layout order inside a single
-    // subgroup. Order at each outer/thread/element level is a 2-value
-    // permuation vector, following canonical matmul order--(M, K) for A,
-    // (K, N) for B, and (M, N) for C.
-    SingleSubgroupLayout getASingleSubgroupLayoutOrder() const;
-    SingleSubgroupLayout getBSingleSubgroupLayoutOrder() const;
-    SingleSubgroupLayout getCSingleSubgroupLayoutOrder() const;
+    // SmallVector<int64_t> getADataDuplicate() const;
+    // SmallVector<int64_t> getBDataDuplicate() const;
+    // SmallVector<int64_t> getCDataDuplicate() const;
   }]);
 }
 
@@ -196,36 +194,9 @@ def IREEGPU_WMMAAttr : IREEGPU_MmaVectorLayoutAttr<"WMMA", "WMMAIntrinsicAttr"> 
   let extraClassDeclaration = !strconcat(baseExtraClassDeclaration, [{
     int64_t getBlockSize() const;
     StringRef getComputeType() const;
-    SmallVector<int64_t> getADataDuplicate() const;
-    SmallVector<int64_t> getBDataDuplicate() const;
-    SmallVector<int64_t> getCDataDuplicate() const;
-
-    // Partial nested layout for an MMA intrinsic's matrix input/output inside
-    // a single subgroup.
-    //
-    // Note that this is just a container used by the following methods; it can
-    // contain both the shape and the order.
-    struct SingleSubgroupLayout {
-      SmallVector<int64_t, 2> outer;
-      SmallVector<int64_t, 2> thread;
-      SmallVector<int64_t, 2> element;
-    };
-
-    // Returns the A/B/C matrix's partial nested layout shape inside a single
-    // subgroup. Shape at each outer/thread/element level is a 2-D value,
-    // following canonical matmul order--(M, K) for A, (K, N) for B, and
-    // (M, N) for C.
-    SingleSubgroupLayout getASingleSubgroupLayoutCount() const;
-    SingleSubgroupLayout getBSingleSubgroupLayoutCount() const;
-    SingleSubgroupLayout getCSingleSubgroupLayoutCount() const;
-
-    // Returns the A/B/C matrix's partial nested layout order inside a single
-    // subgroup. Order at each outer/thread/element level is a 2-value
-    // permuation vector, following canonical matmul order--(M, K) for A,
-    // (K, N) for B, and (M, N) for C.
-    SingleSubgroupLayout getASingleSubgroupLayoutOrder() const;
-    SingleSubgroupLayout getBSingleSubgroupLayoutOrder() const;
-    SingleSubgroupLayout getCSingleSubgroupLayoutOrder() const;
+    // SmallVector<int64_t> getADataDuplicate() const;
+    // SmallVector<int64_t> getBDataDuplicate() const;
+    // SmallVector<int64_t> getCDataDuplicate() const;
   }]);
 }
 

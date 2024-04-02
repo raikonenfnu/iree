@@ -451,7 +451,7 @@ SmallVector<int64_t> MFMAAttr::getCDataDuplicate() const {
   return {1, 1};
 }
 
-MFMAAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutCount() const {
+MmaAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutCount() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32: {
     return {/*outer=*/{1, 1}, /*thread=*/{16, 4}, /*element=*/{1, 4}};
@@ -463,7 +463,7 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutCount() const {
   return {};
 }
 
-MFMAAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutCount() const {
+MmaAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutCount() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32: {
     return {/*outer=*/{1, 1}, /*thread=*/{4, 16}, /*element=*/{4, 1}};
@@ -475,7 +475,7 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutCount() const {
   return {};
 }
 
-MFMAAttr::SingleSubgroupLayout MFMAAttr::getCSingleSubgroupLayoutCount() const {
+MmaAttr::SingleSubgroupLayout MFMAAttr::getCSingleSubgroupLayoutCount() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32: {
     return {/*outer=*/{1, 1}, /*thread=*/{4, 16}, /*element=*/{4, 1}};
@@ -487,7 +487,7 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getCSingleSubgroupLayoutCount() const {
   return {};
 }
 
-MFMAAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutOrder() const {
+MmaAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
@@ -497,7 +497,7 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getASingleSubgroupLayoutOrder() const {
   return {};
 }
 
-MFMAAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutOrder() const {
+MmaAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
@@ -507,7 +507,7 @@ MFMAAttr::SingleSubgroupLayout MFMAAttr::getBSingleSubgroupLayoutOrder() const {
   return {};
 }
 
-MFMAAttr::SingleSubgroupLayout MFMAAttr::getCSingleSubgroupLayoutOrder() const {
+MmaAttr::SingleSubgroupLayout MFMAAttr::getCSingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case MFMAIntrinsic::MFMA_F16_16x16x16_F32:
   case MFMAIntrinsic::MFMA_F16_32x32x8_F32: {
@@ -634,7 +634,7 @@ SmallVector<int64_t> WMMAAttr::getCDataDuplicate() const {
   return {1, 1};
 }
 
-WMMAAttr::SingleSubgroupLayout WMMAAttr::getASingleSubgroupLayoutCount() const {
+MmaAttr::SingleSubgroupLayout WMMAAttr::getASingleSubgroupLayoutCount() const {
   switch (getIntrinsic().getValue()) {
   case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
   case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
@@ -644,7 +644,7 @@ WMMAAttr::SingleSubgroupLayout WMMAAttr::getASingleSubgroupLayoutCount() const {
   return {};
 }
 
-WMMAAttr::SingleSubgroupLayout WMMAAttr::getBSingleSubgroupLayoutCount() const {
+MmaAttr::SingleSubgroupLayout WMMAAttr::getBSingleSubgroupLayoutCount() const {
   switch (getIntrinsic().getValue()) {
   case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
   case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
@@ -654,7 +654,7 @@ WMMAAttr::SingleSubgroupLayout WMMAAttr::getBSingleSubgroupLayoutCount() const {
   return {};
 }
 
-WMMAAttr::SingleSubgroupLayout WMMAAttr::getCSingleSubgroupLayoutCount() const {
+MmaAttr::SingleSubgroupLayout WMMAAttr::getCSingleSubgroupLayoutCount() const {
   switch (getIntrinsic().getValue()) {
   case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
   case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
@@ -664,7 +664,7 @@ WMMAAttr::SingleSubgroupLayout WMMAAttr::getCSingleSubgroupLayoutCount() const {
   return {};
 }
 
-WMMAAttr::SingleSubgroupLayout WMMAAttr::getASingleSubgroupLayoutOrder() const {
+MmaAttr::SingleSubgroupLayout WMMAAttr::getASingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
   case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
@@ -674,7 +674,7 @@ WMMAAttr::SingleSubgroupLayout WMMAAttr::getASingleSubgroupLayoutOrder() const {
   return {};
 }
 
-WMMAAttr::SingleSubgroupLayout WMMAAttr::getBSingleSubgroupLayoutOrder() const {
+MmaAttr::SingleSubgroupLayout WMMAAttr::getBSingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
   case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
@@ -684,7 +684,7 @@ WMMAAttr::SingleSubgroupLayout WMMAAttr::getBSingleSubgroupLayoutOrder() const {
   return {};
 }
 
-WMMAAttr::SingleSubgroupLayout WMMAAttr::getCSingleSubgroupLayoutOrder() const {
+MmaAttr::SingleSubgroupLayout WMMAAttr::getCSingleSubgroupLayoutOrder() const {
   switch (getIntrinsic().getValue()) {
   case WMMAIntrinsic::WMMA_F16_16x16x16_F16:
   case WMMAIntrinsic::WMMA_F16_16x16x16_F32: {
@@ -731,6 +731,11 @@ std::optional<std::tuple<VectorExt::VectorLayoutInterface,
                          VectorExt::VectorLayoutInterface,
                          VectorExt::VectorLayoutInterface>>
 MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
+  // TODO: Make this landing function and do a callback to templated fn:
+  // template<typename MMAttrTy>
+  // getContractionLayout(contractOp, MMAttrTy);
+  // if (auto wmmaiItrinsic = dyn_cast<WMMAAttr>(getIntrinsic())
+  // {getContractionLayout(contractOp, wmmaiItrinsic)}
   VectorContractOpInfo opInfo(contractOp);
   if (opInfo.getOpKind() == VectorContractOpInfo::OpKind::UNKNOWN)
     return std::nullopt;
@@ -746,7 +751,7 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
   //        to the MmaAttr interface:
   //        getXSingleSubgroupLayoutCount, getXSingleSubgroupLayoutOrder,
   //        getXDataDUplicate for it to work.
-  auto mfmaAttr = llvm::cast<MFMAAttr>(getIntrinsic());
+  auto mfmaAttr = llvm::cast<MmaAttr>(getIntrinsic());
   MLIRContext *context = getContext();
 
   // Get the concrete nested layout for each matrix. Note that the struct
@@ -781,9 +786,9 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
   // B, and C matrix. But still..
 
   // C matrix layout
-  MFMAAttr::SingleSubgroupLayout cCounts =
+  MmaAttr::SingleSubgroupLayout cCounts =
       mfmaAttr.getCSingleSubgroupLayoutCount();
-  MFMAAttr::SingleSubgroupLayout cOrders =
+  MmaAttr::SingleSubgroupLayout cOrders =
       mfmaAttr.getCSingleSubgroupLayoutOrder();
 
   SmallVector<int64_t, 2> cThreadBasis = cCounts.thread;
@@ -805,9 +810,9 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
       subgroupBasis, cThreadBasis);
 
   // A matrix layout
-  MFMAAttr::SingleSubgroupLayout aCounts =
+  MmaAttr::SingleSubgroupLayout aCounts =
       mfmaAttr.getASingleSubgroupLayoutCount();
-  MFMAAttr::SingleSubgroupLayout aOrders =
+  MmaAttr::SingleSubgroupLayout aOrders =
       mfmaAttr.getASingleSubgroupLayoutOrder();
 
   SmallVector<int64_t, 2> aThreadBasis = aCounts.thread;
@@ -829,9 +834,9 @@ MMAScheduleAttr::getContractionLayout(vector::ContractionOp contractOp) const {
       subgroupBasis, aThreadBasis);
 
   // B matrix layout
-  MFMAAttr::SingleSubgroupLayout bCounts =
+  MmaAttr::SingleSubgroupLayout bCounts =
       mfmaAttr.getBSingleSubgroupLayoutCount();
-  MFMAAttr::SingleSubgroupLayout bOrders =
+  MmaAttr::SingleSubgroupLayout bOrders =
       mfmaAttr.getBSingleSubgroupLayoutOrder();
 
   SmallVector<int64_t, 2> bThreadBasis = bCounts.thread;

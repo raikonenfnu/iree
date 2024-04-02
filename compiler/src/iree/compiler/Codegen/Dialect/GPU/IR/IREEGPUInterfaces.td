@@ -21,6 +21,20 @@ def IREEGPU_MmaAttr : AttrInterface<"MmaAttr"> {
     types.
   }];
 
+  let extraClassDeclaration = [{
+    // Partial nested layout for an MMA intrinsic's matrix input/output inside
+    // a single subgroup.
+    //
+
+    // Note that this is just a container used by the following methods; it can
+    // contain both the shape and the order.
+    struct SingleSubgroupLayout {
+      SmallVector<int64_t, 2> outer;
+      SmallVector<int64_t, 2> thread;
+      SmallVector<int64_t, 2> element;
+    };
+  }];
+
   let methods = [
     InterfaceMethod<
       /*desc=*/[{
