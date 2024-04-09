@@ -197,6 +197,10 @@ private:
       return success();
     }
 
+    if (sourceMemRefType.getRank() < 2) {
+      return success();
+    }
+
     // TODO: Support masking.
     if (transfer.getMask()) {
       transfer->emitOpError(
