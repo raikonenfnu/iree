@@ -193,8 +193,7 @@ void DecomposePackUnPackOpsPass::runOnOperation() {
 
   {
     RewritePatternSet patterns(ctx);
-    patterns.add<linalg::GeneralizeOuterUnitDimsPackOpPattern,
-                 linalg::GeneralizeOuterUnitDimsUnPackOpPattern>(ctx);
+    patterns.add<linalg::GeneralizeOuterUnitDimsUnPackOpPattern>(ctx);
     if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
       return signalPassFailure();
     }

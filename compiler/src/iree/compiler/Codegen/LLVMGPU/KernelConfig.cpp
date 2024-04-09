@@ -514,6 +514,13 @@ setMatmulVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
 
   int64_t kDim = contractionDims->k.back();
 
+  // Bail out if core contraction dims are dynamic.
+  if (bounds[mDim] == ShapedType::kDynamic ||
+      bounds[nDim] == ShapedType::kDynamic ||
+      bounds[kDim] == ShapedType::kDynamic) {
+    return failure();
+  }
+
   Value lhs = op.getDpsInputOperand(0)->get();
   Value rhs = op.getDpsInputOperand(1)->get();
   Value init = op.getDpsInitOperand(0)->get();
