@@ -200,6 +200,10 @@ private:
     if (sourceMemRefType.getRank() < 2) {
       return success();
     }
+    if (transfer->hasOneUse() &&
+        dyn_cast<vector::BroadcastOp>(*transfer->getUsers().begin())) {
+      return success();
+    }
 
     // TODO: Support masking.
     if (transfer.getMask()) {
@@ -221,6 +225,7 @@ private:
         ShapedType::getNumElements(transfer.getVectorType().getShape());
     int64_t flatNumThreads = ShapedType::getNumElements(workgroupSize);
     if (flatNumElements % flatNumThreads != 0) {
+      llvm::outs() << "Erroring Op:" << transfer << "\n";
       transfer->emitOpError(
           "Anchoring on transfer_read with unsupported number of elements (not "
           "divisible by workgroup size)");

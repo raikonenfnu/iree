@@ -8,6 +8,7 @@
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenAttrs.h"
 #include "iree/compiler/Codegen/Dialect/GPU/IR/IREEGPUAttrs.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
+#include "iree/compiler/Dialect/Flow/Transforms/RegionOpUtils.h"
 #include "iree/compiler/Preprocessing/Common/PassDetail.h"
 #include "iree/compiler/Preprocessing/Common/Passes.h"
 #include "llvm/ADT/STLExtras.h"
@@ -22,35 +23,16 @@ namespace mlir::iree_compiler::Preprocessing {
 
 static void packContractionOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
                               ArrayRef<GPUMatmulShapeType> intrinsics) {
-  // TODO: Reorder dimension S.T lhs's index map will be as close to identity as
-  // possible. this is done to ensure when we tile etc we don't get into a weird
-  // vector.contract configuration. auto genericOp =
-  // dyn_cast<linalg::GenericOp>(linalgOp.getOperation()); if (!genericOp)
-  // {return; SetVector<unsigned> interchange; auto maps =
-  // linalgOp.getIndexingMapsArray(); for (int i = 0; i <
-  // maps[0].getNumResults(); i++) {
-  //   llvm::outs()<<maps[0].getDimPosition(i)<<"\n";
-  //   interchange.insert(maps[0].getDimPosition(i));
-  // }
-  // for (int j = 0; j < maps[1].getNumResults(); j++) {
-  //   interchange.insert(maps[1].getDimPosition(j));
-  // }
-  // FailureOr<linalg::GenericOp> interchangeResult =
-  // interchangeGenericOp(rewriter, genericOp,
-  // SmallVector<unsigned>(interchange.begin(), interchange.end())); if
-  // (failed(interchangeResult)) return; linalgOp = *interchangeResult;
 
   FailureOr<mlir::linalg::ContractionDimensions> contractionDims =
       mlir::linalg::inferContractionDims(linalgOp);
 
   if (failed(contractionDims)) {
-    llvm::outs() << "no contract!\n";
     return;
   }
 
   if (contractionDims->k.size() < 1 || contractionDims->m.size() < 1 ||
       contractionDims->n.size() < 1) {
-    llvm::outs() << "no mnk!\n";
     return;
   }
 
@@ -61,10 +43,9 @@ static void packContractionOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
 
   // If none of the shape is dynamic, we'd fallback to using pad to intrinsics.
   SmallVector<int64_t, 4> bounds = linalgOp.getStaticLoopRanges();
-  if (!ShapedType::isDynamic(bounds[mDim]) &&
+  if ((!ShapedType::isDynamic(bounds[mDim]) || bounds[mDim] == 1) &&
       !ShapedType::isDynamic(bounds[nDim]) &&
       !ShapedType::isDynamic(bounds[kDim])) {
-    llvm::outs() << "no dyn!\n";
     return;
   }
 
@@ -72,20 +53,25 @@ static void packContractionOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
   SmallVector<std::pair<int64_t, int64_t>> dimsToPack;
   for (auto &intrinsic : intrinsics) {
     SmallVector<std::pair<int64_t, int64_t>> dimsToPackCandidates;
-    if (bounds[mDim] % intrinsic.mSize != 0 ||
-        ShapedType::isDynamic(bounds[mDim])) {
-      dimsToPackCandidates.emplace_back(mDim, intrinsic.mSize);
-    }
+    // if (bounds[mDim] % intrinsic.mSize != 0 ||
+    //     ShapedType::isDynamic(bounds[mDim])) {
+    //   dimsToPackCandidates.emplace_back(mDim, intrinsic.mSize);
+    // }
+    //   dimsToPackCandidates.emplace_back(mDim, intrinsic.mSize);
+    // if (bounds[nDim] % intrinsic.nSize != 0 ||
+    //     ShapedType::isDynamic(bounds[nDim])) {
+    //   dimsToPackCandidates.emplace_back(nDim, intrinsic.nSize);
+    // }
 
-    if (bounds[nDim] % intrinsic.nSize != 0 ||
-        ShapedType::isDynamic(bounds[nDim])) {
-      dimsToPackCandidates.emplace_back(nDim, intrinsic.nSize);
-    }
+    // if (bounds[kDim] % intrinsic.kSize != 0 ||
+    //     ShapedType::isDynamic(bounds[kDim])) {
+    //   dimsToPackCandidates.emplace_back(kDim, intrinsic.kSize);
+    // }
 
-    if (bounds[kDim] % intrinsic.kSize != 0 ||
-        ShapedType::isDynamic(bounds[kDim])) {
-      dimsToPackCandidates.emplace_back(kDim, intrinsic.kSize);
-    }
+    dimsToPackCandidates.emplace_back(mDim, intrinsic.mSize);
+    dimsToPackCandidates.emplace_back(nDim, intrinsic.nSize);
+    dimsToPackCandidates.emplace_back(kDim, intrinsic.kSize);
+
     if (dimsToPack.empty() || dimsToPackCandidates.size() < dimsToPack.size()) {
       dimsToPack = dimsToPackCandidates;
     }
@@ -93,7 +79,6 @@ static void packContractionOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
 
   // Cannot find intrinsic that matches.
   if (dimsToPack.empty()) {
-    llvm::outs() << "no candidate!\n";
     return;
   }
 
@@ -111,6 +96,30 @@ static void packContractionOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
   if (failed(packResults)) {
     return;
   }
+
+  // TODO: Reorder dimension S.T lhs's index map will be as close to identity as
+  // possible. this is done to ensure when we tile etc we don't get into a weird
+  // vector.contract configuration. auto genericOp =
+  // linalg::LinalgOp packedLinalgOp = packResults->packedLinalgOp;
+  // auto genericOp =
+  // dyn_cast<linalg::GenericOp>(packedLinalgOp.getOperation()); if (!genericOp)
+  // {
+  //   FailureOr<linalg::GenericOp> generalizedOp =
+  //   linalg::generalizeNamedOp(rewriter, packedLinalgOp); genericOp =
+  //   *generalizedOp;
+  // }
+  // SetVector<unsigned> interchange;
+  // auto maps = packedLinalgOp.getIndexingMapsArray();
+  // for (int i = 0; i < maps[0].getNumResults(); i++) {
+  //   interchange.insert(maps[0].getDimPosition(i));
+  // }
+  // for (int j = 0; j < maps[1].getNumResults(); j++) {
+  //   interchange.insert(maps[1].getDimPosition(j));
+  // }
+  // FailureOr<linalg::GenericOp> interchangeResult =
+  // interchangeGenericOp(rewriter, genericOp,
+  // SmallVector<unsigned>(interchange.begin(), interchange.end()));
+  // assert(succeeded(interchangeResult));
 }
 
 namespace {
@@ -119,7 +128,6 @@ class PackToIntrinsicsPass : public PackToIntrinsicsBase<PackToIntrinsicsPass> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
-    RewritePatternSet patterns(context);
     auto funcOp = getOperation();
     ArrayAttr mmaKinds = nullptr;
     for (auto targetAttr :
@@ -146,24 +154,37 @@ public:
 
     SmallVector<linalg::LinalgOp> targetOps;
     funcOp->walk([&](linalg::LinalgOp linalgOp) {
-      if (isa<linalg::Conv2DNhwcHwcfOp, linalg::BatchMatmulOp>(
+      if (isa<linalg::BatchMatmulTransposeBOp, linalg::BatchMatmulOp>(
               linalgOp.getOperation())) {
         targetOps.push_back(linalgOp);
-      } else if (isa<linalg::GenericOp>(linalgOp) &&
-                 succeeded(linalg::inferContractionDims(linalgOp))) {
-        targetOps.push_back(linalgOp);
       }
+      // } else if (isa<linalg::GenericOp>(linalgOp) &&
+      //            succeeded(linalg::inferContractionDims(linalgOp))) {
+      //   targetOps.push_back(linalgOp);
+      // }
     });
 
     IRRewriter rewriter(context);
     for (auto linalgOp : llvm::make_early_inc_range(targetOps)) {
       rewriter.setInsertionPoint(linalgOp);
       TypeSwitch<Operation *, void>(linalgOp.getOperation())
-          .Case<linalg::BatchMatmulOp, linalg::GenericOp>([&](auto matmulOp) {
+          .Case<linalg::BatchMatmulOp, linalg::BatchMatmulTransposeBOp,
+                linalg::GenericOp>([&](auto matmulOp) {
             packContractionOp(rewriter, linalgOp, intrinsics);
           })
           .Default([&](Operation *op) {});
     }
+
+    // Packing propagation/cleanup.
+    // RewritePatternSet patterns(context);
+    // linalg::populateDataLayoutPropagationPatterns(patterns, [](Operation *op)
+    // {
+    //   return IREE::Flow::isDequantizationLikeOp(op);
+    // });
+    // if (failed(applyPatternsAndFoldGreedily(funcOp, std::move(patterns)))) {
+    //   funcOp->emitOpError("folding patterns failed");
+    //   return signalPassFailure();
+    // }
   }
 };
 

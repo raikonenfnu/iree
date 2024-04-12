@@ -976,8 +976,12 @@ static LogicalResult setPackConfig(mlir::FunctionOpInterface entryPoint,
   // but it does not know that it is working on packed domain. We need to take
   // inner tile sizes into account and adjust the distribution tile sizes.
   SmallVector<int64_t> innerTiles = packOp.getStaticTiles();
+  ArrayRef<int64_t> outerTiles = packOp.getSourceType().getShape();
   ArrayRef<int64_t> dimPos = packOp.getInnerDimsPos();
   for (auto [pos, size] : llvm::zip_equal(dimPos, innerTiles)) {
+    if (ShapedType::isDynamic(outerTiles[pos])) {
+      tileSizes[pos] = 1;
+    }
     if (tileSizes[pos] == 0 || ShapedType::isDynamic(size))
       continue;
     tileSizes[pos] = tileSizes[pos] / size;
