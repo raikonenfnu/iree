@@ -196,6 +196,10 @@ private:
     if (!sourceMemRefType || hasSharedMemoryAddressSpace(sourceMemRefType)) {
       return success();
     }
+    if (transfer->hasOneUse() &&
+        dyn_cast<vector::BroadcastOp>(*transfer->getUsers().begin())) {
+      return success();
+    }
 
     // TODO: Support masking.
     if (transfer.getMask()) {
