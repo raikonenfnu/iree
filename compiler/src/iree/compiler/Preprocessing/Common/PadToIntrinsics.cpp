@@ -11,14 +11,59 @@
 #include "iree/compiler/Preprocessing/Common/PassDetail.h"
 #include "iree/compiler/Preprocessing/Common/Passes.h"
 #include "llvm/ADT/STLExtras.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/IR/LinalgInterfaces.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/Utils/Utils.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir::iree_compiler::Preprocessing {
+
+/// Helper struct to encode origin of dims in linalgOp.
+struct OriginOperandsDim {
+  Value operand;
+  int64_t dim;
+};
+
+std::optional<int64_t>
+getOperandDim(SmallVector<OriginOperandsDim> &dimOriginOperands,
+              Value operand) {
+  std::optional<int64_t> operandDim;
+  for (auto &originOperand : dimOriginOperands) {
+    if (originOperand.operand == operand)
+      operandDim = originOperand.dim;
+  }
+  return operandDim;
+}
+
+SmallVector<OpFoldResult>
+getOperandPadding(RewriterBase &rewriter, Value operand,
+                  SmallVector<SmallVector<OriginOperandsDim>> &dimsToOperandMap,
+                  int64_t mDim, int64_t nDim, int64_t kDim,
+                  OpFoldResult mPadding, OpFoldResult nPadding,
+                  OpFoldResult kPadding) {
+  auto operandType = operand.getType().dyn_cast<RankedTensorType>();
+  if (!operandType)
+    return {};
+  SmallVector<OpFoldResult> operandPadding(operandType.getRank(),
+                                           rewriter.getIndexAttr(0));
+  std::optional<int64_t> operandMdim =
+      getOperandDim(dimsToOperandMap[mDim], operand);
+  std::optional<int64_t> operandNdim =
+      getOperandDim(dimsToOperandMap[nDim], operand);
+  std::optional<int64_t> operandKdim =
+      getOperandDim(dimsToOperandMap[kDim], operand);
+  if (operandMdim)
+    operandPadding[operandMdim.value()] = mPadding;
+  if (operandNdim)
+    operandPadding[operandNdim.value()] = nPadding;
+  if (operandKdim)
+    operandPadding[operandKdim.value()] = kPadding;
+  return operandPadding;
+}
 
 static Value getPaddedValue(RewriterBase &rewriter, Location loc,
                             Value padSource, ArrayRef<int64_t> padding) {
@@ -39,6 +84,66 @@ static Value getPaddedValue(RewriterBase &rewriter, Location loc,
   Value paddedResult = rewriter.create<tensor::PadOp>(
       loc, paddedResultType, padSource, low, high, paddingValue);
   return paddedResult;
+}
+
+static Value padValue(RewriterBase &rewriter, Location loc, Value padSource,
+                      ArrayRef<OpFoldResult> padding) {
+  auto sourceType = padSource.getType().cast<RankedTensorType>();
+  ArrayRef<int64_t> sourceShape = sourceType.getShape();
+  auto paddedShape =
+      llvm::map_to_vector(llvm::zip_equal(sourceShape, padding), [](auto it) {
+        std::optional<int64_t> padInt = getConstantIntValue(std::get<1>(it));
+        if (ShapedType::isDynamic(std::get<0>(it)) || !padInt) {
+          return ShapedType::kDynamic;
+        }
+        return std::get<0>(it) + padInt.value();
+      });
+  auto paddedResultType =
+      RankedTensorType::get(paddedShape, sourceType.getElementType());
+  Value paddingValue = rewriter.create<arith::ConstantOp>(
+      loc, rewriter.getZeroAttr(sourceType.getElementType()));
+  SmallVector<OpFoldResult> low(padding.size(), rewriter.getIndexAttr(0));
+  Value paddedResult = rewriter.create<tensor::PadOp>(
+      loc, paddedResultType, padSource, low, padding, paddingValue);
+  return paddedResult;
+}
+
+static Value expandValue(RewriterBase &rewriter, Location loc,
+                         Value expandSource, AffineMap &operandMap,
+                         DenseMap<int64_t, int64_t> &dimsToExpand) {
+  SetVector<int64_t> operandDimsToExpand;
+  DenseMap<int64_t, int64_t> operandDimToExpandSize;
+  for (auto [dimToExpand, sizeToExpand] : dimsToExpand) {
+    std::optional<int64_t> maybeDim = operandMap.getResultPosition(
+        getAffineDimExpr(dimToExpand, operandMap.getContext()));
+    if (maybeDim) {
+      operandDimsToExpand.insert(maybeDim.value());
+      operandDimToExpandSize[maybeDim.value()] = sizeToExpand;
+    }
+  }
+  if (operandDimsToExpand.empty()) {
+    return expandSource;
+  }
+  // Expanded shape
+  auto operandType = expandSource.getType().cast<RankedTensorType>();
+  auto lhsShape = operandType.getShape();
+  SmallVector<ReassociationIndices> reassoc;
+  SmallVector<int64_t> expandedShape;
+  int64_t reassocOffset = 0;
+  for (int i = 0; i < operandType.getRank(); i++) {
+    if (operandDimsToExpand.contains(i)) {
+      expandedShape.append({lhsShape[i], operandDimToExpandSize[i]});
+      reassoc.push_back(
+          ReassociationIndices{reassocOffset + i, reassocOffset + i + 1});
+      ++reassocOffset;
+    } else {
+      expandedShape.push_back(lhsShape[i]);
+      reassoc.push_back(ReassociationIndices{reassocOffset + i});
+    }
+  }
+  return rewriter.create<tensor::ExpandShapeOp>(
+      loc, RankedTensorType::Builder(operandType).setShape(expandedShape),
+      expandSource, reassoc);
 }
 
 static void padConvOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
@@ -167,58 +272,233 @@ static void padBatchGemmOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
     return;
   }
 
-  // Try to search for pad value.
-  SmallVector<int64_t, 4> bounds = linalgOp.getStaticLoopRanges();
-  int64_t mSize = bounds[1];
-  if (ShapedType::isDynamic(mSize)) {
+  FailureOr<mlir::linalg::ContractionDimensions> contractionDims =
+      mlir::linalg::inferContractionDims(linalgOp);
+
+  if (failed(contractionDims)) {
     return;
   }
-  SmallVector<std::array<int64_t, 3>> mnkPaddingCandidates;
-  for (auto &intrinsic : intrinsics) {
-    std::optional<int64_t> mPadding, nPadding, kPadding;
-    auto getPadding = [](int64_t value, int64_t padTo) {
-      return ((value + padTo - 1) / padTo) * padTo - value;
-    };
 
-    if (mSize % intrinsic.mSize != 0) {
-      mPadding = getPadding(mSize, intrinsic.mSize);
+  if (contractionDims->k.size() < 1 || contractionDims->m.size() < 1 ||
+      contractionDims->n.size() < 1) {
+    return;
+  }
+  Location loc = linalgOp.getLoc();
+
+  // Naive handling by only looking into most inner dimensions.
+  int64_t mDim = contractionDims->m.back();
+  int64_t nDim = contractionDims->n.back();
+  int64_t kDim = contractionDims->k.back();
+
+  // If none of the shape is dynamic, we'd fallback to using pad to intrinsics.
+  SmallVector<int64_t, 4> bounds = linalgOp.getStaticLoopRanges();
+  int64_t mSize = bounds[mDim];
+  int64_t nSize = bounds[nDim];
+  int64_t kSize = bounds[kDim];
+
+  // Obtain mapping from dims in linalgOp to originating dimensions.
+  SmallVector<SmallVector<OriginOperandsDim>> dimsToOperandMap(bounds.size(),
+                                                               {});
+  SmallVector<OpOperand *> initOperands = llvm::to_vector(llvm::map_range(
+      linalgOp.getDpsInitsMutable(), [](OpOperand &o) { return &o; }));
+  SmallVector<OpOperand *> inputOperands = linalgOp.getDpsInputOperands();
+  for (int64_t targetDim : {mDim, nDim, kDim}) {
+    for (auto operand :
+         llvm::concat<OpOperand *>(inputOperands, initOperands)) {
+      auto operandMap = linalgOp.getMatchingIndexingMap(operand);
+      std::optional<unsigned> maybeDim = operandMap.getResultPosition(
+          getAffineDimExpr(targetDim, operandMap.getContext()));
+      if (maybeDim)
+        dimsToOperandMap[targetDim].push_back(
+            {operand->get(), maybeDim.value()});
+    }
+  }
+
+  SmallVector<DenseMap<int64_t, int64_t>> dimsToExpandCandidates;
+  SmallVector<std::array<OpFoldResult, 3>> mnkPaddingCandidates;
+  AffineExpr s0, s1; // problemSize, intrinsicSize
+  bindSymbols(rewriter.getContext(), s0, s1);
+  AffineExpr padByExpr = (s0).ceilDiv(s1) * s1 - s0;
+  auto getPadding = [&](OpFoldResult value, int64_t padTo) {
+    return affine::makeComposedFoldedAffineApply(
+        rewriter, loc, padByExpr, {value, rewriter.getIndexAttr(padTo)});
+  };
+  OpFoldResult zeroExpr = rewriter.getIndexAttr(0);
+  for (auto &intrinsic : intrinsics) {
+    std::optional<OpFoldResult> mPadding, nPadding, kPadding;
+    DenseMap<int64_t, int64_t> dimsToExpandCandidate;
+    if (mSize % intrinsic.mSize != 0 || ShapedType::isDynamic(mSize)) {
+      OriginOperandsDim originMdimOperand = dimsToOperandMap[mDim].front();
+      OpFoldResult mSizeExpr = rewriter.getIndexAttr(mSize);
+      if (ShapedType::isDynamic(mSize)) {
+        mSizeExpr = rewriter
+                        .create<tensor::DimOp>(loc, originMdimOperand.operand,
+                                               originMdimOperand.dim)
+                        .getResult();
+      }
+      mPadding = getPadding(mSizeExpr, intrinsic.mSize);
+      if (!getConstantIntValue(mPadding.value())) {
+        dimsToExpandCandidate[mDim] = intrinsic.nSize;
+      }
+    }
+
+    if (nSize % intrinsic.nSize != 0 || ShapedType::isDynamic(nSize)) {
+      OriginOperandsDim originNdimOperand = dimsToOperandMap[nDim].front();
+      OpFoldResult nSizeExpr = rewriter.getIndexAttr(nSize);
+      if (ShapedType::isDynamic(nSize)) {
+        nSizeExpr = rewriter
+                        .create<tensor::DimOp>(loc, originNdimOperand.operand,
+                                               originNdimOperand.dim)
+                        .getResult();
+      }
+      nPadding = getPadding(nSizeExpr, intrinsic.nSize);
+      if (!getConstantIntValue(nPadding.value())) {
+        dimsToExpandCandidate[nDim] = intrinsic.nSize;
+      }
+    }
+
+    if (kSize % intrinsic.kSize != 0 || ShapedType::isDynamic(kSize)) {
+      OriginOperandsDim originKdimOperand = dimsToOperandMap[kDim].front();
+      OpFoldResult kSizeExpr = rewriter.getIndexAttr(kSize);
+      if (ShapedType::isDynamic(kSize)) {
+        kSizeExpr = rewriter
+                        .create<tensor::DimOp>(loc, originKdimOperand.operand,
+                                               originKdimOperand.dim)
+                        .getResult();
+      }
+      kPadding = getPadding(kSizeExpr, intrinsic.kSize);
+      if (!getConstantIntValue(kPadding.value())) {
+        dimsToExpandCandidate[kDim] = intrinsic.kSize;
+      }
     }
 
     if (!mPadding && !nPadding && !kPadding) {
-      // Some intrinsic matches. Nothing to do.
       return;
     }
-    mnkPaddingCandidates.push_back(
-        {mPadding.value_or(0), nPadding.value_or(0), kPadding.value_or(0)});
+    mnkPaddingCandidates.push_back({mPadding.value_or(zeroExpr),
+                                    nPadding.value_or(zeroExpr),
+                                    kPadding.value_or(zeroExpr)});
+    dimsToExpandCandidates.push_back(dimsToExpandCandidate);
   }
   if (mnkPaddingCandidates.empty()) {
     return;
   }
-  std::array<int64_t, 3> mnkPadding = mnkPaddingCandidates.front();
+  std::array<OpFoldResult, 3> mnkPadding = mnkPaddingCandidates.front();
+  DenseMap<int64_t, int64_t> dimsToExpand = dimsToExpandCandidates.front();
+
+  OpFoldResult mPadding = mnkPadding[0];
+  OpFoldResult nPadding = mnkPadding[1];
+  OpFoldResult kPadding = mnkPadding[2];
 
   Value newLhs = linalgOp.getDpsInputOperand(0)->get();
   Value newRhs = linalgOp.getDpsInputOperand(1)->get();
   Value newOuts = linalgOp.getDpsInitOperand(0)->get();
 
-  Location loc = linalgOp.getLoc();
-  int64_t mPadding = mnkPadding[0];
-  assert(mPadding != 0);
-  newLhs = getPaddedValue(rewriter, loc, newLhs, {0, mPadding, 0});
-  newOuts = getPaddedValue(rewriter, loc, newOuts, {0, mPadding, 0});
+  auto lhsMap = linalgOp.getMatchingIndexingMap(linalgOp.getDpsInputOperand(0));
+  auto rhsMap = linalgOp.getMatchingIndexingMap(linalgOp.getDpsInputOperand(1));
+  auto outsMap = linalgOp.getMatchingIndexingMap(linalgOp.getDpsInitOperand(0));
+
+  SmallVector<OpFoldResult> lhsPadding =
+      getOperandPadding(rewriter, newLhs, dimsToOperandMap, mDim, nDim, kDim,
+                        mPadding, nPadding, kPadding);
+  SmallVector<OpFoldResult> rhsPadding =
+      getOperandPadding(rewriter, newRhs, dimsToOperandMap, mDim, nDim, kDim,
+                        mPadding, nPadding, kPadding);
+  SmallVector<OpFoldResult> outsPadding =
+      getOperandPadding(rewriter, newOuts, dimsToOperandMap, mDim, nDim, kDim,
+                        mPadding, nPadding, kPadding);
+  if (lhsPadding.empty() || rhsPadding.empty() || outsPadding.empty()) {
+    return;
+  }
+  newLhs = padValue(rewriter, loc, newLhs, lhsPadding);
+  newRhs = padValue(rewriter, loc, newRhs, rhsPadding);
+  newOuts = padValue(rewriter, loc, newOuts, outsPadding);
+
   auto paddedMatmulOp = mlir::clone(rewriter, linalgOp, {newOuts.getType()},
                                     ArrayRef<Value>{newLhs, newRhs, newOuts});
+  Value paddedCompute = paddedMatmulOp->getResults()[0];
+
+  // Expand dimensions if there are dynamic shapes.
+  if (!dimsToExpand.empty()) {
+    // Generating expanded indexing maps and iterator types.
+    SmallVector<AffineMap> expandedMaps = linalgOp.getIndexingMapsArray();
+    SmallVector<AffineMap> originalIterators = linalgOp.getIndexingMapsArray();
+    SmallVector<utils::IteratorType> expandedIterators =
+        linalgOp.getIteratorTypesArray();
+    SmallVector<int64_t> dimsToExpandVec = llvm::to_vector(
+        llvm::map_range(dimsToExpand, [](auto &dim) { return dim.first; }));
+    for (auto [expandIdx, expandDim] : llvm::enumerate(dimsToExpandVec)) {
+      int64_t newDim = expandedIterators.size();
+      expandedIterators.push_back(expandedIterators[expandDim]);
+      for (int operandIdx = 0; operandIdx < expandedMaps.size(); operandIdx++) {
+        AffineMap &map = expandedMaps[operandIdx];
+        map = map.shiftDims(1, newDim);
+        std::optional<int64_t> maybeDim = map.getResultPosition(
+            getAffineDimExpr(expandDim, map.getContext()));
+        if (!maybeDim)
+          continue;
+        map =
+            map.insertResult(Builder(map.getContext()).getAffineDimExpr(newDim),
+                             maybeDim.value() + 1);
+      }
+    }
+    // Propagate to expand to operands
+    newLhs = expandValue(rewriter, loc, newLhs, lhsMap, dimsToExpand);
+    newRhs = expandValue(rewriter, loc, newRhs, rhsMap, dimsToExpand);
+    newOuts = expandValue(rewriter, loc, newOuts, outsMap, dimsToExpand);
+    // Create expanded contractionOp.
+    auto expandedMatmulOp = rewriter.create<linalg::GenericOp>(
+        loc, newOuts.getType(), ValueRange{newLhs, newRhs}, ValueRange{newOuts},
+        expandedMaps, expandedIterators);
+    expandedMatmulOp.getRegion().takeBody(linalgOp->getRegion(0));
+
+    // Reorder dimension S.T lhs's index map will be as close to identity as
+    // possible. this is done to ensure when we tile etc we don't get into a
+    // weird
+    SetVector<unsigned> interchange;
+    auto maps = expandedMatmulOp.getIndexingMapsArray();
+    for (int i = 0; i < maps[0].getNumResults(); i++) {
+      interchange.insert(maps[0].getDimPosition(i));
+    }
+    for (int j = 0; j < maps[1].getNumResults(); j++) {
+      interchange.insert(maps[1].getDimPosition(j));
+    }
+    FailureOr<linalg::GenericOp> interchangeResult = interchangeGenericOp(
+        rewriter, expandedMatmulOp,
+        SmallVector<unsigned>(interchange.begin(), interchange.end()));
+    assert(succeeded(interchangeResult));
+    expandedMatmulOp = *interchangeResult;
+
+    paddedCompute = expandedMatmulOp.getResults()[0];
+
+    // Collapse back to non expanded shape if required.
+    if (auto expandOutsOp =
+            dyn_cast<tensor::ExpandShapeOp>(newOuts.getDefiningOp())) {
+      paddedCompute = rewriter.create<tensor::CollapseShapeOp>(
+          loc, expandOutsOp.getSrcType(), paddedCompute,
+          expandOutsOp.getReassociationIndices());
+    }
+  }
 
   // extract slice.
-  auto zero = rewriter.getI64IntegerAttr(0);
-  auto one = rewriter.getI64IntegerAttr(1);
-  SmallVector<OpFoldResult> offsets(3, zero), strides(3, one), sizes;
   auto resultType = linalgOp->getResult(0).getType().cast<RankedTensorType>();
   auto resultShape = resultType.getShape();
-  sizes = {rewriter.getIndexAttr(resultShape[0]),
-           rewriter.getIndexAttr(resultShape[1]),
-           rewriter.getIndexAttr(resultShape[2])};
-  rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(
-      linalgOp, paddedMatmulOp->getResults()[0], offsets, sizes, strides);
+  auto resultRank = resultType.getRank();
+  auto zero = rewriter.getI64IntegerAttr(0);
+  auto one = rewriter.getI64IntegerAttr(1);
+  SmallVector<OpFoldResult> offsets(resultRank, zero), strides(resultRank, one),
+      sizes;
+  for (auto [dimIdx, dimSize] : llvm::enumerate(resultShape)) {
+    if (ShapedType::isDynamic(dimSize))
+      sizes.push_back(rewriter
+                          .create<tensor::DimOp>(
+                              loc, linalgOp.getDpsInitOperand(0)->get(), dimIdx)
+                          .getResult());
+    else
+      sizes.push_back(rewriter.getIndexAttr(dimSize));
+  }
+  rewriter.replaceOpWithNewOp<tensor::ExtractSliceOp>(linalgOp, paddedCompute,
+                                                      offsets, sizes, strides);
 }
 
 namespace {
@@ -242,7 +522,8 @@ public:
     if (!mmaKinds)
       return;
 
-    auto mmaAttrs = llvm::to_vector(mmaKinds.getAsRange<IREE::GPU::MmaAttr>());
+    auto mmaAttrs =
+        llvm::to_vector(mmaKinds.getAsRange<IREE::GPU::MmaInterfaceAttr>());
     SmallVector<GPUMatmulShapeType> intrinsics;
     intrinsics.reserve(mmaKinds.size());
     for (auto mma : mmaAttrs) {
@@ -264,9 +545,9 @@ public:
       TypeSwitch<Operation *, void>(linalgOp.getOperation())
           .Case<linalg::Conv2DNhwcHwcfOp>(
               [&](auto convOp) { padConvOp(rewriter, linalgOp, intrinsics); })
-          //.Case<linalg::BatchMatmulOp>([&](auto matmulOp) {
-          // padBatchGemmOp(rewriter, linalgOp, intrinsics);
-          //})
+          .Case<linalg::BatchMatmulOp>([&](auto matmulOp) {
+            padBatchGemmOp(rewriter, linalgOp, intrinsics);
+          })
           .Default([&](Operation *op) {});
     }
   }
