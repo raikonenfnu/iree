@@ -268,9 +268,9 @@ static void padConvOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
 
 static void padBatchGemmOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
                            ArrayRef<GPUMatmulShapeType> intrinsics) {
-  if (!isa<linalg::BatchMatmulOp>(linalgOp)) {
-    return;
-  }
+  // if (!isa<linalg::BatchMatmulOp>(linalgOp)) {
+  //   return;
+  // }
 
   FailureOr<mlir::linalg::ContractionDimensions> contractionDims =
       mlir::linalg::inferContractionDims(linalgOp);
@@ -295,6 +295,11 @@ static void padBatchGemmOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
   int64_t mSize = bounds[mDim];
   int64_t nSize = bounds[nDim];
   int64_t kSize = bounds[kDim];
+
+  // Bail out on matvec-like cases.
+  if (mSize == 1 || nSize == 1) {
+    return;
+  }
 
   // Obtain mapping from dims in linalgOp to originating dimensions.
   SmallVector<SmallVector<OriginOperandsDim>> dimsToOperandMap(bounds.size(),
@@ -425,22 +430,31 @@ static void padBatchGemmOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
     SmallVector<AffineMap> originalIterators = linalgOp.getIndexingMapsArray();
     SmallVector<utils::IteratorType> expandedIterators =
         linalgOp.getIteratorTypesArray();
+    int expandOffset = 0;
     SmallVector<int64_t> dimsToExpandVec = llvm::to_vector(
         llvm::map_range(dimsToExpand, [](auto &dim) { return dim.first; }));
+    llvm::sort(dimsToExpandVec);
     for (auto [expandIdx, expandDim] : llvm::enumerate(dimsToExpandVec)) {
-      int64_t newDim = expandedIterators.size();
-      expandedIterators.push_back(expandedIterators[expandDim]);
+      // Creating iterator type for newly expanded/dst dim from it's expans
+      // source dim.
+      int64_t expandSrcDim = expandDim + expandOffset;
+      expandedIterators.insert(expandedIterators.begin() + expandSrcDim,
+                               expandedIterators[expandSrcDim]);
+      // Updating map of each operand to handle newly expanded/dst dim
+      // based on the location of it's expand source dim.
       for (int operandIdx = 0; operandIdx < expandedMaps.size(); operandIdx++) {
         AffineMap &map = expandedMaps[operandIdx];
-        map = map.shiftDims(1, newDim);
+        int64_t expandSrcDim = expandDim + expandOffset;
+        int64_t expandDstDim = expandSrcDim + 1;
+        map = map.shiftDims(1, expandDstDim);
         std::optional<int64_t> maybeDim = map.getResultPosition(
-            getAffineDimExpr(expandDim, map.getContext()));
+            getAffineDimExpr(expandSrcDim, map.getContext()));
         if (!maybeDim)
           continue;
-        map =
-            map.insertResult(Builder(map.getContext()).getAffineDimExpr(newDim),
-                             maybeDim.value() + 1);
+        map = map.insertResult(getAffineDimExpr(expandDstDim, map.getContext()),
+                               maybeDim.value() + 1);
       }
+      expandOffset++;
     }
     // Propagate to expand to operands
     newLhs = expandValue(rewriter, loc, newLhs, lhsMap, dimsToExpand);
@@ -451,24 +465,6 @@ static void padBatchGemmOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
         loc, newOuts.getType(), ValueRange{newLhs, newRhs}, ValueRange{newOuts},
         expandedMaps, expandedIterators);
     expandedMatmulOp.getRegion().takeBody(linalgOp->getRegion(0));
-
-    // Reorder dimension S.T lhs's index map will be as close to identity as
-    // possible. this is done to ensure when we tile etc we don't get into a
-    // weird
-    SetVector<unsigned> interchange;
-    auto maps = expandedMatmulOp.getIndexingMapsArray();
-    for (int i = 0; i < maps[0].getNumResults(); i++) {
-      interchange.insert(maps[0].getDimPosition(i));
-    }
-    for (int j = 0; j < maps[1].getNumResults(); j++) {
-      interchange.insert(maps[1].getDimPosition(j));
-    }
-    FailureOr<linalg::GenericOp> interchangeResult = interchangeGenericOp(
-        rewriter, expandedMatmulOp,
-        SmallVector<unsigned>(interchange.begin(), interchange.end()));
-    assert(succeeded(interchangeResult));
-    expandedMatmulOp = *interchangeResult;
-
     paddedCompute = expandedMatmulOp.getResults()[0];
 
     // Collapse back to non expanded shape if required.
@@ -481,6 +477,11 @@ static void padBatchGemmOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
   }
 
   // extract slice.
+  // TODO: Solve issues:
+  //       1. Hangs when only BMM is ran, but is OK when pad-to-intrinsic is ran
+  //       with dequant also. (solved -> non resolved dyn bounds still was put
+  //       on vectdist)
+  //       2. Correctness issue on pad-to-intrinsic for dequant-gemm. (TODO)
   auto resultType = linalgOp->getResult(0).getType().cast<RankedTensorType>();
   auto resultShape = resultType.getShape();
   auto resultRank = resultType.getRank();
@@ -534,7 +535,8 @@ public:
 
     SmallVector<linalg::LinalgOp> targetOps;
     funcOp->walk([&](linalg::LinalgOp linalgOp) {
-      if (isa<linalg::Conv2DNhwcHwcfOp, linalg::BatchMatmulOp>(
+      if (isa<linalg::Conv2DNhwcHwcfOp, linalg::BatchMatmulOp,
+              linalg::BatchMatmulTransposeBOp, linalg::GenericOp>(
               linalgOp.getOperation()))
         targetOps.push_back(linalgOp);
     });
