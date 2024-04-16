@@ -266,12 +266,9 @@ static void padConvOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
       linalgOp, paddedConv2dOp->getResults()[0], offsets, sizes, strides);
 }
 
-static void padBatchGemmOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
-                           ArrayRef<GPUMatmulShapeType> intrinsics) {
-  // if (!isa<linalg::BatchMatmulOp>(linalgOp)) {
-  //   return;
-  // }
-
+static void padContractionLikeOp(RewriterBase &rewriter,
+                                 linalg::LinalgOp linalgOp,
+                                 ArrayRef<GPUMatmulShapeType> intrinsics) {
   FailureOr<mlir::linalg::ContractionDimensions> contractionDims =
       mlir::linalg::inferContractionDims(linalgOp);
 
@@ -536,7 +533,8 @@ public:
     SmallVector<linalg::LinalgOp> targetOps;
     funcOp->walk([&](linalg::LinalgOp linalgOp) {
       if (isa<linalg::Conv2DNhwcHwcfOp, linalg::BatchMatmulOp,
-              linalg::BatchMatmulTransposeBOp, linalg::GenericOp>(
+              linalg::BatchMatmulTransposeBOp, linalg::MatmulOp,
+              linalg::MatmulTransposeBOp, linalg::MatmulOp, linalg::GenericOp>(
               linalgOp.getOperation()))
         targetOps.push_back(linalgOp);
     });
@@ -547,8 +545,10 @@ public:
       TypeSwitch<Operation *, void>(linalgOp.getOperation())
           .Case<linalg::Conv2DNhwcHwcfOp>(
               [&](auto convOp) { padConvOp(rewriter, linalgOp, intrinsics); })
-          .Case<linalg::BatchMatmulOp>([&](auto matmulOp) {
-            padBatchGemmOp(rewriter, linalgOp, intrinsics);
+          .Case<linalg::BatchMatmulOp, linalg::BatchMatmulTransposeBOp,
+                linalg::MatmulOp, linalg::MatmulTransposeBOp,
+                linalg::GenericOp>([&](auto matmulOp) {
+            padContractionLikeOp(rewriter, linalgOp, intrinsics);
           })
           .Default([&](Operation *op) {});
     }
