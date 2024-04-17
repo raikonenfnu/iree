@@ -19,6 +19,7 @@
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Codegen/Utils/LinalgOpInfo.h"
 #include "iree/compiler/Codegen/Utils/Utils.h"
+#include "iree/compiler/Dialect/Flow/Transforms/RegionOpUtils.h"
 #include "iree/compiler/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
@@ -570,15 +571,18 @@ setMatmulVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
   }
 
   int64_t sharedMemoryLimitInBytes = targetInfo.sharedMemoryLimitInBytes;
+  bool isDequantGemm =
+      IREE::Flow::isDequantizationLikeOp(lhs.getDefiningOp()) ||
+      IREE::Flow::isDequantizationLikeOp(rhs.getDefiningOp());
 
   // First try to find a schedule with an exactly matching intrinsic.
-  std::optional<GPUMMASchedule> schedule =
-      deduceMMASchedule(problem, intrinsics, seeds, sharedMemoryLimitInBytes);
+  std::optional<GPUMMASchedule> schedule = deduceMMASchedule(
+      problem, intrinsics, seeds, sharedMemoryLimitInBytes, isDequantGemm);
   if (!schedule) {
     // Then try again by allowing upcasting accumulator.
     schedule =
         deduceMMASchedule(problem, intrinsics, seeds, sharedMemoryLimitInBytes,
-                          /*canUpcastAcc=*/true);
+                          isDequantGemm, /*canUpcastAcc=*/true);
   }
   if (!schedule) {
     return failure();

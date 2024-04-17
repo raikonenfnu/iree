@@ -30,24 +30,28 @@ static int64_t calculateSharedMemoryUsedInBytes(const GPUMMASchedule &schedule,
 }
 
 bool isValidSchedule(const GPUMatmulShapeType &problem,
-                     const GPUMMASchedule &schedule) {
+                     const GPUMMASchedule &schedule, bool isDequant) {
   bool isValidM = (problem.mSize % (schedule.mSize * schedule.mTileCount *
                                     schedule.mWarpCount)) == 0;
   bool isValidN = (problem.nSize % (schedule.nSize * schedule.nTileCount *
                                     schedule.nWarpCount)) == 0;
   bool isValidK = (problem.kSize % (schedule.kSize * schedule.kTileCount)) == 0;
+  if (isDequant && schedule.nSize * schedule.nTileCount * schedule.nWarpCount %
+                           (schedule.mWarpCount * schedule.nWarpCount * 32) !=
+                       0)
+    return false;
   return isValidN && isValidM && isValidK;
 }
 
 FailureOr<GPUMMASchedule> fitScheduleInSharedMemory(
     const GPUMatmulShapeType &problem, ArrayRef<GPUMatmulShapeType> intrinsics,
-    GPUMMASchedule schedule, int64_t sharedMemLimitInBytes) {
+    GPUMMASchedule schedule, int64_t sharedMemLimitInBytes, bool isDequant) {
   int64_t lhsBitwidth =
       intrinsics[schedule.index].aType.getIntOrFloatBitWidth();
   int64_t rhsBitwidth =
       intrinsics[schedule.index].bType.getIntOrFloatBitWidth();
 
-  while (!isValidSchedule(problem, schedule) ||
+  while (!isValidSchedule(problem, schedule, isDequant) ||
          calculateSharedMemoryUsedInBytes(schedule, lhsBitwidth, rhsBitwidth) >
              sharedMemLimitInBytes) {
     LLVM_DEBUG({
@@ -96,11 +100,10 @@ FailureOr<GPUMMASchedule> fitScheduleInSharedMemory(
   return schedule;
 }
 
-FailureOr<GPUMMASchedule>
-deduceMMASchedule(const GPUMatmulShapeType &problem,
-                  ArrayRef<GPUMatmulShapeType> intrinsics,
-                  const GPUMMAHeuristicSeeds &seeds,
-                  int64_t sharedMemLimitInBytes, bool canUpcastAcc) {
+FailureOr<GPUMMASchedule> deduceMMASchedule(
+    const GPUMatmulShapeType &problem, ArrayRef<GPUMatmulShapeType> intrinsics,
+    const GPUMMAHeuristicSeeds &seeds, int64_t sharedMemLimitInBytes,
+    bool isDequant, bool canUpcastAcc) {
   for (auto [index, intrinsic] : llvm::enumerate(intrinsics)) {
     if (problem.aType != intrinsic.aType || problem.bType != intrinsic.bType) {
       continue; // Cannot use this intrinsic for mismatched types
@@ -197,7 +200,7 @@ deduceMMASchedule(const GPUMatmulShapeType &problem,
         GPUMMASchedule{index, intrinsic.mSize, intrinsic.nSize, intrinsic.kSize,
                        mWarpCount, nWarpCount, mTileCount, nTileCount,
                        kTileCount},
-        sharedMemLimitInBytes);
+        sharedMemLimitInBytes, isDequant);
   }
   return failure();
 }
