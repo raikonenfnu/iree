@@ -46,10 +46,9 @@ struct GPUMMASchedule {
 
 /// Returns a schedule for using one of the given MMA |intrinsics| to target the
 /// input |problem|. Returns std::nullopt if we cannot find such a schedule.
-FailureOr<GPUMMASchedule>
-deduceMMASchedule(const GPUMatmulShapeType &problem,
-                  ArrayRef<GPUMatmulShapeType> intrinsics,
-                  const GPUMMAHeuristicSeeds &seeds,
-                  int64_t sharedMemLimitInBytes, bool canUpcastAcc = false);
+FailureOr<GPUMMASchedule> deduceMMASchedule(
+    const GPUMatmulShapeType &problem, ArrayRef<GPUMatmulShapeType> intrinsics,
+    const GPUMMAHeuristicSeeds &seeds, int64_t sharedMemLimitInBytes,
+    bool isDequant = false, bool canUpcastAcc = false);
 
 } // namespace mlir::iree_compiler

@@ -141,6 +141,64 @@ private:
     return success();
   }
 
+  LogicalResult
+  setDequantReadLayout(MLIRContext *context, VectorLayoutAnalysis &analysis,
+                       vector::TransferReadOp transfer, int64_t flatNumThreads,
+                       int64_t numElementsPerThread, ArrayRef<int64_t> order) {
+    // Check that it is indeed read of dequant.
+    if (!getElementTypeOrSelf(transfer.getVectorType()).isInteger())
+      return failure();
+    int64_t transferRank = transfer.getVectorType().getRank();
+    if (transferRank != 2)
+      return failure();
+
+    if (!transfer->hasOneUse())
+      return failure();
+    auto extUIOp = dyn_cast<arith::ExtUIOp>(*transfer->getUsers().begin());
+    if (!extUIOp)
+      return failure();
+
+    if (!extUIOp->hasOneUse())
+      return failure();
+    auto uitofpOp = dyn_cast<arith::UIToFPOp>(*extUIOp->getUsers().begin());
+    if (!uitofpOp)
+      return failure();
+
+    if (!uitofpOp->hasOneUse())
+      return failure();
+    auto subfOp = dyn_cast<arith::SubFOp>(*uitofpOp->getUsers().begin());
+    if (!subfOp)
+      return failure();
+
+    if (!subfOp->hasOneUse())
+      return failure();
+    auto mulfOp = dyn_cast<arith::MulFOp>(*subfOp->getUsers().begin());
+    if (!mulfOp)
+      return failure();
+
+    // Try to distribute on fastest dimension, and let each thread hold 1 row.
+    ArrayRef<int64_t> vectorShape = transfer.getVectorType().getShape();
+    SmallVector<int64_t> subgroupCounts(transferRank, 1);
+    SmallVector<int64_t> outerSizes(transferRank, 1);
+    SmallVector<int64_t> threadCounts = {flatNumThreads, 1};
+    SmallVector<int64_t> elementSizes = {1, numElementsPerThread};
+    SmallVector<int64_t> batchSizes = {
+        vectorShape[0] / (threadCounts[0] * elementSizes[0]),
+        vectorShape[1] / (threadCounts[1] * elementSizes[1])};
+
+    SmallVector<int64_t> subgroupBasis = subgroupCounts;
+    SmallVector<int64_t> threadBasis = threadCounts;
+
+    auto layout = IREE::VectorExt::NestedLayoutAttr::get(
+        context, subgroupCounts, order, batchSizes, outerSizes, threadCounts,
+        order, elementSizes, subgroupBasis,
+        SmallVector<bool>(subgroupBasis.size(), true), threadBasis,
+        SmallVector<bool>(threadBasis.size(), true));
+    if (analysis.setAnchor(transfer.getResult(), layout).failed()) {
+      return failure();
+    }
+    return success();
+  }
   // Sets a layout anchor for reads from global memory.
   // The layout this generates is approximately the following:
   //
@@ -283,6 +341,12 @@ private:
 
     SmallVector<int64_t> order(vectorDimDistributionOrder.rbegin(),
                                vectorDimDistributionOrder.rend());
+
+    if (succeeded(setDequantReadLayout(context, analysis, transfer,
+                                       flatNumThreads, numElementsPerThread,
+                                       order))) {
+      return success();
+    }
 
     // Distribute all threads in the workgroup to the "threads" dimension,
     // meaning subgroup counts is unit here, even though the read is being
