@@ -26,12 +26,6 @@ parser.add_argument(
     help="Runs both turbine vmfb and a torch model to compare results",
 )
 parser.add_argument(
-    "--hf_model_name",
-    type=str,
-    help="HF model name",
-    default="meta-llama/Llama-2-7b-chat-hf",
-)
-parser.add_argument(
     "--hf_auth_token",
     type=str,
     help="The Hugging face auth token, required for some models",
@@ -174,7 +168,6 @@ def run_llm(
     device,
     prompt,
     vmfb_path,
-    hf_model_name,
     hf_auth_token,
     external_weight_path,
     streaming_llm=False,
@@ -182,7 +175,7 @@ def run_llm(
     chat_sys_prompt=DEFAULT_CHAT_SYS_PROMPT,
 ):
     tokenizer = AutoTokenizer.from_pretrained(
-        hf_model_name,
+        "Trelis/Llama-2-7b-chat-hf-function-calling-v2",
         use_fast=False,
         token=hf_auth_token,
     )
@@ -212,45 +205,6 @@ def run_llm(
         prompt = append_bot_prompt(prompt, bot_response)
 
 
-def run_torch_llm(hf_model_name, hf_auth_token, prompt, streaming_llm=False):
-    from turbine_models.model_builder import HFTransformerBuilder
-    from transformers import AutoModelForCausalLM
-
-    model_builder = HFTransformerBuilder(
-        example_input=None,
-        hf_id=hf_model_name,
-        auto_model=AutoModelForCausalLM,
-        hf_auth_token=hf_auth_token,
-        auto_tokenizer=AutoTokenizer,
-    )
-    model_builder.build_model()
-    if streaming_llm is True:
-        enable_llama_pos_shift_attention(model_builder.model)
-
-    def get_token_from_logits(logits):
-        return torch.argmax(logits[:, -1, :], dim=1)
-
-    initial_input = model_builder.tokenizer(prompt, return_tensors="pt")
-    example_input_id = initial_input.input_ids
-
-    model_results = model_builder.model.forward(example_input_id)
-    model_token = get_token_from_logits(model_results.logits)
-
-    pkv = model_results.past_key_values
-
-    torch_results = []
-    torch_results.append(int(model_token))
-    while model_token != 2:
-        model_results = model_builder.model.forward(
-            torch.unsqueeze(model_token, 0), past_key_values=pkv
-        )
-        model_token = get_token_from_logits(model_results.logits)
-        pkv = model_results.past_key_values
-        torch_results.append(int(model_token[0]))
-
-    return model_builder.tokenizer.decode(torch_results)
-
-
 if __name__ == "__main__":
     args = parser.parse_args()
     print("generating turbine output: ")
@@ -258,7 +212,6 @@ if __name__ == "__main__":
         args.device,
         args.prompt,
         args.vmfb_path,
-        args.hf_model_name,
         args.hf_auth_token,
         args.external_weight_path,
         args.streaming_llm,
@@ -266,9 +219,3 @@ if __name__ == "__main__":
         args.chat_sys_prompt,
     )
     print(turbine_output)
-    if args.compare_vs_torch:
-        print("generating torch output: ")
-        torch_output = run_torch_llm(
-            args.hf_model_name, args.hf_auth_token, args.prompt
-        )
-        print(torch_output)
