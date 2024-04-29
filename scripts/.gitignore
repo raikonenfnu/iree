@@ -1,2 +1,4 @@
 tools
+Llama_2_70b_chat_hf.mlir
+Llama_2_70b_chat_hf_f16_int4.safetensors
 *.vmfb
