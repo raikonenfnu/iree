@@ -24,6 +24,7 @@
 #include "iree/compiler/Dialect/LinalgExt/IR/LinalgExtOps.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/LinalgInterfaces.h"
@@ -524,6 +525,8 @@ setMatmulVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
     return failure();
   }
 
+  LDBG("Matmul Vector Distribution Config");
+
   Value lhs = op.getDpsInputOperand(0)->get();
   Value rhs = op.getDpsInputOperand(1)->get();
   Value init = op.getDpsInitOperand(0)->get();
@@ -558,13 +561,13 @@ setMatmulVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
     // For matmuls with small M*N size, we want to distribute M*N onto more
     // workgroups to fill the GPU. Use a smaller bestMNTileCountPerSubgroup
     // and a larger bestKTileCountPerSubgroup.
-    seeds = {/*bestSubgroupCountPerWorkgroup=*/4,
-             /*bestMNTileCountPerSubgroup=*/4,
-             /*bestKTileCountPerSubgroup=*/8};
+    seeds = {/*bestSubgroupCountPerWorkgroup=*/2,
+             /*bestMNTileCountPerSubgroup=*/2,
+             /*bestKTileCountPerSubgroup=*/1};
   } else {
-    seeds = {/*bestSubgroupCountPerWorkgroup=*/4,
-             /*bestMNTileCountPerSubgroup=*/8,
-             /*bestKTileCountPerSubgroup=*/4};
+    seeds = {/*bestSubgroupCountPerWorkgroup=*/2,
+             /*bestMNTileCountPerSubgroup=*/2,
+             /*bestKTileCountPerSubgroup=*/1};
   }
 
   int64_t sharedMemoryLimitInBytes = targetInfo.sharedMemoryLimitInBytes;
@@ -584,6 +587,16 @@ setMatmulVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
   if (!schedule) {
     return failure();
   }
+
+  LDBG("Defaults");
+  LDBG("Target Subgroup size: " << targetSubgroupSize);
+  LDBG("Schedule: sizes [" << schedule->mSize << ", " << schedule->nSize << ", "
+                           << schedule->kSize << "]");
+  LDBG("Schedule: tile counts [" << schedule->mTileCount << ", "
+                                 << schedule->nTileCount << ", "
+                                 << schedule->kTileCount << "]");
+  LDBG("Schedule: warp counts [" << schedule->mWarpCount << ", "
+                                 << schedule->nWarpCount << "]");
 
   std::array<int64_t, 3> workgroupSize{
       schedule->nWarpCount * targetSubgroupSize, schedule->mWarpCount, 1};
@@ -614,6 +627,23 @@ setMatmulVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
 
   // Follow the LLVMGPU convention of keeping all of the tile sizes in one list.
   workgroupTileSizes[kDim] = schedule->kTileCount * schedule->kSize;
+
+  if (::llvm::DebugFlag && ::llvm::isCurrentDebugType(DEBUG_TYPE)) {
+    ArrayRef<unsigned> dimVals[] = {contractionDims->batch, contractionDims->m,
+                                    contractionDims->n, contractionDims->k};
+    std::string ddims(op.getNumLoops(), '*');
+    for (auto [idx, val] : llvm::enumerate(ddims)) {
+      for (auto [letter, dim] : llvm::zip_equal(StringRef("bmnk"), dimVals))
+        if (llvm::is_contained(dim, idx))
+          val = letter;
+    }
+    llvm::interleaveComma(ddims, DBGS() << "Contraction dims:\t\t[");
+    llvm::dbgs() << "]\n";
+
+    llvm::interleaveComma(workgroupTileSizes,
+                          DBGS() << "Workgroup tile sizes:\t[");
+    llvm::dbgs() << "]\n";
+  }
 
   TileSizesListType tileSizes;
   tileSizes.push_back(workgroupTileSizes);
