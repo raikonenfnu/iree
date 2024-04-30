@@ -1,12 +1,9 @@
 import argparse
-from turbine_models.model_runner import vmfbRunner
+from model_runner import vmfbRunner
 from transformers import AutoTokenizer
 from iree import runtime as ireert
 import torch
 import time
-from turbine_models.custom_models.llm_optimizations.streaming_llm.modify_llama import (
-    enable_llama_pos_shift_attention,
-)
 
 parser = argparse.ArgumentParser()
 
