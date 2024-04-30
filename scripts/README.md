@@ -12,10 +12,10 @@ ln -s /path/to/iree-build/tools .
 ln -s /path/to/iree-build/.env .
 
 python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 pip uninstall iree-runtime
 
-source venv/bin/activate
 source .env
 export PYTHONPATH
 ```
