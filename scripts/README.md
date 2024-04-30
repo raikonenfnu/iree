@@ -27,3 +27,12 @@ export PYTHONPATH
 
 python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm
 ```
+
+## Matmul run instruction
+
+```shell
+./compile_matmul.sh dynamic_matmul_1.mlir
+
+tools/iree-benchmark-module --module=dynamic_matmul_1.vmfb --device=rocm --function=main --input=2511x64x128xf16 \
+  --device_allocator=caching --benchmark_repetitions=5
+```
