@@ -11,6 +11,7 @@ shift
   --iree-hal-target-backends=rocm --iree-rocm-target-chip=gfx1100 \
   --iree-preprocessing-pass-pipeline="builtin.module(util.func(iree-preprocessing-pad-to-intrinsics))" \
   --iree-codegen-llvmgpu-use-vector-distribution \
+  --iree-llvmgpu-enable-prefetch \
   --iree-stream-resource-max-allocation-size=4294967296 \
   --mlir-disable-threading --verify=true \
   -o "$(basename "$INPUT" .mlir).vmfb" "$@"
