@@ -563,11 +563,11 @@ setMatmulVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
     // and a larger bestKTileCountPerSubgroup.
     seeds = {/*bestSubgroupCountPerWorkgroup=*/2,
              /*bestMNTileCountPerSubgroup=*/2,
-             /*bestKTileCountPerSubgroup=*/1};
+             /*bestKTileCountPerSubgroup=*/8};
   } else {
     seeds = {/*bestSubgroupCountPerWorkgroup=*/2,
              /*bestMNTileCountPerSubgroup=*/2,
-             /*bestKTileCountPerSubgroup=*/1};
+             /*bestKTileCountPerSubgroup=*/8};
   }
 
   int64_t sharedMemoryLimitInBytes = targetInfo.sharedMemoryLimitInBytes;

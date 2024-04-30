@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <algorithm>
+#include <cstdint>
 
 #include "iree-dialects/Dialect/VectorExt/IR/VectorExtDialect.h"
 #include "iree/compiler/Codegen/Common/GPU/GPUPatterns.h"
@@ -176,12 +177,26 @@ private:
     if (!mulfOp)
       return failure();
 
+    LLVM_DEBUG(llvm::dbgs()
+               << "\nSetting vector layout for: " << transfer << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "Flat num threads: " << flatNumThreads
+                            << ", num elements per thread: "
+                            << numElementsPerThread << "\n");
+
     // Try to distribute on fastest dimension, and let each thread hold 1 row.
     ArrayRef<int64_t> vectorShape = transfer.getVectorType().getShape();
+    static constexpr int64_t maxElemsPerThread = 8;
+    int64_t elemsPerThread = std::min(numElementsPerThread, maxElemsPerThread);
+    int64_t batchMultiplier = numElementsPerThread / elemsPerThread;
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "Elements per thread: " << elemsPerThread
+               << ", batch multiplier: " << batchMultiplier << "\n");
+
     SmallVector<int64_t> subgroupCounts(transferRank, 1);
     SmallVector<int64_t> outerSizes(transferRank, 1);
     SmallVector<int64_t> threadCounts = {flatNumThreads, 1};
-    SmallVector<int64_t> elementSizes = {1, numElementsPerThread};
+    SmallVector<int64_t> elementSizes = {1, elemsPerThread};
     SmallVector<int64_t> batchSizes = {
         vectorShape[0] / (threadCounts[0] * elementSizes[0]),
         vectorShape[1] / (threadCounts[1] * elementSizes[1])};
@@ -194,6 +209,8 @@ private:
         order, elementSizes, subgroupBasis,
         SmallVector<bool>(subgroupBasis.size(), true), threadBasis,
         SmallVector<bool>(threadBasis.size(), true));
+
+    LLVM_DEBUG(llvm::dbgs() << "Selected layout: " << layout << "\n\n");
     if (analysis.setAnchor(transfer.getResult(), layout).failed()) {
       return failure();
     }
