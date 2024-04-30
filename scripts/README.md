@@ -7,15 +7,22 @@
 
 ## Venv setup instruction
 
-```sh
+```shell
+ln -s /path/to/iree-build/tools .
+ln -s /path/to/iree-build/.env .
+
+python -m venv venv
 pip install -r requirements.txt
 pip uninstall iree-runtime
-sorce /path/to/iree-build/.env && export PYTHONPATH
+
+source venv/bin/activate
+source .env
+export PYTHONPATH
 ```
 
 ## E2E run instruction
 
-```sh
+```shell
 ./compile_llama.sh Llama_2_70b_chat_hf.mlir -o llama.vmfb
 
 python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm
