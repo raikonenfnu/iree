@@ -411,11 +411,10 @@ public:
           features = "+sramecc,-xnack";
         } else {
           // GFX 10 or 11.
-          features = "+cumode";
           if (subgroupSize == 32)
-            features += "+wavefrontsize32";
+            features = "+wavefrontsize32";
           if (subgroupSize == 64)
-            features += "+wavefrontsize64";
+            features = "+wavefrontsize64";
         }
 
         targetMachine.reset(target->createTargetMachine(
