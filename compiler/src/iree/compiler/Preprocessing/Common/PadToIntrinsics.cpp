@@ -321,6 +321,15 @@ static void padContractionLikeOp(RewriterBase &rewriter,
   int64_t nSize = bounds[nDim];
   int64_t kSize = bounds[kDim];
 
+  // Try using batch dim as M when B is available M == 1.
+  if (mSize == 1 && contractionDims->batch.size() > 0) {
+    int64_t batchDim = contractionDims->batch.back();
+    if (bounds[batchDim] != 1) {
+      mDim = batchDim;
+      mSize = bounds[batchDim];
+    }
+  }
+
   // Bail out on matvec-like cases.
   if (mSize == 1 || nSize == 1) {
     return;
