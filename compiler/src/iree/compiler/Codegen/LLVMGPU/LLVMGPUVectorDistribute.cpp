@@ -185,7 +185,7 @@ private:
 
     // Try to distribute on fastest dimension, and let each thread hold 1 row.
     ArrayRef<int64_t> vectorShape = transfer.getVectorType().getShape();
-    static constexpr int64_t maxElemsPerThread = 8;
+    static constexpr int64_t maxElemsPerThread = 16;
     int64_t elemsPerThread = std::min(numElementsPerThread, maxElemsPerThread);
     int64_t batchMultiplier = numElementsPerThread / elemsPerThread;
 
