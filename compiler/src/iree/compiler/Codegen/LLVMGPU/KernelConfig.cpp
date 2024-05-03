@@ -1226,11 +1226,14 @@ setTransformDialectConfig(mlir::FunctionOpInterface entryPoint, Operation *op,
 }
 
 static bool isMatvecLike(linalg::LinalgOp linalgOp) {
-  if (linalgOp.getNumParallelLoops() != 2)
+  if ((linalgOp.getNumParallelLoops() != 2 &&
+       linalgOp.getNumReductionLoops() != 1) &&
+      (linalgOp.getNumParallelLoops() != 1 &&
+       linalgOp.getNumReductionLoops() != 2))
     return false;
 
-  if (linalgOp.getNumReductionLoops() != 1)
-    return false;
+  // if (linalgOp.getNumReductionLoops() != 1)
+  //   return false;
 
   // TODO: Allow for matvec with fused dequantization.
   FailureOr<linalg::ContractionDimensions> dims =
@@ -1241,16 +1244,15 @@ static bool isMatvecLike(linalg::LinalgOp linalgOp) {
   // TODO: Support batch matvec.
   if (!dims->batch.empty())
     return false;
-
-  for (ArrayRef indices : {dims->m, dims->n, dims->k}) {
-    if (!llvm::hasSingleElement(indices))
+  for (ArrayRef indices : {dims->m, dims->n}) {
+    if (!indices.empty() && !llvm::hasSingleElement(indices))
       return false;
   }
 
   // Check if the first parallel dimension has bound 1, indicating we found a
   // vector shape.
   SmallVector<int64_t, 4> bounds = linalgOp.getStaticLoopRanges();
-  if (bounds[dims->m.front()] != 1)
+  if (!dims->m.empty() && bounds[dims->m.front()] != 1)
     return false;
 
   return true;
@@ -1432,7 +1434,7 @@ setWarpReductionConfig(mlir::FunctionOpInterface entryPoint,
       llvm::none_of(bounds, ShapedType::isDynamic) && isMatvecLike(op)) {
     int64_t lastParallelBound = bounds[parallelDims.back()];
     int64_t numParallelReductions = 1;
-    const int64_t maxParallelFactor = groupSize / 4;
+    const int64_t maxParallelFactor = std::min<int64_t>(groupSize / 4, 16);
     for (int64_t parallelFactor = 2;
          (parallelFactor < maxParallelFactor) &&
          (lastParallelBound % parallelFactor == 0) &&
