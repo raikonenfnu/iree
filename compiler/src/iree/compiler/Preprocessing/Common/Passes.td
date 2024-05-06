@@ -97,6 +97,9 @@ def PadToIntrinsics :
                clEnumValN(Preprocessing::PadTargetType::All, "all",
                 "Pad all ops to intrinsics.")
               )}]>,
+      Option<"intrinsicMultiple", "intrinsic-multiple", "int",
+             /*default=*/"1",
+             "Multiple of intrinsic to pad to">,
   ];
 }
 

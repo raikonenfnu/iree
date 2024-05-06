@@ -141,8 +141,8 @@ expandMapsAndIterators(SmallVector<AffineMap> &expandedMaps,
   }
 }
 
-static SmallVector<GPUMatmulShapeType>
-getIntrinsics(linalg::LinalgOp linalgOp) {
+static SmallVector<GPUMatmulShapeType> getIntrinsics(linalg::LinalgOp linalgOp,
+                                                     int intrinsicMultiple) {
   ArrayAttr mmaKinds = nullptr;
   auto executableTargets =
       IREE::HAL::DeviceTargetAttr::lookupExecutableTargets(linalgOp);
@@ -156,14 +156,21 @@ getIntrinsics(linalg::LinalgOp linalgOp) {
   mmaKinds = *candidateMmaKinds;
 
   return llvm::map_to_vector(
-      mmaKinds.getAsRange<IREE::GPU::MMAAttr>(), [](IREE::GPU::MMAAttr mma) {
+      mmaKinds.getAsRange<IREE::GPU::MMAAttr>(),
+      [intrinsicMultiple](IREE::GPU::MMAAttr mma) {
         auto [mSize, nSize, kSize] = mma.getMNKShape();
         auto [aType, bType, cType] = mma.getABCElementTypes();
-        return GPUMatmulShapeType{mSize, nSize, kSize, aType, bType, cType};
+        return GPUMatmulShapeType{mSize * intrinsicMultiple,
+                                  nSize * intrinsicMultiple,
+                                  kSize * intrinsicMultiple,
+                                  aType,
+                                  bType,
+                                  cType};
       });
 }
 
-static void padConvOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp) {
+static void padConvOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp,
+                      int intrinsicMultiple) {
   if (!isa<linalg::ConvolutionOpInterface>(*linalgOp)) {
     return;
   }
@@ -172,7 +179,8 @@ static void padConvOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp) {
     return;
 
   // Early exit if cannot find intrinsics or if multiple executable targets.
-  SmallVector<GPUMatmulShapeType> intrinsics = getIntrinsics(linalgOp);
+  SmallVector<GPUMatmulShapeType> intrinsics =
+      getIntrinsics(linalgOp, intrinsicMultiple);
   if (intrinsics.empty())
     return;
 
@@ -290,7 +298,8 @@ static void padConvOp(RewriterBase &rewriter, linalg::LinalgOp linalgOp) {
 }
 
 static void padContractionLikeOp(RewriterBase &rewriter,
-                                 linalg::LinalgOp linalgOp) {
+                                 linalg::LinalgOp linalgOp,
+                                 int intrinsicMultiple) {
   FailureOr<mlir::linalg::ContractionDimensions> contractionDims =
       mlir::linalg::inferContractionDims(linalgOp);
 
@@ -304,7 +313,8 @@ static void padContractionLikeOp(RewriterBase &rewriter,
   }
 
   // Early exit if cannot find intrinsics or if multiple executable targets.
-  SmallVector<GPUMatmulShapeType> intrinsics = getIntrinsics(linalgOp);
+  SmallVector<GPUMatmulShapeType> intrinsics =
+      getIntrinsics(linalgOp, intrinsicMultiple);
   if (intrinsics.empty())
     return;
 
@@ -548,11 +558,11 @@ void PadToIntrinsicsPass::runOnOperation() {
   IRRewriter rewriter(context);
   for (auto convOp : targetConvOps) {
     rewriter.setInsertionPoint(convOp);
-    padConvOp(rewriter, convOp);
+    padConvOp(rewriter, convOp, intrinsicMultiple);
   }
   for (auto contractOp : targetContractOps) {
     rewriter.setInsertionPoint(contractOp);
-    padContractionLikeOp(rewriter, contractOp);
+    padContractionLikeOp(rewriter, contractOp, intrinsicMultiple);
   }
 }
 
