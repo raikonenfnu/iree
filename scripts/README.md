@@ -35,12 +35,12 @@ wget https://sharkpublic.blob.core.windows.net/sharkpublic/ian/Llama_2_70b_chat_
 
 ### Running b_ai benchmark
 ```shell
-python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm --benchmar b_ai
+python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm --benchmark b_ai
 ```
 
 ### Running MLC benchmark
 ```shell
-python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm --benchmar b_ai
+python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm --benchmark mlc
 ```
 
 ## Matmul run instruction
