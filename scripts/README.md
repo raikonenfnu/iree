@@ -18,11 +18,20 @@ pip uninstall iree-runtime
 
 source .env
 export PYTHONPATH
-
-./compile_llama.sh Llama_2_70b_chat_hf.mlir -o llama.vmfb
 ```
 
 ## E2E run instruction
+
+### Model Setup Instructions:
+
+```shell
+# Download IR and weights.
+wget https://sharkpublic.blob.core.windows.net/sharkpublic/ian/Llama_2_70b_chat_hf.mlir
+wget https://sharkpublic.blob.core.windows.net/sharkpublic/ian/Llama_2_70b_chat_hf_f16_int4.safetensors
+
+# Compile to VMFB/Runnables.
+./compile_llama.sh Llama_2_70b_chat_hf.mlir -o llama.vmfb
+```
 
 ### Running b_ai benchmark
 ```shell
