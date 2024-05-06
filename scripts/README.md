@@ -18,14 +18,20 @@ pip uninstall iree-runtime
 
 source .env
 export PYTHONPATH
+
+./compile_llama.sh Llama_2_70b_chat_hf.mlir -o llama.vmfb
 ```
 
 ## E2E run instruction
 
+### Running b_ai benchmark
 ```shell
-./compile_llama.sh Llama_2_70b_chat_hf.mlir -o llama.vmfb
+python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm --benchmar b_ai
+```
 
-python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm
+### Running MLC benchmark
+```shell
+python run_e2e.py --vmfb_path=llama.vmfb --external_weight_path=Llama_2_70b_chat_hf_f16_int4.safetensors --device=rocm --benchmar b_ai
 ```
 
 ## Matmul run instruction
