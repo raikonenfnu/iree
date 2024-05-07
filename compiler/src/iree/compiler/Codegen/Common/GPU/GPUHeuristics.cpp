@@ -126,6 +126,7 @@ FailureOr<GPUMMASchedule> deduceMMASchedule(
 
     int64_t mTotalTileCount = problem.mSize / intrinsic.mSize;
     int64_t nTotalTileCount = problem.nSize / intrinsic.nSize;
+    uint64_t kTotalTileCount = problem.kSize / intrinsic.kSize;
 
     int64_t remainingWarps = seeds.bestSubgroupCountPerWorkgroup;
     int64_t remainingTiles = seeds.bestMNTileCountPerSubgroup;
@@ -137,6 +138,13 @@ FailureOr<GPUMMASchedule> deduceMMASchedule(
 
     int64_t mWarpCount = 0, nWarpCount = 0;
     int64_t mTileCount = 0, nTileCount = 0;
+
+    LLVM_DEBUG({
+	llvm::dbgs() << "Choosing heuristics for:\n";
+	llvm::dbgs() << "M Tile Count: " << mTotalTileCount << "\n";
+	llvm::dbgs() << "N Tile Count: " << nTotalTileCount << "\n";
+	llvm::dbgs() << "K Tile Count: " << kTotalTileCount << "\n";
+    });
 
     // See if the square root can divide mTotalTileCount. If so it means we can
     // distribute to both dimensions evenly. Otherwise, try to distribute to N
@@ -158,6 +166,23 @@ FailureOr<GPUMMASchedule> deduceMMASchedule(
       nGCD = GreatestCommonDivisor(APInt(64, nTotalTileCount),
                                    APInt(64, remainingTiles));
       nTileCount = nGCD.getSExtValue();
+    } else if (nTotalTileCount > (warpSqrt * tileSqrt) &&
+               nTotalTileCount % (warpSqrt * tileSqrt) == 0) {
+      nWarpCount = warpSqrt;
+      nTileCount = tileSqrt;
+
+      remainingWarps /= warpSqrt;
+      remainingTiles /= tileSqrt;
+
+      APInt mGCD = GreatestCommonDivisor(APInt(64, mTotalTileCount),
+                                         APInt(64, remainingWarps));
+      mWarpCount = mGCD.getSExtValue();
+      mTotalTileCount /= mWarpCount;
+      remainingWarps /= mWarpCount;
+
+      mGCD = GreatestCommonDivisor(APInt(64, mTotalTileCount),
+                                   APInt(64, remainingTiles));
+      mTileCount = mGCD.getSExtValue();
     } else {
       APInt nGCD = GreatestCommonDivisor(APInt(64, nTotalTileCount),
                                          APInt(64, remainingWarps));
@@ -181,7 +206,6 @@ FailureOr<GPUMMASchedule> deduceMMASchedule(
       mTileCount = mGCD.getSExtValue();
     }
 
-    const uint64_t kTotalTileCount = problem.kSize / intrinsic.kSize;
     APInt kGCD = GreatestCommonDivisor(
         APInt(64, kTotalTileCount), APInt(64, seeds.bestKTileCountPerSubgroup));
     int64_t kTileCount = kGCD.getSExtValue();

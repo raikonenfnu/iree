@@ -330,7 +330,7 @@ setConvolutionVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
   }
 
   // This pipeline needs to know the subgroup size for distributing to virtual
-  // lane IDs.
+  // lane IDs
   if (targetInfo.supportedSubgroupSizes.empty()) {
     return failure();
   }
@@ -562,12 +562,12 @@ setMatmulVectorDistributionConfig(mlir::FunctionOpInterface entryPoint,
     // workgroups to fill the GPU. Use a smaller bestMNTileCountPerSubgroup
     // and a larger bestKTileCountPerSubgroup.
     seeds = {/*bestSubgroupCountPerWorkgroup=*/2,
-             /*bestMNTileCountPerSubgroup=*/2,
-             /*bestKTileCountPerSubgroup=*/8};
+             /*bestMNTileCountPerSubgroup=*/8,
+             /*bestKTileCountPerSubgroup=*/2};
   } else {
     seeds = {/*bestSubgroupCountPerWorkgroup=*/2,
-             /*bestMNTileCountPerSubgroup=*/2,
-             /*bestKTileCountPerSubgroup=*/8};
+             /*bestMNTileCountPerSubgroup=*/8,
+             /*bestKTileCountPerSubgroup=*/2};
   }
 
   int64_t sharedMemoryLimitInBytes = targetInfo.sharedMemoryLimitInBytes;
