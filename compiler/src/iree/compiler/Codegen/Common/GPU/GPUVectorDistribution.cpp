@@ -369,6 +369,149 @@ struct DecomposeLayoutConflictResolutions final
   }
 };
 
+SmallVector<int64_t> delinearizeIndex(int64_t flatIdx,
+                                      SmallVector<int64_t> &shape) {
+  SmallVector<int64_t> delinearIndex(shape.size(), 0);
+  int64_t accDimLen = 1;
+  for (int i = shape.size() - 1; i >= 0; i--) {
+    delinearIndex[i] = (flatIdx / accDimLen) % shape[i];
+    accDimLen *= shape[i];
+  }
+  return delinearIndex;
+}
+
+struct ShuffleToResolveLayoutConflicts final
+    : OpDistributionPattern<IREE::VectorExt::LayoutConflictResolutionOp> {
+  using OpDistributionPattern::OpDistributionPattern;
+
+  LogicalResult
+  matchAndRewrite(IREE::VectorExt::LayoutConflictResolutionOp resolutionOp,
+                  DistributionSignature &signature,
+                  PatternRewriter &rewriter) const override {
+    auto loc = resolutionOp.getLoc();
+    auto funcOp = resolutionOp->getParentOfType<func::FuncOp>();
+    std::optional<int64_t> maybeSubgroupSize = getSubgroupSize(funcOp);
+    if (!maybeSubgroupSize) {
+      return failure();
+    }
+    std::optional<SmallVector<int64_t>> maybeWorkgroupSize =
+        getWorkgroupSize(funcOp);
+    if (!maybeWorkgroupSize) {
+      return failure();
+    }
+    int64_t subgroupSize = maybeSubgroupSize.value();
+    SmallVector<int64_t> workgroupSize = maybeWorkgroupSize.value();
+    VectorValue vector = resolutionOp.getInput();
+    VectorValue result = resolutionOp.getOutput();
+    LayoutAttr currentLayout = dyn_cast<LayoutAttr>(signature[vector]);
+    if (!currentLayout)
+      return failure();
+    LayoutAttr targetLayout = dyn_cast<LayoutAttr>(signature[result]);
+    if (!targetLayout)
+      return failure();
+
+    SmallVector<int64_t> currentVecShape = currentLayout.getDistributedShape();
+    SmallVector<int64_t> targetVecShape = targetLayout.getDistributedShape();
+    if (currentVecShape.size() != targetVecShape.size())
+      return failure();
+
+    // If the conditions suffice, we can skip the trip to shared memory
+    // and just use the default/more efficient layout conflict resolution
+    // distribution.
+    auto numElements = [](ArrayRef<int64_t> vector) {
+      return std::accumulate(vector.begin(), vector.end(), 1,
+                             std::multiplies<int64_t>());
+    };
+    if (numElements(currentVecShape) == numElements(targetVecShape) &&
+        !currentLayout.hasLaneConflictWith(targetLayout))
+      return failure();
+    auto toSIMDOp = llvm::dyn_cast_or_null<IREE::VectorExt::ToSIMDOp>(
+        vector.getDefiningOp());
+    if (!toSIMDOp)
+      return failure();
+    Value srcDistributedVector = toSIMDOp.getOperand();
+
+    if (!resolutionOp->hasOneUse())
+      return failure();
+    auto toSIMTOp = llvm::dyn_cast_or_null<IREE::VectorExt::ToSIMTOp>(
+        *resolutionOp->user_begin());
+    if (!toSIMTOp)
+      return failure();
+
+    // Get Offset based on threadIdx.
+    AffineExpr d0, d1, d2, s0;
+    bindDims(rewriter.getContext(), d0, d1, d2);
+    bindSymbols(rewriter.getContext(), s0);
+    auto indexType = rewriter.getIndexType();
+    Value threadX =
+        rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::x);
+    Value threadY =
+        rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::y);
+    Value threadZ =
+        rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::z);
+    Value flatThreadId = affine::makeComposedAffineApply(
+        rewriter, loc,
+        (d0 + workgroupSize[0] * d1 +
+         (workgroupSize[0] * workgroupSize[1]) * d2),
+        {threadX, threadY, threadZ});
+    Value laneId = affine::makeComposedAffineApply(
+        rewriter, loc, s0 % subgroupSize, {flatThreadId});
+
+    // Create XORs to trade for every element.
+    // based one laneId, if lower half then offset = 0
+    // based one laneId, if upper half then offset = 1
+    // TODO: Make stride generalized based on layout.
+    const int kStride = 2;
+    const int64_t kXorWidth = subgroupSize / 2;
+    Value xorWidthVal = rewriter.create<arith::ConstantOp>(
+        loc, rewriter.getIndexAttr(kXorWidth));
+    Value evenEntryCond = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ult, laneId, xorWidthVal);
+    Value oddEntryCond = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::uge, laneId, xorWidthVal);
+
+    auto resElemType = result.getType().getElementType();
+    auto vecResType = VectorType::get(targetVecShape, resElemType);
+    Value init = rewriter.createOrFold<arith::ConstantOp>(
+        loc,
+        SplatElementsAttr::get(vecResType, rewriter.getZeroAttr(resElemType)));
+    int64_t flatNumElements = ShapedType::getNumElements(currentVecShape);
+    for (int flatIdx = 0; flatIdx < flatNumElements; flatIdx++) {
+      // Get delinearized Index.
+      SmallVector<int64_t> delinearIdx =
+          delinearizeIndex(flatIdx, currentVecShape);
+      auto srcVal = rewriter.create<vector::ExtractOp>(
+          loc, srcDistributedVector, delinearIdx);
+      // xor to get dstElement warpSize/2.
+      Value paddedSrc =
+          rewriter.create<arith::ExtFOp>(loc, rewriter.getF32Type(), srcVal);
+      auto shuffledOp = rewriter.create<gpu::ShuffleOp>(
+          loc, paddedSrc, kXorWidth, subgroupSize, gpu::ShuffleMode::XOR);
+      Value shuffledVal = rewriter.create<arith::TruncFOp>(
+          loc, srcVal.getType(), shuffledOp.getShuffleResult());
+
+      // Insert element to even entries of init.
+      delinearIdx[delinearIdx.size() - 1] *= kStride;
+      Value evenEntry = rewriter.create<arith::SelectOp>(loc, evenEntryCond,
+                                                         srcVal, shuffledVal);
+      init =
+          rewriter.create<vector::InsertOp>(loc, evenEntry, init, delinearIdx);
+
+      // Insert elements to odd entries of init.
+      delinearIdx[delinearIdx.size() - 1] += 1;
+      Value oddEntry = rewriter.create<arith::SelectOp>(loc, oddEntryCond,
+                                                        srcVal, shuffledVal);
+      init =
+          rewriter.create<vector::InsertOp>(loc, oddEntry, init, delinearIdx);
+    }
+    toSIMTOp.replaceAllUsesWith(init);
+    // TODO: Very dangerous make it safer.
+    toSIMTOp.setOperand(toSIMDOp.getResult());
+    rewriter.eraseOp(resolutionOp);
+    return success();
+  }
+};
+
 LogicalResult distributeVectorOps(Operation *root,
                                   RewritePatternSet &distributionPatterns,
                                   VectorLayoutOptions &options) {
@@ -394,21 +537,34 @@ LogicalResult distributeVectorOps(Operation *root,
   LLVM_DEBUG(root->print(llvm::dbgs()));
   LLVM_DEBUG(llvm::dbgs() << "\n\n");
 
+  // {
+  //   RewritePatternSet preprocessPatterns(root->getContext());
+  //   preprocessPatterns.add<DecomposeLayoutConflictResolutions>(
+  //       preprocessPatterns.getContext());
+  //   FrozenRewritePatternSet frozenPreprocessPatterns(
+  //       std::move(preprocessPatterns));
+  //   applyVectorDistribution(root, frozenPreprocessPatterns);
+
+  //   LLVM_DEBUG(llvm::dbgs() << "After Decomposition of Layout Conflicts\n");
+  //   LLVM_DEBUG(root->print(llvm::dbgs()));
+  //   LLVM_DEBUG(llvm::dbgs() << "\n\n");
+  // }
+
+  FrozenRewritePatternSet frozenPatterns(std::move(distributionPatterns));
+  applyVectorDistribution(root, frozenPatterns);
+
   {
-    RewritePatternSet preprocessPatterns(root->getContext());
-    preprocessPatterns.add<DecomposeLayoutConflictResolutions>(
-        preprocessPatterns.getContext());
-    FrozenRewritePatternSet frozenPreprocessPatterns(
-        std::move(preprocessPatterns));
-    applyVectorDistribution(root, frozenPreprocessPatterns);
+    RewritePatternSet postprocessPatterns(root->getContext());
+    postprocessPatterns.add<ShuffleToResolveLayoutConflicts>(
+        postprocessPatterns.getContext());
+    FrozenRewritePatternSet frozenPostprocessPatterns(
+        std::move(postprocessPatterns));
+    applyVectorDistribution(root, frozenPostprocessPatterns);
 
     LLVM_DEBUG(llvm::dbgs() << "After Decomposition of Layout Conflicts\n");
     LLVM_DEBUG(root->print(llvm::dbgs()));
     LLVM_DEBUG(llvm::dbgs() << "\n\n");
   }
-
-  FrozenRewritePatternSet frozenPatterns(std::move(distributionPatterns));
-  applyVectorDistribution(root, frozenPatterns);
 
   RewritePatternSet patterns(root->getContext());
   IREE::VectorExt::ToSIMDOp::getCanonicalizationPatterns(patterns,
