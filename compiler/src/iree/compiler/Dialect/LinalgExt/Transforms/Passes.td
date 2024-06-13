@@ -103,6 +103,16 @@ def DecomposeAttentionPass :
   ];
 }
 
+def PadAttentionPass :
+    InterfacePass<"iree-linalg-ext-pad-attention", "mlir::FunctionOpInterface"> {
+  let summary =
+      "Tile the attention op along the reduction dimension";
+  let options = [
+    ListOption<"padToMultipleOf", "pad-to-multiple-of", "int64_t",
+                  "Array to represent the number to pad to multiple of for attention dims.">,
+  ];
+}
+
 def ConvertAttentionToOnlineAttentionPass :
     InterfacePass<"iree-linalg-ext-convert-attention-to-online-attention",
     "mlir::FunctionOpInterface"> {
