@@ -184,7 +184,6 @@ IREE::LinalgExt::AttentionOp tileAttention(IREE::LinalgExt::AttentionOp attnOp,
   Location loc = attnOp.getLoc();
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(attnOp);
-  llvm::outs() << "high level implement tile Attention!\n";
 
   Value query = attnOp.getQuery();
   ShapedType queryType = attnOp.getQueryType();
