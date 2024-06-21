@@ -1265,6 +1265,62 @@ LogicalResult WinogradOutputTransformOp::reifyResultShapes(
 // AttentionOp
 //===----------------------------------------------------------------------===//
 
+void AttentionOp::build(OpBuilder &builder, OperationState &state,
+                        ValueRange inputs, ValueRange outputs) {
+  SmallVector<Type> resultTypes;
+  for (auto res : outputs)
+    resultTypes.push_back(res.getType());
+  build(builder, state, TypeRange{resultTypes}, inputs, outputs, {});
+
+  // Add a region and a block to yield the pad value.
+  Region *region = state.regions[0].get();
+  SmallVector<Type> blockArgTypes(2, builder.getF32Type());
+  SmallVector<Location> blockArgLocs(2, state.location);
+
+  // `builder.createBlock` changes the insertion point within the block. Create
+  // a guard to reset the insertion point of the builder after it is destroyed.
+  OpBuilder::InsertionGuard guard(builder);
+  builder.createBlock(region, region->end(), blockArgTypes, blockArgLocs);
+  builder.create<IREE::LinalgExt::YieldOp>(state.location,
+                                           region->getArgument(0));
+}
+
+void AttentionOp::build(OpBuilder &builder, OperationState &state,
+                        TypeRange results, ValueRange inputs,
+                        ValueRange outputs) {
+  build(builder, state, results, inputs, outputs, {});
+
+  // Add a region and a block to yield the pad value.
+  Region *region = state.regions[0].get();
+  SmallVector<Type> blockArgTypes(2, builder.getF32Type());
+  SmallVector<Location> blockArgLocs(2, state.location);
+
+  // `builder.createBlock` changes the insertion point within the block. Create
+  // a guard to reset the insertion point of the builder after it is destroyed.
+  OpBuilder::InsertionGuard guard(builder);
+  builder.createBlock(region, region->end(), blockArgTypes, blockArgLocs);
+  builder.create<IREE::LinalgExt::YieldOp>(state.location,
+                                           region->getArgument(0));
+}
+
+// void AttentionOp::build(OpBuilder &builder, OperationState &state, TypeRange
+// results, ValueRange inputs, Value output) {
+//   build(builder, state, results, inputs, ValueRange{output}, {});
+
+//   // Add a region and a block to yield the pad value.
+//   Region *region = state.regions[0].get();
+//   SmallVector<Type> blockArgTypes(2, builder.getF32Type());
+//   SmallVector<Location> blockArgLocs(2, state.location);
+
+//   // `builder.createBlock` changes the insertion point within the block.
+//   Create
+//   // a guard to reset the insertion point of the builder after it is
+//   destroyed. OpBuilder::InsertionGuard guard(builder);
+//   builder.createBlock(region, region->end(), blockArgTypes, blockArgLocs);
+//   builder.create<IREE::LinalgExt::YieldOp>(state.location,
+//   region->getArgument(0));
+// }
+
 LogicalResult AttentionOp::verify() {
   Operation *op = getOperation();
 

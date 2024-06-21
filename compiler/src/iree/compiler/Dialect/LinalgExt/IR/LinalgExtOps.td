@@ -550,20 +550,23 @@ def IREELinalgExt_AttentionOp : IREELinalgExt_Op<"attention",
 
   let arguments = (ins Variadic<AnyType>:$inputs,
                        Variadic<AnyShaped>:$outputs,
-                       DefaultValuedOptionalAttr<BoolAttr, "false">:$transpose_v
+                       DefaultValuedOptionalAttr<BoolAttr, "false">:$transpose_v,
+                       AffineMapArrayAttr:$indexing_maps
   );
 
   let builders = [
     OpBuilder<(ins "ValueRange":$inputs, "ValueRange":$outputs)>,
+    // OpBuilder<(ins "TypeRange":$results, "ValueRange":$inputs, "Value":$outputs)>,
+    OpBuilder<(ins "TypeRange":$results, "ValueRange":$inputs, "ValueRange":$outputs)>,
   ];
-
+  let regions = (region AnyRegion:$region);
   let results = (outs Variadic<AnyRankedTensor>:$results);
   let hasFolder = 1;
   let assemblyFormat = [{
     attr-dict
     `ins` `(` $inputs `:` type($inputs) `)`
     `outs` `(` $outputs `:` type($outputs) `)`
-    (`->` type($results)^)?
+    $region (`->` type($results)^)?
   }];
 
   let extraClassDeclaration = extraLinalgExtOpClassDeclaration # [{
