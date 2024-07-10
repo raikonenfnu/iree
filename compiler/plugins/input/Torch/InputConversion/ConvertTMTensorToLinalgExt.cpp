@@ -73,17 +73,17 @@ struct ScatterOpConversion
 
 static SmallVector<AffineMap>
 getStandardAttentionIndexingMaps(MLIRContext *ctx) {
-  AffineExpr m, k1, k2, n;
-  bindDims(ctx, m, k1, k2, n);
+  AffineExpr batch, m, k1, k2, n;
+  bindDims(ctx, batch, m, k1, k2, n);
 
   AffineMap qMap =
-      AffineMap::get(/*dimCount=*/4, /*symbolCount=*/0, {m, k1}, ctx);
+      AffineMap::get(/*dimCount=*/5, /*symbolCount=*/0, {batch, m, k1}, ctx);
   AffineMap kMap =
-      AffineMap::get(/*dimCount=*/4, /*symbolCount=*/0, {k2, k1}, ctx);
+      AffineMap::get(/*dimCount=*/5, /*symbolCount=*/0, {batch, k2, k1}, ctx);
   AffineMap vMap =
-      AffineMap::get(/*dimCount=*/4, /*symbolCount=*/0, {k2, n}, ctx);
+      AffineMap::get(/*dimCount=*/5, /*symbolCount=*/0, {batch, k2, n}, ctx);
   AffineMap rMap =
-      AffineMap::get(/*dimCount=*/4, /*symbolCount=*/0, {m, n}, ctx);
+      AffineMap::get(/*dimCount=*/5, /*symbolCount=*/0, {batch, m, n}, ctx);
 
   return {qMap, kMap, vMap, rMap};
 }
