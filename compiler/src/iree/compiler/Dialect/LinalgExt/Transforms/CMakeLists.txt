@@ -36,7 +36,6 @@ iree_cc_library(
     "PassDetail.h"
     "Passes.cpp"
     "SplitReduction.cpp"
-    "TileAttention.cpp"
     "TilingInterfaceImpl.cpp"
   DEPS
     ::PassesIncGen
