@@ -231,6 +231,17 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
   // newMax = max(oldMax, rowMax(S))
   AffineMap maxMap = getMaxMap();
   Value newMax = reduce<arith::MaximumFOp>(b, loc, sMap, maxMap, s, oldMax);
+  // TODO: Try cst 0.0078 for newMax
+  SmallVector<OpFoldResult> mSizes;
+  for (AffineExpr dimExpr : maxMap.getResults()) {
+    int dim = cast<AffineDimExpr>(dimExpr).getPosition();
+    mSizes.push_back(sizes[dim]);
+  }
+  auto maxTensorTy = llvm::dyn_cast<ShapedType>(newMax.getType());
+  newMax = b.create<tensor::EmptyOp>(loc, mSizes, maxTensorTy.getElementType());
+  Value k2Size = b.create<arith::ConstantOp>(loc, b.getFloatAttr(maxTensorTy.getElementType(), 32));
+  newMax = b.create<linalg::FillOp>(loc, k2Size, newMax).getResult(0);
+
 
   // P = exp2(S - newMax)
   // PMap = SMap

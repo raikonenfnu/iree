@@ -115,7 +115,7 @@ hoistLoopInvariantSubsetAtIterArg(RewriterBase &rewriter,
     if (failed(newLoop))
       return loopLike;
     loopLike = *newLoop;
-
+    rewriter.replaceAllUsesExcept(extraction.getResult(), loopLike.getRegionIterArgs().back(), loopLike);
     BlockArgument iterArg = loopLike.getRegionIterArgs()[idx];
     OpResult loopResult = loopLike.getTiedLoopResult(iterArg);
     OpResult newLoopResult = loopLike.getLoopResults()->back();
@@ -211,7 +211,7 @@ void OptimizeTensorInsertExtractSlicesPass::runOnOperation() {
   funcOp.walk([&](scf::ForOp forOp) {
     hoistSubsetWithLoopInvariantTensor(rewriter, forOp);
   });
-  LDBG("after hoisting subset loop invariant tensors" << funcOp);
+  LDBG("after hoisting subset loop invariant tensors\n" << funcOp);
   vector::transferOpflowOpt(rewriter, funcOp);
   MLIRContext *context = &getContext();
 
