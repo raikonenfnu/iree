@@ -414,33 +414,33 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
   ops.push_back(onlineAttn);
 
   Value x = onlineAttn.getResult(0);
-  Value sum = onlineAttn.getResult(2);
+  // Value sum = onlineAttn.getResult(2);
 
   // Merge the outputs of online attention:
   //  x = (1 / sum) * x
 
   // Compress the indexing maps.
-  SmallVector<AffineMap> compressedMaps =
-      compressUnusedDims(SmallVector<AffineMap>{sumMap, attnOp.getOutputMap()});
+  // SmallVector<AffineMap> compressedMaps =
+  //     compressUnusedDims(SmallVector<AffineMap>{sumMap, attnOp.getOutputMap()});
 
-  SmallVector<utils::IteratorType> iteratorTypes(compressedMaps[0].getNumDims(),
-                                                 utils::IteratorType::parallel);
+  // SmallVector<utils::IteratorType> iteratorTypes(compressedMaps[0].getNumDims(),
+  //                                                utils::IteratorType::parallel);
 
-  auto genericOp = rewriter.create<linalg::GenericOp>(
-      loc, x.getType(), sum, x, compressedMaps, iteratorTypes,
-      [&](OpBuilder &b, Location loc, ValueRange args) {
-        Value one = b.create<arith::ConstantOp>(
-            loc, b.getFloatAttr(args[0].getType(), 1.0));
-        Value reciprocal = b.create<arith::DivFOp>(loc, one, args[0]);
-        // Convert sum to the same datatype as x.
-        reciprocal = convertScalarToDtype(b, loc, reciprocal, args[1].getType(),
-                                          /*isUnsignedCast=*/false);
-        Value result = b.create<arith::MulFOp>(loc, reciprocal, args[1]);
-        b.create<linalg::YieldOp>(loc, result);
-      });
-  ops.push_back(genericOp);
+  // auto genericOp = rewriter.create<linalg::GenericOp>(
+  //     loc, x.getType(), sum, x, compressedMaps, iteratorTypes,
+  //     [&](OpBuilder &b, Location loc, ValueRange args) {
+  //       Value one = b.create<arith::ConstantOp>(
+  //           loc, b.getFloatAttr(args[0].getType(), 1.0));
+  //       Value reciprocal = b.create<arith::DivFOp>(loc, one, args[0]);
+  //       // Convert sum to the same datatype as x.
+  //       reciprocal = convertScalarToDtype(b, loc, reciprocal, args[1].getType(),
+  //                                         /*isUnsignedCast=*/false);
+  //       Value result = b.create<arith::MulFOp>(loc, reciprocal, args[1]);
+  //       b.create<linalg::YieldOp>(loc, result);
+  //     });
+  ops.push_back(onlineAttn);
 
-  rewriter.replaceOp(attnOp, genericOp);
+  rewriter.replaceOp(attnOp, x);
 }
 
 void TileAttentionPass::runOnOperation() {

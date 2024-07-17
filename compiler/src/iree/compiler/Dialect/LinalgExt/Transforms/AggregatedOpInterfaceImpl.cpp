@@ -273,12 +273,12 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
   // iteration of the loop. This is only valid for f16 or f32 types as f8
   // is extremely limited on its dynamic range therefore this would
   // significantly affect numerics.
-  if (qETy.getIntOrFloatBitWidth() > 8) {
-    AffineMap qMap = getQueryMap();
-    AffineMap scaleMap = AffineMap::get(/*dimCount=*/qMap.getNumInputs(),
-                                        /*symbolCount=*/0, getContext());
-    query = scaleValueInPlace(b, loc, qMap, scaleMap, query, scale);
-  }
+  // if (qETy.getIntOrFloatBitWidth() > 8) {
+  //   AffineMap qMap = getQueryMap();
+  //   AffineMap scaleMap = AffineMap::get(/*dimCount=*/qMap.getNumInputs(),
+  //                                       /*symbolCount=*/0, getContext());
+  //   query = scaleValueInPlace(b, loc, qMap, scaleMap, query, scale);
+  // }
 
   // ---- Matmul 1 ----
 
@@ -314,6 +314,17 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
   // newMax = max(oldMax, rowMax(S))
   AffineMap maxMap = getMaxMap();
   Value newMax = reduce<arith::MaximumFOp>(b, loc, sMap, maxMap, s, oldMax);
+  // TODO: Try cst 0.0078 for newMax
+  SmallVector<OpFoldResult> mSizes;
+  for (AffineExpr dimExpr : maxMap.getResults()) {
+    int dim = cast<AffineDimExpr>(dimExpr).getPosition();
+    mSizes.push_back(sizes[dim]);
+  }
+  auto maxTensorTy = llvm::dyn_cast<ShapedType>(newMax.getType());
+  newMax = b.create<tensor::EmptyOp>(loc, mSizes, maxTensorTy.getElementType());
+  Value k2Size = b.create<arith::ConstantOp>(loc, b.getFloatAttr(maxTensorTy.getElementType(), 32));
+  newMax = b.create<linalg::FillOp>(loc, k2Size, newMax).getResult(0);
+
 
   // P = exp2(S - newMax)
   // PMap = SMap
@@ -331,6 +342,11 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
 
   // newSum = normSum + rowSum(P)
   Value newSum = reduce<arith::AddFOp>(b, loc, pMap, sumMap, p, normSum);
+  // TODO: Try cst 0.0078 for newMax
+  auto sumTensorTy = llvm::dyn_cast<ShapedType>(newSum.getType());
+  newSum = b.create<tensor::EmptyOp>(loc, mSizes, sumTensorTy.getElementType());
+  newSum = b.create<linalg::FillOp>(loc, sZero, newSum).getResult(0);
+
 
   // newAcc = norm * oldAcc
   AffineMap accMap = getOutputMap();
@@ -381,17 +397,17 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
     p = truncateFloat(b, loc, pMap, pMap, p, convertP);
   }
 
-  Value newAcc = scaleValueInPlace(b, loc, accMap, normMap, oldAcc, norm);
+  // Value newAcc = scaleValueInPlace(b, loc, accMap, normMap, oldAcc, norm);
 
   // ---- Matmul 2 ----
 
   // newAcc = P @ V + newAcc
-  newAcc = computeMatmul(b, loc, pMap, getValueMap(), accMap, p, value, newAcc);
+  Value newAcc = computeMatmul(b, loc, pMap, getValueMap(), accMap, s, value, oldAcc);
 
   // Update for for the FP8 dynamic scale:
-  if (pScale) {
-    newAcc = scaleValueInPlace(b, loc, accMap, maxMap, newAcc, pScale);
-  }
+  // if (pScale) {
+  //   newAcc = scaleValueInPlace(b, loc, accMap, maxMap, newAcc, pScale);
+  // }
 
   return SmallVector<Value>{newAcc, newMax, newSum};
 }

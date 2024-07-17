@@ -685,7 +685,7 @@ setAttentionVectorDistributionConfig(IREE::GPU::TargetAttr target,
   // fixed by teaching vector distribution chained matmul.
   GPUMMAHeuristicSeeds seeds = {/*bestSubgroupCountPerWorkgroup=*/1,
                                 /*bestMNTileCountPerSubgroup=*/8,
-                                /*bestKTileCountPerSubgroup=*/4};
+                                /*bestKTileCountPerSubgroup=*/1};
 
   LDBG("Attention Vector Distribution Config");
 
