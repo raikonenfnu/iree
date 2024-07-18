@@ -436,6 +436,7 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
         reciprocal = convertScalarToDtype(b, loc, reciprocal, args[1].getType(),
                                           /*isUnsignedCast=*/false);
         Value result = b.create<arith::MulFOp>(loc, reciprocal, args[1]);
+        // Value result2 = b.create<arith::DivFOp>(loc, result, args[1]);
         b.create<linalg::YieldOp>(loc, result);
       });
   ops.push_back(genericOp);

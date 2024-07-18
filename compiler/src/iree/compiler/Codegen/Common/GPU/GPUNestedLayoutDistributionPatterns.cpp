@@ -435,6 +435,7 @@ struct DistributeMultiReduction final
                                        elemBitwidth, maxBitsPerShuffle));
     }
 
+    rewriter.create<gpu::BarrierOp>(accVector.getLoc());
     VectorValue disSrc =
         getDistributed(rewriter, srcVector, signature[srcVector]);
     VectorValue disAcc =
@@ -467,17 +468,22 @@ struct DistributeMultiReduction final
     SmallVector<int64_t> flatShape(1, numElements);
     VectorType flatVecType = VectorType::get(flatShape, elemTy);
     VectorValue flat =
-        rewriter.create<vector::ShapeCastOp>(loc, flatVecType, locallyReduced);
+        rewriter.create<vector::ShapeCastOp>(loc, flatVecType, disSrc);
 
     FailureOr<VectorValue> threadReduced = doThreadReduction(
         rewriter, srcLayout, flat, multiReduceOp.getKind(), reducedDims);
     if (failed(threadReduced)) {
       return failure();
     }
-
     VectorValue unflattened = rewriter.create<vector::ShapeCastOp>(
         loc, shaped, threadReduced.value());
-    replaceOpWithDistributedValues(rewriter, multiReduceOp, unflattened);
+    Value nullMask;
+    Value finalReduction = vector::makeArithReduction(rewriter, loc, multiReduceOp.getKind(), unflattened, disAcc, nullptr, nullMask);
+    auto finalReduced = dyn_cast<VectorValue>(finalReduction);
+
+    // VectorValue unflattened = rewriter.create<vector::ShapeCastOp>(
+    //     loc, shaped, threadReduced.value());
+    replaceOpWithDistributedValues(rewriter, multiReduceOp, finalReduced);
 
     return failure();
   }
