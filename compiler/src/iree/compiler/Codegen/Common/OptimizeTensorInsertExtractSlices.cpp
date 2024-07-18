@@ -115,6 +115,8 @@ hoistLoopInvariantSubsetAtIterArg(RewriterBase &rewriter,
     if (failed(newLoop))
       return loopLike;
     loopLike = *newLoop;
+    rewriter.replaceAllUsesExcept(
+        extraction.getResult(), loopLike.getRegionIterArgs().back(), loopLike);
 
     BlockArgument iterArg = loopLike.getRegionIterArgs()[idx];
     OpResult loopResult = loopLike.getTiedLoopResult(iterArg);
