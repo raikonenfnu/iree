@@ -342,10 +342,11 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
 
   // newSum = normSum + rowSum(P)
   Value newSum = reduce<arith::AddFOp>(b, loc, pMap, sumMap, p, normSum);
+  newSum = reduce<arith::AddFOp>(b, loc, pMap, sumMap, s, oldSum);
   // TODO: Try cst 0.0078 for newMax
-  auto sumTensorTy = llvm::dyn_cast<ShapedType>(newSum.getType());
-  newSum = b.create<tensor::EmptyOp>(loc, mSizes, sumTensorTy.getElementType());
-  newSum = b.create<linalg::FillOp>(loc, sZero, newSum).getResult(0);
+  // auto sumTensorTy = llvm::dyn_cast<ShapedType>(newSum.getType());
+  // newSum = b.create<tensor::EmptyOp>(loc, mSizes, sumTensorTy.getElementType());
+  // newSum = b.create<linalg::FillOp>(loc, sZero, newSum).getResult(0);
 
 
   // newAcc = norm * oldAcc
