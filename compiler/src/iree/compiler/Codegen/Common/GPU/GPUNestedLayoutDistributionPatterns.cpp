@@ -9,6 +9,7 @@
 #include "iree/compiler/Codegen/Common/GPU/GPUPatterns.h"
 #include "iree/compiler/Codegen/Common/GPU/GPUVectorDistribution.h"
 #include "iree/compiler/Codegen/Common/VectorLayoutAnalysis.h"
+#include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -394,7 +395,8 @@ static int64_t getShuffleWidth(NestedLayoutAttr layout, int64_t dim) {
 ///      the reduction dimensions. This is the batch, outer and element dims.
 ///   2. Thread Reduce: Each thread reduces result of step 1 across threads
 ///      by doing a butterfly shuffle.
-///
+///   3. Accumulator Reduce: Each thread reduces it's intermediate reduced
+///      results with the accumulator it holds.
 /// Currently, reduction across warps is not supported, but it would just add
 /// another step, Warp Reduce, where threads do an atomic addition on a buffer.
 struct DistributeMultiReduction final
@@ -435,6 +437,7 @@ struct DistributeMultiReduction final
                                        elemBitwidth, maxBitsPerShuffle));
     }
 
+    rewriter.create<gpu::BarrierOp>(accVector.getLoc());
     VectorValue disSrc =
         getDistributed(rewriter, srcVector, signature[srcVector]);
     VectorValue disAcc =
@@ -454,9 +457,11 @@ struct DistributeMultiReduction final
     for (int i = 0; i < 3; ++i) {
       distributedReductionMask.append(reducedDims.begin(), reducedDims.end());
     }
-
+    Value localInit = getCombiningIdentityValue(
+        loc, rewriter, multiReduceOp.getKind(), disAcc.getType());
     auto localReduction = rewriter.create<vector::MultiDimReductionOp>(
-        loc, disSrc, disAcc, distributedReductionMask, multiReduceOp.getKind());
+        loc, disSrc, localInit, distributedReductionMask,
+        multiReduceOp.getKind());
     auto locallyReduced = dyn_cast<VectorValue>(localReduction.getResult());
 
     assert(locallyReduced && "result should have been a vector");
@@ -467,21 +472,25 @@ struct DistributeMultiReduction final
     SmallVector<int64_t> flatShape(1, numElements);
     VectorType flatVecType = VectorType::get(flatShape, elemTy);
     VectorValue flat =
-        rewriter.create<vector::ShapeCastOp>(loc, flatVecType, disSrc);
+        rewriter.create<vector::ShapeCastOp>(loc, flatVecType, localReduction);
 
+    // Do inter-thread/warp reduce.
     FailureOr<VectorValue> threadReduced = doThreadReduction(
         rewriter, srcLayout, flat, multiReduceOp.getKind(), reducedDims);
     if (failed(threadReduced)) {
       return failure();
     }
+
+    // Do reduction against accumulator.
     VectorValue unflattened = rewriter.create<vector::ShapeCastOp>(
         loc, shaped, threadReduced.value());
-    Value nullMask;
-    Value finalReduction =
-        vector::makeArithReduction(rewriter, loc, multiReduceOp.getKind(),
-                                   unflattened, disAcc, nullptr, nullMask);
-    auto finalReduced = dyn_cast<VectorValue>(finalReduction);
-    replaceOpWithDistributedValues(rewriter, multiReduceOp, finalReduced);
+    Value accReduction = vector::makeArithReduction(
+        rewriter, loc, multiReduceOp.getKind(), unflattened, disAcc);
+    auto accReduced = dyn_cast<VectorValue>(accReduction);
+    if (!accReduced) {
+      return failure();
+    }
+    replaceOpWithDistributedValues(rewriter, multiReduceOp, accReduced);
 
     return failure();
   }
