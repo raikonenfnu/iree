@@ -64,6 +64,9 @@ static SmallVector<Value> computeSIMDIndex(const LayoutIterator::State &state,
     }
 
     auto [laneDimX, laneDimY, laneDimZ] = layout.getLaneGrid();
+    if (laneDimX * laneDimY * laneDimZ != 64) {
+      laneDimX *= 64 / (laneDimX * laneDimY * laneDimZ);
+    }
     SmallVector<Value> laneGrid = {
         rewriter.create<arith::ConstantIndexOp>(laneId.getLoc(), laneDimZ),
         rewriter.create<arith::ConstantIndexOp>(laneId.getLoc(), laneDimY),
@@ -221,6 +224,11 @@ struct DistributeXferLayoutAttr : OpDistributionPattern<OpTy> {
     LayoutIterator iterator(vectorLayout, steps);
 
     iterator.apply([&](const LayoutIterator::State &state) {
+      if (std::is_same<OpTy, vector::TransferWriteOp>::value) {
+        llvm::outs() << "STATE:";
+        state.print();
+        llvm::outs() << "\n";
+      }
       SmallVector<Value> memoryIndices = getMemoryIndices(
           state, memoryLayout, xferOp.getIndices(), unusedDims, rewriter);
       SmallVector<int64_t> accIndices = state.computeSIMTIndex();
@@ -335,7 +343,10 @@ struct DistributeTransferWriteLayoutAttr final
       return failure();
     }
 
-    accessMemory(writeOp, writeOp.getVector(), vectorLayout, rewriter);
+    llvm::outs() << "SRC write:" << writeOp << "\n";
+    VectorValue newWrite =
+        accessMemory(writeOp, writeOp.getVector(), vectorLayout, rewriter);
+    llvm::outs() << "WRITE:" << newWrite << "\n";
 
     rewriter.eraseOp(writeOp);
     return success();
@@ -358,6 +369,10 @@ struct DistributeTransferWriteLayoutAttr final
     result = rewriter.create<vector::ExtractOp>(
         writeOp.getLoc(), result,
         SmallVector<int64_t>(accIndices.size() - 1, 0));
+    llvm::outs() << "new access!\n";
+    for (Value &ind : memoryIndices) {
+      llvm::outs() << ind << ",\n";
+    }
     rewriter.create<vector::StoreOp>(writeOp.getLoc(), result,
                                      writeOp.getSource(), memoryIndices);
 
