@@ -711,23 +711,32 @@ struct DistributeBroadcastLayoutAttr final
       return failure();
     }
 
+    DenseMap<LayoutDimension, int64_t> steps;
+    const LayoutDimension vectorX = LayoutDimension::VECTORX;
+    PerDimLayoutAttr parallelLayout = layout.getLayouts()[parallelDim];
+    steps[vectorX] = parallelLayout.getShape(vectorX).value_or(1);
+
     // Iterate over the parallel dimension.;
-    LayoutIterator parallelIterator(layout, parallelDim);
+    LayoutIterator parallelIterator(layout, steps, parallelDim);
     parallelIterator.apply([&](const LayoutIterator::State &parallelState) {
       // Extract the value from source.
       SmallVector<int64_t> sourceIndices = parallelState.computeSIMTIndex();
-      Value value = rewriter.create<vector::ExtractOp>(
-          loc, getDistributed(rewriter, srcVector, sourceLayout),
-          sourceIndices);
+      SmallVector<int64_t> sliceStride(sourceIndices.size(), 1);
+      SmallVector<int64_t> sliceSize(sourceIndices.size(), 1);
+      sliceSize[sliceSize.size() - 1] = steps[vectorX];
+      Value value = rewriter.create<vector::ExtractStridedSliceOp>(
+          loc, getDistributed(rewriter, srcVector, sourceLayout), sourceIndices, sliceSize, sliceStride);
 
       // Broadcast value over the broadcasted dimension.
       LayoutIterator broadcastIterator(layout, broadcastedDim);
       broadcastIterator.maybeFreezeAndConcatenate(parallelState);
       broadcastIterator.apply([&](const LayoutIterator::State &broadcastState) {
         SmallVector<int64_t> resultIndices = broadcastState.computeSIMTIndex();
+        accumulator = rewriter.create<vector::InsertStridedSliceOp>(
+            loc, value, accumulator, resultIndices, sliceStride);
 
-        accumulator = rewriter.create<vector::InsertOp>(loc, value, accumulator,
-                                                        resultIndices);
+        // accumulator = rewriter.create<vector::InsertOp>(loc, value, accumulator,
+        //                                                 resultIndices);
       });
     });
 
