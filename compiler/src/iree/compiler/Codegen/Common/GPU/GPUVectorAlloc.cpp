@@ -8,6 +8,7 @@
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Codegen/Utils/LinalgOpInfo.h"
 #include "llvm/Support/Debug.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -53,11 +54,31 @@ static bool contractOpFilter(Operation *op) {
   return numNonUnitParallelLoop > 1 && dims.size() >= 2 && dims.size() <= 3;
 }
 
+// Currently do not promote if source operand is from chained
+// matmul op. 
+static bool shouldPromoteOperand(Value operand) {
+  SetVector<Operation *> backwardSlice;
+  BackwardSliceOptions options;
+  options.inclusive = true;
+  getBackwardSlice(operand, &backwardSlice, options);
+  for (Operation *sliceOp : backwardSlice) {
+    if (dyn_cast<vector::ContractionOp>(sliceOp)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Allocates a tensor to copy the vector into a la bufferization.alloc_tensor.
 // This allocation is always static as vectors are currently always static
-// where this is used.
+// where this is used. If operand do not need to be promoted, we can
+// turn skip promotion and return self.
 static FailureOr<Value> allocateTensorForVector(OpBuilder &b, Location loc,
                                                 Value vector) {
+  // Return self if operand does not need promotion.
+  if (!shouldPromoteOperand(vector)) {
+    return vector;
+  }
   VectorType vectorType = llvm::cast<VectorType>(vector.getType());
   if (vectorType.isScalable()) {
     return failure();
@@ -138,12 +159,16 @@ struct GPUVectorAllocPass final
       // Synchronize after the write to shared memory before we read from it.
       builder.create<gpu::BarrierOp>(contractOp->getLoc());
 
-      Value lhsVec =
-          readVectorFromTensor(builder, contractOp.getLhsType(), *lhsRet);
-      Value rhsVec =
-          readVectorFromTensor(builder, contractOp.getRhsType(), *rhsRet);
-      lhs.set(lhsVec);
-      rhs.set(rhsVec);
+      if (lhsRet.value() != lhs.get()) {
+        Value lhsVec =
+            readVectorFromTensor(builder, contractOp.getLhsType(), *lhsRet);
+        lhs.set(lhsVec);
+      }
+      if (rhsRet.value() != rhs.get()) {
+        Value rhsVec =
+            readVectorFromTensor(builder, contractOp.getRhsType(), *rhsRet);
+        rhs.set(rhsVec);
+      }
     }
   }
 };

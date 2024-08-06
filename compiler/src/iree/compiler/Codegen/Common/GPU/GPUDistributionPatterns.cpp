@@ -825,6 +825,7 @@ struct DistributeLayoutConflictResolutions final
       return failure();
     }
 
+    llvm::outs()<<"Conflict RESOLUTION:"<<resolutionOp<<"\n";
     Type elementType =
         llvm::cast<VectorType>(result.getType()).getElementType();
     Value newVector =
@@ -997,6 +998,7 @@ struct DistributeLayoutConflictToSharedMemory final
     setSignatureForRedistribution(rewriter, write.getOperation(),
                                   writeOperandsAttr, writeResultsAttr);
 
+    llvm::outs()<<"Shared memory RESOLUTION:"<<resolutionOp<<"\n";
     // Set layouts signature for read.
     // We only need to set the layout on output.
     ArrayAttr readOperandsAttr = ArrayAttr::get(
