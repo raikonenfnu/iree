@@ -874,20 +874,28 @@ struct DistributeLayoutConflictToSharedMemory final
           "Target's and source's distributed rank needs to match.");
     }
 
-    auto numElements = [](ArrayRef<int64_t> vector) {
-      return std::accumulate(vector.begin(), vector.end(), 1,
-                             std::multiplies<int64_t>());
-    };
+    // auto numElements = [](ArrayRef<int64_t> vector) {
+    //   return std::accumulate(vector.begin(), vector.end(), 1,
+    //                          std::multiplies<int64_t>());
+    // };
 
-    if (numElements(currentVecShape) == numElements(targetVecShape) &&
-        !currentLayout.hasLaneConflictWith(targetLayout)) {
-      // If the conditions suffice, we can skip the trip to shared memory
-      // and just use the default/more efficient layout conflict resolution
-      // distribution.
-      return rewriter.notifyMatchFailure(resolutionOp,
-                                         "Failing because condition suffice to "
-                                         "use better conflict resolutions.");
-    }
+    // if (numElements(currentVecShape) == numElements(targetVecShape) &&
+    //     !currentLayout.hasLaneConflictWith(targetLayout)) {
+    //   // If the conditions suffice, we can skip the trip to shared memory
+    //   // and just use the default/more efficient layout conflict resolution
+    //   // distribution.
+    //   return rewriter.notifyMatchFailure(resolutionOp,
+    //                                      "Failing because condition suffice
+    //                                      to " "use better conflict
+    //                                      resolutions.");
+    // }
+    llvm::outs() << "SHARED MEM:" << resolutionOp << "\n";
+    llvm::outs() << "Target :";
+    llvm::interleaveComma(targetVecShape, llvm::outs());
+    llvm::outs() << "\n";
+    llvm::outs() << "SRC :";
+    llvm::interleaveComma(currentVecShape, llvm::outs());
+    llvm::outs() << "\n";
 
     // Compute Subgroup and Workgroup related information and offsets.
     auto funcOp = resolutionOp->getParentOfType<func::FuncOp>();
@@ -1062,8 +1070,7 @@ void populateGPUDistributionLayoutAttrPatterns(Value laneId,
 // TODO: Need a new op/analysis to determine when this pattern is safe to use.
 void populateGPULayoutResolutionDistributionPatterns(
     RewritePatternSet &patterns) {
-  patterns.add<DistributeLayoutConflictResolutions,
-               DistributeLayoutConflictToSharedMemory>(patterns.getContext());
+  patterns.add<DistributeLayoutConflictToSharedMemory>(patterns.getContext());
 }
 
 }; // namespace mlir::iree_compiler
