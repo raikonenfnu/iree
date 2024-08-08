@@ -1020,6 +1020,155 @@ struct DistributeLayoutConflictToSharedMemory final
   }
 };
 
+SmallVector<int64_t> delinearizeIndex(int64_t flatIdx,
+                                      SmallVector<int64_t> &shape) {
+  SmallVector<int64_t> delinearIndex(shape.size(), 0);
+  int64_t accDimLen = 1;
+  for (int i = shape.size() - 1; i >= 0; i--) {
+    delinearIndex[i] = (flatIdx / accDimLen) % shape[i];
+    accDimLen *= shape[i];
+  }
+  return delinearIndex;
+}
+
+struct ShuffleToResolveLayoutConflicts final
+    : OpDistributionPattern<IREE::VectorExt::ToLayoutOp> {
+  using OpDistributionPattern::OpDistributionPattern;
+
+  LogicalResult matchAndRewrite(IREE::VectorExt::ToLayoutOp resolutionOp,
+                                DistributionSignature &signature,
+                                PatternRewriter &rewriter) const override {
+    auto loc = resolutionOp.getLoc();
+    auto funcOp = resolutionOp->getParentOfType<func::FuncOp>();
+    std::optional<int64_t> maybeSubgroupSize = getSubgroupSize(funcOp);
+    if (!maybeSubgroupSize) {
+      return failure();
+    }
+    std::optional<SmallVector<int64_t>> maybeWorkgroupSize =
+        getWorkgroupSize(funcOp);
+    if (!maybeWorkgroupSize) {
+      return failure();
+    }
+    int64_t subgroupSize = maybeSubgroupSize.value();
+    SmallVector<int64_t> workgroupSize = maybeWorkgroupSize.value();
+    auto vector = cast<VectorValue>(resolutionOp.getInput());
+    auto result = cast<VectorValue>(resolutionOp.getOutput());
+    LayoutAttr currentLayout = dyn_cast<LayoutAttr>(signature[vector]);
+    if (!currentLayout)
+      return failure();
+    LayoutAttr targetLayout = dyn_cast<LayoutAttr>(signature[result]);
+    if (!targetLayout)
+      return failure();
+
+    SmallVector<int64_t> currentVecShape = currentLayout.getDistributedShape();
+    SmallVector<int64_t> targetVecShape = targetLayout.getDistributedShape();
+    if (currentVecShape.size() != targetVecShape.size())
+      return failure();
+
+    // If the conditions suffice, we can skip the trip to shared memory
+    // and just use the default/more efficient layout conflict resolution
+    // distribution.
+    // auto numElements = [](ArrayRef<int64_t> vector) {
+    //   return std::accumulate(vector.begin(), vector.end(), 1,
+    //                          std::multiplies<int64_t>());
+    // };
+    // if (numElements(currentVecShape) == numElements(targetVecShape) &&
+    //     !currentLayout.hasLaneConflictWith(targetLayout))
+    //   return failure();
+    llvm::outs() << "SG size:" << subgroupSize << "\n";
+    llvm::outs() << "SHARED MEM:" << resolutionOp << "\n";
+    llvm::outs() << "Target :";
+    llvm::interleaveComma(targetVecShape, llvm::outs());
+    llvm::outs() << "\n";
+    llvm::outs() << "SRC :";
+    llvm::interleaveComma(currentVecShape, llvm::outs());
+    llvm::outs() << "\n";
+    llvm::outs() << "SRC OP:" << vector << "\n";
+    llvm::outs() << "DST OP:" << **(resolutionOp->user_begin()) << "\n";
+    auto toSIMDOp = llvm::dyn_cast_or_null<IREE::VectorExt::ToSIMDOp>(
+        vector.getDefiningOp());
+    if (!toSIMDOp)
+      return failure();
+    Value srcDistributedVector = toSIMDOp.getOperand();
+    auto resElemType = result.getType().getElementType();
+    auto vecResType = VectorType::get(targetVecShape, resElemType);
+    Value init = rewriter.createOrFold<vector::ShapeCastOp>(
+        loc, vecResType, srcDistributedVector);
+    // Get Offset based on threadIdx.
+    AffineExpr d0, d1, d2, s0;
+    bindDims(rewriter.getContext(), d0, d1, d2);
+    bindSymbols(rewriter.getContext(), s0);
+    auto indexType = rewriter.getIndexType();
+    Value threadX =
+        rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::x);
+    Value threadY =
+        rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::y);
+    Value threadZ =
+        rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::z);
+    Value flatThreadId = affine::makeComposedAffineApply(
+        rewriter, loc,
+        (d0 + workgroupSize[0] * d1 +
+         (workgroupSize[0] * workgroupSize[1]) * d2),
+        {threadX, threadY, threadZ});
+    Value laneId = affine::makeComposedAffineApply(
+        rewriter, loc, s0 % subgroupSize, {flatThreadId});
+
+    // // Create XORs to trade for every element.
+    // // based one laneId, if lower half then offset = 0
+    // // based one laneId, if upper half then offset = 1
+    const int64_t kXorWidth = subgroupSize / 2;
+    Value xorWidthVal = rewriter.create<arith::ConstantOp>(
+        loc, rewriter.getIndexAttr(kXorWidth));
+    Value isLowerHalf = rewriter.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ult, laneId, xorWidthVal);
+
+    int batchSize = 4;
+    int vectorXSize = 4;
+    int lowerOffset = 4;
+    int upperOffset = 0;
+    // TODO: Generalize the pattern.
+    // TODO: Optimize by doing insert_strided_slice and extract_strided_slice.
+    // TODO: Do single packed (4xf8 -> 1xi32 shuffle).
+    for (int batchIdx = 0; batchIdx < batchSize; batchIdx++) {
+      for (int elemIdx = 0; elemIdx < vectorXSize; elemIdx++) {
+        auto lowerVal = rewriter.create<vector::ExtractOp>(
+            loc, init,
+            SmallVector<int64_t>{batchIdx, 0, elemIdx + lowerOffset});
+        auto upperVal = rewriter.create<vector::ExtractOp>(
+            loc, init,
+            SmallVector<int64_t>{batchIdx, 0, elemIdx + upperOffset});
+        // ExtractOp
+        Value srcVal = rewriter.create<arith::SelectOp>(loc, isLowerHalf,
+                                                        lowerVal, upperVal);
+        // ShuffleOp
+        Value paddedSrc =
+            rewriter.create<arith::ExtFOp>(loc, rewriter.getF32Type(), srcVal);
+        auto shuffledOp = rewriter.create<gpu::ShuffleOp>(
+            loc, paddedSrc, kXorWidth, subgroupSize, gpu::ShuffleMode::XOR);
+        Value shuffledVal = rewriter.create<arith::TruncFOp>(
+            loc, srcVal.getType(), shuffledOp.getShuffleResult());
+        // InsertOp
+        Value lowerHalfUpdate = rewriter.create<arith::SelectOp>(
+            loc, isLowerHalf, lowerVal, shuffledVal);
+        Value upperHalfUpdate = rewriter.create<arith::SelectOp>(
+            loc, isLowerHalf, shuffledVal, upperVal);
+        // Set value for upperhalf of the vector. [4,1,8] [:,:,:4]
+        init = rewriter.create<vector::InsertOp>(
+            loc, lowerHalfUpdate, init,
+            SmallVector<int64_t>{batchIdx, 0, elemIdx + 0});
+        // Set value for lowerhalf of the vector. [4,1,8] [:,:,4:]
+        init = rewriter.create<vector::InsertOp>(
+            loc, upperHalfUpdate, init,
+            SmallVector<int64_t>{batchIdx, 0, elemIdx + 4});
+      }
+    }
+    // Create to SIMTOp
+    // replace resolution with toSIMT.
+    replaceOpWithDistributedValues(rewriter, resolutionOp, init);
+    return success();
+  }
+};
+
 struct DistributeTrivialLayoutConversions final
     : OpDistributionPattern<IREE::VectorExt::ToLayoutOp> {
   using OpDistributionPattern::OpDistributionPattern;
@@ -1070,7 +1219,7 @@ void populateGPUDistributionLayoutAttrPatterns(Value laneId,
 // TODO: Need a new op/analysis to determine when this pattern is safe to use.
 void populateGPULayoutResolutionDistributionPatterns(
     RewritePatternSet &patterns) {
-  patterns.add<DistributeLayoutConflictToSharedMemory>(patterns.getContext());
+  patterns.add<ShuffleToResolveLayoutConflicts>(patterns.getContext());
 }
 
 }; // namespace mlir::iree_compiler
