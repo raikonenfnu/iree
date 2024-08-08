@@ -1075,16 +1075,17 @@ struct ShuffleToResolveLayoutConflicts final
     // if (numElements(currentVecShape) == numElements(targetVecShape) &&
     //     !currentLayout.hasLaneConflictWith(targetLayout))
     //   return failure();
-    llvm::outs() << "SG size:" << subgroupSize << "\n";
-    llvm::outs() << "SHARED MEM:" << resolutionOp << "\n";
-    llvm::outs() << "Target :";
-    llvm::interleaveComma(targetVecShape, llvm::outs());
-    llvm::outs() << "\n";
-    llvm::outs() << "SRC :";
-    llvm::interleaveComma(currentVecShape, llvm::outs());
-    llvm::outs() << "\n";
-    llvm::outs() << "SRC OP:" << vector << "\n";
-    llvm::outs() << "DST OP:" << **(resolutionOp->user_begin()) << "\n";
+    // llvm::outs() << "SG size:" << subgroupSize << "\n";
+    // llvm::outs() << "SHARED MEM:" << resolutionOp << "\n";
+    // llvm::outs() << "Target :";
+    // llvm::interleaveComma(targetVecShape, llvm::outs());
+    // llvm::outs() << "\n";
+    // llvm::outs() << "SRC :";
+    // llvm::interleaveComma(currentVecShape, llvm::outs());
+    // llvm::outs() << "\n";
+    // llvm::outs() << "SRC OP:" << vector << "\n";
+    // llvm::outs() << "DST OP:" << **(resolutionOp->user_begin()) << "\n";
+    // llvm::outs()<<"PARENT:"<<resolutionOp->getParentOfType<mlir::FunctionOpInterface>();
     auto toSIMDOp = llvm::dyn_cast_or_null<IREE::VectorExt::ToSIMDOp>(
         vector.getDefiningOp());
     if (!toSIMDOp)
@@ -1126,40 +1127,55 @@ struct ShuffleToResolveLayoutConflicts final
     int vectorXSize = 4;
     int lowerOffset = 4;
     int upperOffset = 0;
+    // TODO: Need to set to_layout after exp2 and convert to FP8.
+    int tileNumel =
+        32 / result.getType().getElementType().getIntOrFloatBitWidth();
+    llvm::outs() << "TILE NUMEL:" << tileNumel << "\n";
     // TODO: Generalize the pattern.
     // TODO: Optimize by doing insert_strided_slice and extract_strided_slice.
     // TODO: Do single packed (4xf8 -> 1xi32 shuffle).
+    auto unitType = VectorType::get({1, 1, 1}, rewriter.getF32Type());
     for (int batchIdx = 0; batchIdx < batchSize; batchIdx++) {
-      for (int elemIdx = 0; elemIdx < vectorXSize; elemIdx++) {
-        auto lowerVal = rewriter.create<vector::ExtractOp>(
-            loc, init,
-            SmallVector<int64_t>{batchIdx, 0, elemIdx + lowerOffset});
-        auto upperVal = rewriter.create<vector::ExtractOp>(
-            loc, init,
-            SmallVector<int64_t>{batchIdx, 0, elemIdx + upperOffset});
+      for (int elemIdx = 0; elemIdx < vectorXSize; elemIdx += tileNumel) {
+        Value lowerVal = rewriter.create<vector::ExtractStridedSliceOp>(
+            loc, init, SmallVector<int64_t>{batchIdx, 0, elemIdx + lowerOffset},
+            SmallVector<int64_t>{1, 1, tileNumel},
+            SmallVector<int64_t>{1, 1, 1});
+        Value upperVal = rewriter.create<vector::ExtractStridedSliceOp>(
+            loc, init, SmallVector<int64_t>{batchIdx, 0, elemIdx + upperOffset},
+            SmallVector<int64_t>{1, 1, tileNumel},
+            SmallVector<int64_t>{1, 1, 1});
         // ExtractOp
         Value srcVal = rewriter.create<arith::SelectOp>(loc, isLowerHalf,
                                                         lowerVal, upperVal);
+        // Pack Op
+        Value packedVector =
+            rewriter.create<vector::BitCastOp>(loc, unitType, srcVal);
+        Value packedVal = rewriter.create<vector::ExtractOp>(
+            loc, packedVector, SmallVector<int64_t>{0, 0, 0});
         // ShuffleOp
-        Value paddedSrc =
-            rewriter.create<arith::ExtFOp>(loc, rewriter.getF32Type(), srcVal);
         auto shuffledOp = rewriter.create<gpu::ShuffleOp>(
-            loc, paddedSrc, kXorWidth, subgroupSize, gpu::ShuffleMode::XOR);
-        Value shuffledVal = rewriter.create<arith::TruncFOp>(
-            loc, srcVal.getType(), shuffledOp.getShuffleResult());
+            loc, packedVal, kXorWidth, subgroupSize, gpu::ShuffleMode::XOR);
+        Value shuffledVal = rewriter.create<vector::BroadcastOp>(
+            loc, unitType, shuffledOp.getShuffleResult());
+        // Unpack
+        Value unpackedVector = rewriter.create<vector::BitCastOp>(
+            loc, srcVal.getType(), shuffledVal);
         // InsertOp
         Value lowerHalfUpdate = rewriter.create<arith::SelectOp>(
-            loc, isLowerHalf, lowerVal, shuffledVal);
+            loc, isLowerHalf, upperVal, unpackedVector);
         Value upperHalfUpdate = rewriter.create<arith::SelectOp>(
-            loc, isLowerHalf, shuffledVal, upperVal);
+            loc, isLowerHalf, unpackedVector, lowerVal);
         // Set value for upperhalf of the vector. [4,1,8] [:,:,:4]
-        init = rewriter.create<vector::InsertOp>(
+        init = rewriter.create<vector::InsertStridedSliceOp>(
             loc, lowerHalfUpdate, init,
-            SmallVector<int64_t>{batchIdx, 0, elemIdx + 0});
+            SmallVector<int64_t>{batchIdx, 0, elemIdx + 0},
+            SmallVector<int64_t>{1, 1, 1});
         // Set value for lowerhalf of the vector. [4,1,8] [:,:,4:]
-        init = rewriter.create<vector::InsertOp>(
+        init = rewriter.create<vector::InsertStridedSliceOp>(
             loc, upperHalfUpdate, init,
-            SmallVector<int64_t>{batchIdx, 0, elemIdx + 4});
+            SmallVector<int64_t>{batchIdx, 0, elemIdx + 4},
+            SmallVector<int64_t>{1, 1, 1});
       }
     }
     // Create to SIMTOp
