@@ -1134,7 +1134,7 @@ struct ShuffleToResolveLayoutConflicts final
     // TODO: Generalize the pattern.
     // TODO: Optimize by doing insert_strided_slice and extract_strided_slice.
     // TODO: Do single packed (4xf8 -> 1xi32 shuffle).
-    auto unitType = VectorType::get({1, 1, 1}, rewriter.getF32Type());
+    auto unitType = VectorType::get({1}, rewriter.getF32Type());
     for (int batchIdx = 0; batchIdx < batchSize; batchIdx++) {
       for (int elemIdx = 0; elemIdx < vectorXSize; elemIdx += tileNumel) {
         Value lowerVal = rewriter.create<vector::ExtractStridedSliceOp>(
@@ -1149,10 +1149,16 @@ struct ShuffleToResolveLayoutConflicts final
         Value srcVal = rewriter.create<arith::SelectOp>(loc, isLowerHalf,
                                                         lowerVal, upperVal);
         // Pack Op
+        // Value lowerExtract = rewriter.create<vector::ExtractOp>(
+        //     loc, lowerVal, SmallVector<int64_t>{0, 0});
+        Value srcExtract = rewriter.create<vector::ExtractOp>(
+            loc, srcVal, SmallVector<int64_t>{0, 0});
+        // Value upperExtract = rewriter.create<vector::ExtractOp>(
+        // loc, upperVal, SmallVector<int64_t>{0, 0});
         Value packedVector =
-            rewriter.create<vector::BitCastOp>(loc, unitType, srcVal);
+            rewriter.create<vector::BitCastOp>(loc, unitType, srcExtract);
         Value packedVal = rewriter.create<vector::ExtractOp>(
-            loc, packedVector, SmallVector<int64_t>{0, 0, 0});
+            loc, packedVector, SmallVector<int64_t>{0});
         // ShuffleOp
         auto shuffledOp = rewriter.create<gpu::ShuffleOp>(
             loc, packedVal, kXorWidth, subgroupSize, gpu::ShuffleMode::XOR);
@@ -1160,12 +1166,14 @@ struct ShuffleToResolveLayoutConflicts final
             loc, unitType, shuffledOp.getShuffleResult());
         // Unpack
         Value unpackedVector = rewriter.create<vector::BitCastOp>(
-            loc, srcVal.getType(), shuffledVal);
+            loc, srcExtract.getType(), shuffledVal);
+        Value unpackShape = rewriter.create<vector::ShapeCastOp>(
+            loc, upperVal.getType(), unpackedVector);
         // InsertOp
         Value lowerHalfUpdate = rewriter.create<arith::SelectOp>(
-            loc, isLowerHalf, upperVal, unpackedVector);
+            loc, isLowerHalf, upperVal, unpackShape);
         Value upperHalfUpdate = rewriter.create<arith::SelectOp>(
-            loc, isLowerHalf, unpackedVector, lowerVal);
+            loc, isLowerHalf, unpackShape, lowerVal);
         // Set value for upperhalf of the vector. [4,1,8] [:,:,:4]
         init = rewriter.create<vector::InsertStridedSliceOp>(
             loc, lowerHalfUpdate, init,
