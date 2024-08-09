@@ -94,7 +94,7 @@ private:
   /// Attempt to resolve the current lattice with the given lattice. Returns if
   /// the current layout was not changed, changed or if there was a layout
   /// conflict.
-  ResolutionResult doResolution(const VectorLayoutInterface &rhs);
+  ResolutionResult doResolution(const VectorLayoutInterface &rhs, bool force);
 
   /// Set the layout for this lattice element to the given layout. This function
   /// should only be used when you know there will be no layout conflicts.
@@ -178,7 +178,8 @@ private:
 /// ==========================================================================
 
 DistributionLayout::ResolutionResult
-DistributionLayout::doResolution(const VectorLayoutInterface &rhs) {
+DistributionLayout::doResolution(const VectorLayoutInterface &rhs,
+                                 bool force = false) {
   VectorLayoutInterface &lhs = vectorLayout;
 
   // Ignore if the layout to resolve with is empty.
@@ -197,12 +198,23 @@ DistributionLayout::doResolution(const VectorLayoutInterface &rhs) {
     return ResolutionResult::Change;
   }
 
+  if (force) {
+    setInnerLayout(rhs);
+    return ResolutionResult::Change;
+  }
+
   // Layouts conflict and need to be resolved.
   return ResolutionResult::Conflict;
 }
 
 ChangeResult DistributionLayout::resolveWithPossibleConflict(
     const VectorLayoutInterface &rhs, OpOperand &opOperand) {
+  Value input = opOperand.get();
+  // bool force = input.getDefiningOp()->hasAttr("iree.anchor.op");
+  // bool force = false;
+  // if (auto inputOp = input.getDefiningOp()) {
+  //   force = inputOp->hasAttr("iree.anchor.op");
+  // }
   ResolutionResult result = doResolution(rhs);
 
   // If there is no conflict, simply return.
@@ -216,7 +228,10 @@ ChangeResult DistributionLayout::resolveWithPossibleConflict(
   // Resolve conflict by create an operation that takes the input the conflicted
   // value and returns the resolved value.
   OpBuilder builder(opOperand.getOwner());
-  Value input = opOperand.get();
+  llvm::outs() << "INPUT:" << input << "\n";
+  llvm::outs() << "DST:" << *opOperand.getOwner() << "\n";
+  llvm::outs() << "LHS:" << vectorLayout << "\n"; // [2, 4, 2, 4]
+  llvm::outs() << "RHS:" << rhs << "\n";          // [4, 2, 8]
   // Create a resolution operation. This conflict should be handeled later by
   // someone else, not this analysis.
   Operation *resolveOp = builder.create<IREE::VectorExt::ToLayoutOp>(
@@ -349,15 +364,22 @@ static OpOperand &getOpOperand(Operation *op, unsigned operandLatticeIndex) {
 /// return nullptr.
 static const DistributionLayout *
 getAgreedLayout(ArrayRef<const DistributionLayout *> layouts) {
-  if (layouts.empty())
+
+  SmallVector<const DistributionLayout *> culledLayouts;
+  for (auto layout : layouts) {
+    if (layout->isUninitialized())
+      continue;
+    culledLayouts.push_back(layout);
+  }
+  if (culledLayouts.empty())
     return nullptr;
 
   // Check if all layouts are same.
-  if (!llvm::all_equal(llvm::make_pointee_range(layouts))) {
+  if (!llvm::all_equal(llvm::make_pointee_range(culledLayouts))) {
     return nullptr;
   }
 
-  return layouts[0];
+  return culledLayouts[0];
 }
 
 /// Hueristic to use to choose the best layout when enforcing the same layout
@@ -419,6 +441,14 @@ static void propagateLayoutToElementwiseOp(
     ArrayRef<DistributionLayout *> resultLattices,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
   // All operands and results must agree on the same layout.
+  // if (dyn_cast<arith::MulFOp>(op)) {
+  //   llvm::outs()<<*operandLattices[0]<<"\n";
+  //   llvm::outs()<<*operandLattices[1]<<"\n";
+  //   // llvm::outs()<<*operandLattices[2]<<"\n";
+  //   // for (auto user : op->getUsers()) {
+  //   //   llvm::outs()<<"user:"<<*user<<"\n";
+  //   // }
+  // }
 
   // We do not support multiple results yet.
   if (resultLattices.size() != 1)
@@ -437,6 +467,15 @@ static void propagateLayoutToElementwiseOp(
   const DistributionLayout *chosenOperandLayout =
       getAgreedLayout(operandLattices);
   if (chosenOperandLayout == nullptr) {
+    if (dyn_cast<arith::MulFOp>(op)) {
+      llvm::outs() << "no mul:" << *op << "\n";
+      llvm::outs() << "lhs layout:" << *operandLattices[0] << "\n";
+      // llvm::outs()<<*operandLattices[1]<<"\n";
+      // llvm::outs()<<*operandLattices[2]<<"\n";
+      // for (auto user : op->getUsers()) {
+      //   llvm::outs()<<"user:"<<*user<<"\n";
+      // }
+    }
     return;
   }
 
@@ -583,6 +622,8 @@ static void enforceLayoutToLayoutOp(
   if (input->hasLayout()) {
     return;
   }
+  // llvm::outs()<<"Enforce to layout!\n";
+  // llvm::outs()<<toLayout.getInput()<<"\n";
 
   // Enforce the result layout on init.
   ChangeResult changed = input->resolve(toLayout.getLayout());
@@ -730,6 +771,10 @@ void enforcementTransferFunction(
     ArrayRef<const DistributionLayout *> resultLattices,
     std::function<void(DistributionLayout *, ChangeResult)> update) {
 
+  if (dyn_cast<vector::TransferReadOp>(op)) {
+    llvm::outs() << "TRY ENFORCE:" << *op << "\n";
+  }
+
   if (auto toLayout = dyn_cast<ToLayoutOp>(op)) {
     enforceLayoutToLayoutOp(toLayout, operandLattices, resultLattices, update);
   }
@@ -762,6 +807,9 @@ void enforcementTransferFunction(
     enforceLayoutToContractionOp(contraction, operandLattices, resultLattices,
                                  update);
     return;
+  }
+  if (dyn_cast<vector::TransferReadOp>(op)) {
+    llvm::outs() << "NO ENFORCE:" << *op << "\n";
   }
 }
 
@@ -1029,8 +1077,8 @@ LogicalResult VectorLayoutAnalysis::run() {
   // The order of loading matters here, because propagateLayout does anchoring
   // initialization which needs the lattice to know both enforcement and
   // propagation.
-  solver.load<EnforceLayout>(root->getContext());
   solver.load<PropagateLayout>(anchors, root->getContext());
+  solver.load<EnforceLayout>(root->getContext());
   return solver.initializeAndRun(root);
 }
 

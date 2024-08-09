@@ -289,6 +289,7 @@ LogicalResult distributeVectorOps(Operation *root,
     return failure();
   LLVM_DEBUG(llvm::dbgs() << "Layout Analysis Succeded\n");
   LLVM_DEBUG(llvm::dbgs() << "\n\n");
+  llvm::outs() << "ROOT:" << *root << "\n";
 
   // Go to each operation, and set its distribution signature.
   LLVM_DEBUG(

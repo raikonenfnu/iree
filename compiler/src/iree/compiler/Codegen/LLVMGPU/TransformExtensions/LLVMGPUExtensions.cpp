@@ -1690,6 +1690,7 @@ transform_dialect::SetContractionLayoutAttributes::apply(
 
     // Set intrinsic type.
     contract->setAttr("iree.amdgpu.mma", mmaType);
+    // contract->setAttr("iree.anchor.op", rewriter.getUnitAttr());
   }
 
   return DiagnosedSilenceableFailure::success();
