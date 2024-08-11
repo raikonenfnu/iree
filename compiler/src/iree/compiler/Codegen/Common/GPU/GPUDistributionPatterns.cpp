@@ -1123,18 +1123,54 @@ struct ShuffleToResolveLayoutConflicts final
     Value isLowerHalf = rewriter.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ult, laneId, xorWidthVal);
 
-    int batchSize = 4;
-    int vectorXSize = 4;
-    int lowerOffset = 4;
+    auto getLayoutDim = [&](LayoutAttr &queriedLayout,
+                            LayoutDimension queriedDim) {
+      std::optional<int64_t> dimValue;
+      for (auto perDimLayout : queriedLayout.getLayouts()) {
+        if (!perDimLayout.getShape(queriedDim))
+          continue;
+        dimValue = perDimLayout.getShape(queriedDim);
+        return dimValue;
+      }
+      return dimValue;
+    };
+
+    std::optional<int64_t> srcLaneY =
+        getLayoutDim(currentLayout, LayoutDimension::LANEY);
+    std::optional<int64_t> srcVectorX =
+        getLayoutDim(currentLayout, LayoutDimension::VECTORX);
+
+    std::optional<int64_t> targetLaneY =
+        getLayoutDim(targetLayout, LayoutDimension::LANEY);
+    std::optional<int64_t> targetVectorX =
+        getLayoutDim(targetLayout, LayoutDimension::VECTORX);
+    if (!srcLaneY || !srcVectorX || !targetLaneY || !targetVectorX) {
+      return failure();
+    }
+
+    // Currently only support shuffle between 2 lanes.
+    // can generalize this for more patterns.
+    if (srcLaneY.value() != targetLaneY.value() || srcLaneY.value() != 2) {
+      return failure();
+    }
+
+    // Only can shuffle with correct order if this criteria
+    // is met.
+    if (srcLaneY.value() != targetVectorX.value() / srcVectorX.value()) {
+      return failure();
+    }
+
+    int batchSize = targetVecShape[0];
+    int vectorXSize = srcVectorX.value();
+    int lowerOffset = srcVectorX.value();
     int upperOffset = 0;
-    // TODO: Need to set to_layout after exp2 and convert to FP8.
     int tileNumel =
         32 / result.getType().getElementType().getIntOrFloatBitWidth();
-    llvm::outs() << "TILE NUMEL:" << tileNumel << "\n";
     // TODO: Generalize the pattern.
-    // TODO: Optimize by doing insert_strided_slice and extract_strided_slice.
-    // TODO: Do single packed (4xf8 -> 1xi32 shuffle).
+    // Does single packed (4xf8 -> 1xi32 shuffle).
     auto unitType = VectorType::get({1}, rewriter.getF32Type());
+    auto canonType =
+        VectorType::get({tileNumel}, result.getType().getElementType());
     for (int batchIdx = 0; batchIdx < batchSize; batchIdx++) {
       for (int elemIdx = 0; elemIdx < vectorXSize; elemIdx += tileNumel) {
         Value lowerVal = rewriter.create<vector::ExtractStridedSliceOp>(
@@ -1149,12 +1185,8 @@ struct ShuffleToResolveLayoutConflicts final
         Value srcVal = rewriter.create<arith::SelectOp>(loc, isLowerHalf,
                                                         lowerVal, upperVal);
         // Pack Op
-        // Value lowerExtract = rewriter.create<vector::ExtractOp>(
-        //     loc, lowerVal, SmallVector<int64_t>{0, 0});
-        Value srcExtract = rewriter.create<vector::ExtractOp>(
-            loc, srcVal, SmallVector<int64_t>{0, 0});
-        // Value upperExtract = rewriter.create<vector::ExtractOp>(
-        // loc, upperVal, SmallVector<int64_t>{0, 0});
+        Value srcExtract =
+            rewriter.create<vector::ShapeCastOp>(loc, canonType, srcVal);
         Value packedVector =
             rewriter.create<vector::BitCastOp>(loc, unitType, srcExtract);
         Value packedVal = rewriter.create<vector::ExtractOp>(
@@ -1177,12 +1209,12 @@ struct ShuffleToResolveLayoutConflicts final
         // Set value for upperhalf of the vector. [4,1,8] [:,:,:4]
         init = rewriter.create<vector::InsertStridedSliceOp>(
             loc, lowerHalfUpdate, init,
-            SmallVector<int64_t>{batchIdx, 0, elemIdx + 0},
+            SmallVector<int64_t>{batchIdx, 0, elemIdx + upperOffset},
             SmallVector<int64_t>{1, 1, 1});
         // Set value for lowerhalf of the vector. [4,1,8] [:,:,4:]
         init = rewriter.create<vector::InsertStridedSliceOp>(
             loc, upperHalfUpdate, init,
-            SmallVector<int64_t>{batchIdx, 0, elemIdx + 4},
+            SmallVector<int64_t>{batchIdx, 0, elemIdx + lowerOffset},
             SmallVector<int64_t>{1, 1, 1});
       }
     }

@@ -467,15 +467,6 @@ static void propagateLayoutToElementwiseOp(
   const DistributionLayout *chosenOperandLayout =
       getAgreedLayout(operandLattices);
   if (chosenOperandLayout == nullptr) {
-    if (dyn_cast<arith::MulFOp>(op)) {
-      llvm::outs() << "no mul:" << *op << "\n";
-      llvm::outs() << "lhs layout:" << *operandLattices[0] << "\n";
-      // llvm::outs()<<*operandLattices[1]<<"\n";
-      // llvm::outs()<<*operandLattices[2]<<"\n";
-      // for (auto user : op->getUsers()) {
-      //   llvm::outs()<<"user:"<<*user<<"\n";
-      // }
-    }
     return;
   }
 
