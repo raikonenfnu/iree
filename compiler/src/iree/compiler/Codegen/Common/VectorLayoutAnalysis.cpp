@@ -339,15 +339,21 @@ static OpOperand &getOpOperand(Operation *op, unsigned operandLatticeIndex) {
 /// return nullptr.
 static const DistributionLayout *
 getAgreedLayout(ArrayRef<const DistributionLayout *> layouts) {
-  if (layouts.empty())
+  SmallVector<const DistributionLayout *> culledLayouts;
+  for (auto layout : layouts) {
+    if (layout->isUninitialized())
+      continue;
+    culledLayouts.push_back(layout);
+  }
+  if (culledLayouts.empty())
     return nullptr;
 
   // Check if all layouts are same.
-  if (!llvm::all_equal(llvm::make_pointee_range(layouts))) {
+  if (!llvm::all_equal(llvm::make_pointee_range(culledLayouts))) {
     return nullptr;
   }
 
-  return layouts[0];
+  return culledLayouts[0];
 }
 
 /// Hueristic to use to choose the best layout when enforcing the same layout
