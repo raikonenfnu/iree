@@ -846,11 +846,10 @@ struct DistributeLayoutConflictResolutions final
     int64_t srcVectorX = getLayoutSize(currentLayout, LayoutDimension::VECTORX);
     int64_t targetVectorX =
         getLayoutSize(targetLayout, LayoutDimension::VECTORX);
-    if (srcVectorX != targetVectorX) {
+    if (targetVectorX > srcVectorX) {
       return rewriter.notifyMatchFailure(
           resolutionOp,
-          "Currently non same vectorX generates numerical issues, "
-          "theoretically we should be able to fix in the future.");
+          "Cannot use this pattern if need data from other lanes.");
     }
 
     Type elementType =
@@ -1261,7 +1260,8 @@ void populateGPUDistributionLayoutAttrPatterns(Value laneId,
 // optimal for fp8 attention.
 void populateGPULayoutResolutionDistributionPatterns(
     RewritePatternSet &patterns) {
-  patterns.add<ShuffleToResolveLayoutConflicts>(patterns.getContext());
+  patterns.add<DistributeLayoutConflictResolutions,
+               ShuffleToResolveLayoutConflicts>(patterns.getContext());
 }
 
 }; // namespace mlir::iree_compiler
