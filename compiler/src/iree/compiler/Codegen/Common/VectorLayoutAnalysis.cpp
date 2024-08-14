@@ -201,6 +201,25 @@ DistributionLayout::doResolution(const VectorLayoutInterface &rhs) {
 
 ChangeResult DistributionLayout::resolveWithPossibleConflict(
     const VectorLayoutInterface &rhs, OpOperand &opOperand) {
+
+  OpBuilder builder(opOperand.getOwner());
+  // Handle cases where constantOp is used by different consumers with different
+  // layout. Which can lead to unhandled layout conflict during propagate
+  // resolve. E.G Case where constant is used for both MMA acc and init to
+  // scf.for for K2 tiling.
+  if (llvm::dyn_cast_or_null<arith::ConstantOp>(
+          opOperand.get().getDefiningOp()) &&
+      !vectorLayout && !opOperand.get().hasOneUse()) {
+    auto duplicateConstOp =
+        llvm::dyn_cast<arith::ConstantOp>(opOperand.get().getDefiningOp());
+    Operation *copiedConstOp = builder.create<arith::ConstantOp>(
+        duplicateConstOp.getLoc(), duplicateConstOp.getType(),
+        duplicateConstOp.getValue());
+    Value copiedConst = copiedConstOp->getResult(0);
+    opOperand.set(copiedConst);
+    return ChangeResult::NoChange;
+  }
+
   ResolutionResult result = doResolution(rhs);
 
   // If there is no conflict, simply return.
@@ -213,7 +232,6 @@ ChangeResult DistributionLayout::resolveWithPossibleConflict(
 
   // Resolve conflict by create an operation that takes the input the conflicted
   // value and returns the resolved value.
-  OpBuilder builder(opOperand.getOwner());
   Value input = opOperand.get();
   // Create a resolution operation. This conflict should be handeled later by
   // someone else, not this analysis.
