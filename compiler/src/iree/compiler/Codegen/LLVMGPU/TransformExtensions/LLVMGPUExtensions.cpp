@@ -1606,14 +1606,14 @@ createReadLayout(MLIRContext *ctx, const VectorExt::LayoutAttr &layout,
       if (vectorWidth % forceVectorWidth != 0) {
         return std::nullopt;
       }
-      div = vectorWidth / forceVectorWidth;
+      scale = vectorWidth / forceVectorWidth;
     }
 
     if (forceVectorWidth > vectorWidth) {
       if (forceVectorWidth % vectorWidth != 0) {
         return std::nullopt;
       }
-      scale = forceVectorWidth / vectorWidth;
+      div = forceVectorWidth / vectorWidth;
     }
 
     SmallVector<int64_t> newShapes;
@@ -1688,15 +1688,14 @@ transform_dialect::SetContractionLayoutAttributes::apply(
         return emitDefiniteFailure() << "cannot force vector width";
       }
 
-      auto forceLayout = [&rewriter,
-                          &contract](VectorExt::VectorLayoutInterface from,
+      auto forceLayout = [&](VectorExt::VectorLayoutInterface from,
                                      VectorExt::VectorLayoutInterface to,
                                      int64_t opIndex) -> LogicalResult {
         Value operand = contract.getOperand(opIndex);
         Operation *parentOp = operand.getDefiningOp();
         if (!parentOp || (parentOp->getNumResults() != 1))
           return failure();
-        parentOp->setAttr("__vector_layout_test_anchor_result_0", to);
+        parentOp->setAttr("__vector_layout_test_anchor_result_0", from);
         Value resolvedOperand =
             rewriter.create<VectorExt::LayoutConflictResolutionOp>(
                 contract.getLoc(), operand.getType(), operand, from, to);
@@ -1704,14 +1703,14 @@ transform_dialect::SetContractionLayoutAttributes::apply(
         return success();
       };
 
-      if (failed(forceLayout(aLayout, *aForcedLayout, 0))) {
+      if (failed(forceLayout(*aForcedLayout, aLayout, 0))) {
         return emitDefiniteFailure()
                << "cannot force layout on contract for lhs";
       }
 
-      if (failed(forceLayout(aLayout, *bForcedLayout, 0))) {
+      if (failed(forceLayout(*bForcedLayout, bLayout, 1))) {
         return emitDefiniteFailure()
-               << "cannot force layout on contract for lhs";
+               << "cannot force layout on contract for rhs";
       }
     }
   }
