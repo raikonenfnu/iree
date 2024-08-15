@@ -118,6 +118,29 @@ static Value truncateFloat(OpBuilder &builder, Location loc, AffineMap inputMap,
   return genericOp.getResult(0);
 }
 
+static Value castTensor(OpBuilder &builder, Location loc, Value value,
+                        SmallVector<OpFoldResult> shape, Type dstType) {
+  auto inputType = llvm::cast<ShapedType>(value.getType());
+  assert(inputType.getRank() == shape.size() &&
+         "Expect fed shape to have same rank as inputType.");
+  auto identityMap = AffineMap::getMultiDimIdentityMap(inputType.getRank(),
+                                                       builder.getContext());
+
+  Value empty = builder.create<tensor::EmptyOp>(loc, shape, dstType);
+  SmallVector<utils::IteratorType> iteratorTypes(identityMap.getNumDims(),
+                                                 utils::IteratorType::parallel);
+  auto genericOp = builder.create<linalg::GenericOp>(
+      loc, empty.getType(), value, empty,
+      SmallVector<AffineMap>{identityMap, identityMap}, iteratorTypes,
+      [&](OpBuilder &b, Location loc, ValueRange args) {
+        // Convert scale to the same datatype as input.
+        Value casted = convertScalarToDtype(b, loc, args[0], dstType,
+                                            /*isUnsignedCast=*/false);
+        b.create<linalg::YieldOp>(loc, casted);
+      });
+  return genericOp.getResult(0);
+}
+
 template <typename T>
 static Value reduce(OpBuilder &builder, Location loc, AffineMap inputMap,
                     AffineMap outputMap, Value input, Value output) {
@@ -300,9 +323,10 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
 
   // S = Q @ K
   // SMap = QMap @ KMap
-  Type sElementType = getOutput().getType().getElementType();
-  Value emptyS = b.create<tensor::EmptyOp>(loc, sSizes, sElementType);
-  Value sZero = b.create<arith::ConstantOp>(loc, b.getZeroAttr(sElementType));
+  auto f32Type = b.getF32Type();
+  // Type sElementType = getOutput().getType().getElementType();
+  Value emptyS = b.create<tensor::EmptyOp>(loc, sSizes, f32Type);
+  Value sZero = b.create<arith::ConstantOp>(loc, b.getZeroAttr(f32Type));
   Value s = b.create<linalg::FillOp>(loc, sZero, emptyS).getResult(0);
   s = computeMatmul(b, loc, getQueryMap(), getKeyMap(), sMap, query, key, s);
 
@@ -315,6 +339,8 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
                                         /*symbolCount=*/0, getContext());
     s = scaleValueInPlace(b, loc, sMap, scaleMap, s, scale);
   }
+  // Type softmaxType = getElementTypeOrSelf(getMax().getType());
+  // s = castTensor(b, loc, s, sSizes, softmaxType);
 
   // TODO: This decomposition should be in a seperate op called
   // "online softmax".
@@ -363,14 +389,15 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
       // use the full `fp8` range, then renormlize post Softmax@V matmul
       // to correct.
       pScale = b.create<arith::ConstantOp>(
-          loc, b.getFloatAttr(elementType, clAttentionSoftmaxMax / largestDbl));
+          loc, b.getFloatAttr(f32Type, clAttentionSoftmaxMax / largestDbl));
 
       // Compute the pre matmul scale to handle fp8 quantization:
       Value pScaleInv = b.create<arith::ConstantOp>(
-          loc, b.getFloatAttr(elementType, largestDbl / clAttentionSoftmaxMax));
+          loc, b.getFloatAttr(f32Type, largestDbl / clAttentionSoftmaxMax));
 
       AffineMap scaleMap = AffineMap::get(/*dimCount=*/maxMap.getNumInputs(),
                                           /*symbolCount=*/0, getContext());
+      p = castTensor(b, loc, p, sSizes, f32Type);
       p = scaleValueInPlace(b, loc, pMap, scaleMap, p, pScaleInv);
       norm = scaleValueInPlace(b, loc, normMap, scaleMap, norm, pScaleInv);
     }
@@ -380,6 +407,12 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
   }
 
   Value newAcc = scaleValueInPlace(b, loc, accMap, normMap, oldAcc, norm);
+  auto newAccType = llvm::dyn_cast<ShapedType>(newAcc.getType());
+  SmallVector<OpFoldResult> resSize =
+      llvm::map_to_vector(newAccType.getShape(), [&](int64_t x) {
+        return (OpFoldResult)b.getIndexAttr(x);
+      });
+  newAcc = castTensor(b, loc, newAcc, resSize, f32Type);
 
   // ---- Matmul 2 ----
 
@@ -391,6 +424,7 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
     AffineMap scaleMap = AffineMap::get(/*dimCount=*/maxMap.getNumInputs(),
                                         /*symbolCount=*/0, getContext());
     newAcc = scaleValueInPlace(b, loc, accMap, scaleMap, newAcc, pScale);
+    newAcc = castTensor(b, loc, newAcc, resSize, elementType);
   }
 
   return SmallVector<Value>{newAcc, newMax, newSum};

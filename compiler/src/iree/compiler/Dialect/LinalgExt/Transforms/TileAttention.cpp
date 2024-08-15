@@ -375,7 +375,7 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
   // TODO: Acc should not need a fill. The attention op should get a filled
   // input instead of an empty input.
 
-  // Type f32Type = rewriter.getF32Type();
+  Type f32Type = rewriter.getF32Type();
   Type outType = attnOp.getOutputType().getElementType();
   SmallVector<OpFoldResult> tileSizes =
       llvm::map_to_vector(sizes, [](Range x) { return x.size; });
@@ -436,13 +436,15 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
       loc, attnOp.getOutputType(), ValueRange{sum, x}, attnOp.getOutput(),
       compressedMaps, iteratorTypes,
       [&](OpBuilder &b, Location loc, ValueRange args) {
-        Value one = b.create<arith::ConstantOp>(
-            loc, b.getFloatAttr(args[0].getType(), 1.0));
-        Value reciprocal = b.create<arith::DivFOp>(loc, one, args[0]);
+        Value one =
+            b.create<arith::ConstantOp>(loc, b.getFloatAttr(f32Type, 1.0));
+        Value lhs = convertScalarToDtype(b, loc, args[0], f32Type,
+                                         /*isUnsignedCast=*/false);
+        Value reciprocal = b.create<arith::DivFOp>(loc, one, lhs);
         // Convert sum to the same datatype as x.
-        reciprocal = convertScalarToDtype(b, loc, reciprocal, args[1].getType(),
-                                          /*isUnsignedCast=*/false);
-        Value result = b.create<arith::MulFOp>(loc, reciprocal, args[1]);
+        Value rhs = convertScalarToDtype(b, loc, args[1], f32Type,
+                                         /*isUnsignedCast=*/false);
+        Value result = b.create<arith::MulFOp>(loc, reciprocal, rhs);
         // Convert result to the same datatype as out.
         result = convertScalarToDtype(b, loc, result, args[2].getType(),
                                       /*isUnsignedCast=*/false);
