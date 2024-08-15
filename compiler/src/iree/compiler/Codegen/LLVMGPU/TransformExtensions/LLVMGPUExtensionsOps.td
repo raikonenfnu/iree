@@ -792,7 +792,7 @@ def SetContractionLayoutAttributes :
 
   let arguments = (ins TransformHandleTypeInterface:$target,
                        TransformParamTypeInterface:$mma_type,
-                       DefaultValuedOptionalAttr<DenseI64ArrayAttr, "{}">:$read_layout_indices);
+                       DefaultValuedOptionalAttr<I64Attr, "0">:$force_vector_width);
   let assemblyFormat = "$target `,` $mma_type attr-dict `:` type($target) `,` type($mma_type)";
   let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
 }

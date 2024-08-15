@@ -1583,7 +1583,8 @@ transform_dialect::CreateMatmulMfmaTileSizesOp::apply(
 /// is too small, or if we are not transferring 4 elements at a time, it
 /// returns nullopt.
 static std::optional<VectorExt::LayoutAttr>
-createReadLayout(MLIRContext *ctx, const VectorExt::LayoutAttr &layout) {
+createReadLayout(MLIRContext *ctx, const VectorExt::LayoutAttr &layout,
+                 int64_t forceVectorWidth) {
   SmallVector<VectorExt::PerDimLayoutAttr> perDimLayouts;
   for (VectorExt::PerDimLayoutAttr perDimLayout : layout.getLayouts()) {
     DenseSet<VectorExt::LayoutDimension> labels;
@@ -1594,19 +1595,38 @@ createReadLayout(MLIRContext *ctx, const VectorExt::LayoutAttr &layout) {
       perDimLayouts.push_back(perDimLayout);
       continue;
     }
+
+    int64_t vectorWidth =
+        *perDimLayout.getShape(VectorExt::LayoutDimension::VECTORX);
+
+    int64_t scale = 1;
+    int64_t div = 1;
+
+    if (vectorWidth > forceVectorWidth) {
+      if (vectorWidth % forceVectorWidth != 0) {
+        return std::nullopt;
+      }
+      div = vectorWidth / forceVectorWidth;
+    }
+
+    if (forceVectorWidth > vectorWidth) {
+      if (forceVectorWidth % vectorWidth != 0) {
+        return std::nullopt;
+      }
+      scale = forceVectorWidth / vectorWidth;
+    }
+
     SmallVector<int64_t> newShapes;
     for (auto [label, shape] :
          llvm::zip_equal(perDimLayout.getLabels(), perDimLayout.getShapes())) {
       if (VectorExt::isBatchDimension(label.getValue())) {
-        if (shape == 1)
+        if (shape < div)
           return std::nullopt;
-        newShapes.push_back(shape / 2);
+        newShapes.push_back((shape * scale) / div);
         continue;
       }
       if (label.getValue() == VectorExt::LayoutDimension::VECTORX) {
-        if (shape != 4)
-          return std::nullopt;
-        newShapes.push_back(shape * 2);
+        newShapes.push_back(forceVectorWidth);
         continue;
       }
       newShapes.push_back(shape);
@@ -1652,35 +1672,46 @@ transform_dialect::SetContractionLayoutAttributes::apply(
     contract->setAttr("__vector_layout_test_anchor_operand_0", aLayout);
     contract->setAttr("__vector_layout_test_anchor_operand_1", bLayout);
     contract->setAttr("__vector_layout_test_anchor_operand_2", cLayout);
-    ArrayRef<int64_t> operandIndices = getReadLayoutIndices();
-    if (!operandIndices.empty()) {
-      SmallVector<Value> operands;
-      SmallVector<VectorExt::VectorLayoutInterface> layouts;
-      for (int64_t index : operandIndices) {
-        operands.push_back(index == 0 ? contract.getLhs() : contract.getRhs());
-        layouts.push_back(index == 0 ? aLayout : bLayout);
-      }
+    int64_t forceVectorWidth = getForceVectorWidth();
+    if (forceVectorWidth) {
+
       rewriter.setInsertionPoint(contract);
-      for (const auto &idxAndVals :
-           llvm::enumerate(llvm::zip_equal(operands, layouts))) {
-        int64_t i = idxAndVals.index();
-        auto [operand, layoutInterface] = idxAndVals.value();
-        VectorExt::LayoutAttr layout =
-            dyn_cast<VectorExt::LayoutAttr>(layoutInterface);
-        std::optional<VectorExt::LayoutAttr> maybeReadLayout =
-            createReadLayout(rewriter.getContext(), layout);
-        if (!maybeReadLayout)
-          continue;
-        VectorExt::LayoutAttr readLayout = maybeReadLayout.value();
+
+      VectorExt::LayoutAttr layoutA = cast<VectorExt::LayoutAttr>(aLayout);
+      VectorExt::LayoutAttr layoutB = cast<VectorExt::LayoutAttr>(bLayout);
+
+      std::optional<VectorExt::LayoutAttr> aForcedLayout =
+          createReadLayout(rewriter.getContext(), layoutA, forceVectorWidth);
+      std::optional<VectorExt::LayoutAttr> bForcedLayout =
+          createReadLayout(rewriter.getContext(), layoutB, forceVectorWidth);
+      if (!aForcedLayout || !bForcedLayout) {
+        return emitDefiniteFailure() << "cannot force vector width";
+      }
+
+      auto forceLayout = [&rewriter,
+                          &contract](VectorExt::VectorLayoutInterface from,
+                                     VectorExt::VectorLayoutInterface to,
+                                     int64_t opIndex) -> LogicalResult {
+        Value operand = contract.getOperand(opIndex);
         Operation *parentOp = operand.getDefiningOp();
         if (!parentOp || (parentOp->getNumResults() != 1))
-          continue;
-        parentOp->setAttr("__vector_layout_test_anchor_result_0", readLayout);
+          return failure();
+        parentOp->setAttr("__vector_layout_test_anchor_result_0", to);
         Value resolvedOperand =
             rewriter.create<VectorExt::LayoutConflictResolutionOp>(
-                contract.getLoc(), operand.getType(), operand, layout,
-                readLayout);
-        contract.setOperand(operandIndices[i], resolvedOperand);
+                contract.getLoc(), operand.getType(), operand, from, to);
+        contract.setOperand(opIndex, resolvedOperand);
+        return success();
+      };
+
+      if (failed(forceLayout(aLayout, *aForcedLayout, 0))) {
+        return emitDefiniteFailure()
+               << "cannot force layout on contract for lhs";
+      }
+
+      if (failed(forceLayout(aLayout, *bForcedLayout, 0))) {
+        return emitDefiniteFailure()
+               << "cannot force layout on contract for lhs";
       }
     }
   }
