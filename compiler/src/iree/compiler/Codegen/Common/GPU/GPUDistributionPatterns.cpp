@@ -833,25 +833,6 @@ struct DistributeLayoutConflictResolutions final
       return failure();
     }
 
-    auto getLayoutSize = [&](LayoutAttr layoutAttr, LayoutDimension layoutDim) {
-      int64_t layoutSize = 1;
-      for (PerDimLayoutAttr dimLayout : layoutAttr.getLayouts()) {
-        if (dimLayout.contains(layoutDim)) {
-          layoutSize = dimLayout.getShape(layoutDim).value();
-          break;
-        }
-      }
-      return layoutSize;
-    };
-    int64_t srcVectorX = getLayoutSize(currentLayout, LayoutDimension::VECTORX);
-    int64_t targetVectorX =
-        getLayoutSize(targetLayout, LayoutDimension::VECTORX);
-    if (targetVectorX > srcVectorX) {
-      return rewriter.notifyMatchFailure(
-          resolutionOp,
-          "Cannot use this pattern if need data from other lanes.");
-    }
-
     Type elementType =
         llvm::cast<VectorType>(result.getType()).getElementType();
     Value newVector =
@@ -902,23 +883,8 @@ struct DistributeLayoutConflictToSharedMemory final
                              std::multiplies<int64_t>());
     };
 
-    auto getLayoutSize = [&](LayoutAttr layoutAttr, LayoutDimension layoutDim) {
-      int64_t layoutSize = 1;
-      for (PerDimLayoutAttr dimLayout : layoutAttr.getLayouts()) {
-        if (dimLayout.contains(layoutDim)) {
-          layoutSize = dimLayout.getShape(layoutDim).value();
-          break;
-        }
-      }
-      return layoutSize;
-    };
-    int64_t srcVectorX = getLayoutSize(currentLayout, LayoutDimension::VECTORX);
-    int64_t targetVectorX =
-        getLayoutSize(targetLayout, LayoutDimension::VECTORX);
-
     if (numElements(currentVecShape) == numElements(targetVecShape) &&
-        !currentLayout.hasLaneConflictWith(targetLayout) &&
-        srcVectorX == targetVectorX) {
+        !currentLayout.hasLaneConflictWith(targetLayout)) {
       // If the conditions suffice, we can skip the trip to shared memory
       // and just use the default/more efficient layout conflict resolution
       // distribution.
