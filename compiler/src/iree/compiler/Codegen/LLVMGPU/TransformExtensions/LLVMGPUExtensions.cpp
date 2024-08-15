@@ -730,7 +730,6 @@ DiagnosedSilenceableFailure transform_dialect::PromoteOperandsOp::applyToOne(
     transform::TransformState &state) {
   Location loc = target->getLoc();
   OpBuilder::InsertionGuard g(rewriter);
-  rewriter.setInsertionPoint(target);
   SmallVector<int64_t> indices = llvm::to_vector(getIndices());
   int64_t numOperands = target->getNumOperands();
 
@@ -738,6 +737,7 @@ DiagnosedSilenceableFailure transform_dialect::PromoteOperandsOp::applyToOne(
   bufferization::BufferizationOptions options;
   for (int64_t index : indices) {
     if ((index >= 0) && (index < numOperands)) {
+      rewriter.setInsertionPointAfter(target->getOperand(index).getDefiningOp());
       FailureOr<Value> ret = bufferization::allocateTensorForShapedValue(
           rewriter, loc, target->getOperand(index), options);
       if (failed(ret)) {
