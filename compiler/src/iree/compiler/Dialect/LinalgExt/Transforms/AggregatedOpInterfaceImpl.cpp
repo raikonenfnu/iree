@@ -108,6 +108,29 @@ static Value truncateFloat(OpBuilder &builder, Location loc, AffineMap inputMap,
   return genericOp.getResult(0);
 }
 
+static Value castTensor(OpBuilder &builder, Location loc, Value value,
+                        SmallVector<OpFoldResult> shape, Type dstType) {
+  auto inputType = llvm::cast<ShapedType>(value.getType());
+  assert(inputType.getRank() == shape.size() &&
+         "Expect fed shape to have same rank as inputType.");
+  auto identityMap = AffineMap::getMultiDimIdentityMap(inputType.getRank(),
+                                                       builder.getContext());
+
+  Value empty = builder.create<tensor::EmptyOp>(loc, shape, dstType);
+  SmallVector<utils::IteratorType> iteratorTypes(identityMap.getNumDims(),
+                                                 utils::IteratorType::parallel);
+  auto genericOp = builder.create<linalg::GenericOp>(
+      loc, empty.getType(), value, empty,
+      SmallVector<AffineMap>{identityMap, identityMap}, iteratorTypes,
+      [&](OpBuilder &b, Location loc, ValueRange args) {
+        // Convert scale to the same datatype as input.
+        Value casted = convertScalarToDtype(b, loc, args[0], dstType,
+                                            /*isUnsignedCast=*/false);
+        b.create<linalg::YieldOp>(loc, casted);
+      });
+  return genericOp.getResult(0);
+}
+
 template <typename T>
 static Value reduce(OpBuilder &builder, Location loc, AffineMap inputMap,
                     AffineMap outputMap, Value input, Value output) {
@@ -305,6 +328,8 @@ OnlineAttentionOp::decomposeOperation(OpBuilder &b) {
                                         /*symbolCount=*/0, getContext());
     s = elementwiseValueInPlace<arith::MulFOp>(b, loc, sMap, scaleMap, s, scale);
   }
+  Type softmaxType = getElementTypeOrSelf(getMax().getType());
+  s = castTensor(b, loc, s, sSizes, softmaxType);
 
   // TODO: This decomposition should be in a seperate op called
   // "online softmax".

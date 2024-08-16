@@ -376,6 +376,7 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
   // input instead of an empty input.
 
   Type f32Type = rewriter.getF32Type();
+  Type outType = attnOp.getOutputType().getElementType();
   SmallVector<OpFoldResult> tileSizes =
       llvm::map_to_vector(sizes, [](Range x) { return x.size; });
   SmallVector<OpFoldResult> accSize =
@@ -391,12 +392,12 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
           .result();
 
   Value rowRedEmpty =
-      rewriter.create<tensor::EmptyOp>(loc, rowRedSize, f32Type);
+      rewriter.create<tensor::EmptyOp>(loc, rowRedSize, outType);
 
   Value maxInit =
-      arith::getIdentityValue(arith::AtomicRMWKind::maximumf, f32Type, rewriter,
+      arith::getIdentityValue(arith::AtomicRMWKind::maximumf, outType, rewriter,
                               loc, /*useOnlyFiniteValue=*/true);
-  Value sumInit = arith::getIdentityValue(arith::AtomicRMWKind::addf, f32Type,
+  Value sumInit = arith::getIdentityValue(arith::AtomicRMWKind::addf, outType,
                                           rewriter, loc);
 
   Value maxFill =
