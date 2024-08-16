@@ -1226,7 +1226,7 @@ void populateGPUDistributionLayoutAttrPatterns(Value laneId,
 // optimal for fp8 attention.
 void populateGPULayoutResolutionDistributionPatterns(
     RewritePatternSet &patterns) {
-  patterns.add<DistributeLayoutConflictResolutions>(patterns.getContext());
+  patterns.add<ShuffleToResolveLayoutConflicts>(patterns.getContext());
 }
 
 }; // namespace mlir::iree_compiler
