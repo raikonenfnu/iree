@@ -64,8 +64,50 @@ struct ReplaceGPUBarrierWithLDSBarrier
   }
 };
 
+// Transform gpu.barrier -> amdgpu.lds_barrier
+// IREE code generation currently only ever needs to synchronize for
+// LDS operations. This conversion is to make the barrier operations
+// LDS specific because the gpu.barrier contains global memory
+// operations as well.
+struct FuseMultiplyAddOps : public OpRewritePattern<arith::AddFOp> {
+  using OpRewritePattern<arith::AddFOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::AddFOp op,
+                                PatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    SmallVector<OpOperand *> mulCandidates;
+    for (OpOperand &opOperand : op->getOpOperands()) {
+      auto mulCandidateOp = llvm::dyn_cast_or_null<arith::MulFOp>(
+          opOperand.get().getDefiningOp());
+      if (!mulCandidateOp)
+        continue;
+      if (!mulCandidateOp->hasOneUse())
+        continue;
+      mulCandidates.push_back(&opOperand);
+    }
+    if (mulCandidates.empty()) {
+      return failure();
+    }
+    // Just select the first one found for now.
+    // mul_0 = lhs * rhs
+    // add = mul_0 + cst
+    // fma (lhs, rhs, cst)
+    OpOperand *mulOpOperand = mulCandidates.front();
+    auto mulOp = llvm::cast<arith::MulFOp>(mulOpOperand->get().getDefiningOp());
+    Value lhs = mulOp->getOperand(0);
+    Value rhs = mulOp->getOperand(1);
+    auto acc = mulOpOperand->getOperandNumber() == 0 ? op->getOperand(1)
+                                                     : op->getOperand(0);
+    Value FMAOp = rewriter.create<vector::FMAOp>(op.getLoc(), lhs, rhs, acc);
+    llvm::outs() << "FMA:" << FMAOp << "\n";
+    rewriter.replaceOp(op, FMAOp);
+    return success();
+  }
+};
+
 static void populateConvertGPUToAMDGPUPatterns(RewritePatternSet &patterns) {
   patterns.add<ReplaceGPUBarrierWithLDSBarrier>(patterns.getContext());
+  patterns.add<FuseMultiplyAddOps>(patterns.getContext());
 }
 
 } // namespace
