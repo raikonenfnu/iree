@@ -28,7 +28,9 @@
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
@@ -64,8 +66,53 @@ struct ReplaceGPUBarrierWithLDSBarrier
   }
 };
 
+struct LowerToFP16MathOps : public OpRewritePattern<math::Exp2Op> {
+  using OpRewritePattern<math::Exp2Op>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(math::Exp2Op op,
+                                PatternRewriter &rewriter) const override {
+    OpBuilder::InsertionGuard guard(rewriter);
+    SmallVector<Value> operands = op->getOperands();
+    for (Value operand : operands) {
+      if (operand.getType() != rewriter.getF16Type()) {
+        return failure();
+      }
+    }
+
+    Type resultType = operands.front().getType();
+    Type funcType = getFunctionType(resultType, operands);
+    StringRef funcName = StringRef("__ocml_exp2_f16");
+
+    LLVM::LLVMFuncOp funcOp = appendOrGetFuncOp(funcName, funcType, op);
+    auto callOp = rewriter.create<LLVM::CallOp>(op->getLoc(), funcOp, operands);
+
+    rewriter.replaceOp(op, {callOp.getResult()});
+    return success();
+  }
+
+private:
+  Type getFunctionType(Type resultType, ValueRange operands) const {
+    SmallVector<Type> operandTypes(operands.getTypes());
+    return LLVM::LLVMFunctionType::get(resultType, operandTypes);
+  }
+
+  LLVM::LLVMFuncOp appendOrGetFuncOp(StringRef funcName, Type funcType,
+                                     Operation *op) const {
+    using LLVM::LLVMFuncOp;
+
+    auto funcAttr = StringAttr::get(op->getContext(), funcName);
+    Operation *funcOp = SymbolTable::lookupNearestSymbolFrom(op, funcAttr);
+    if (funcOp)
+      return cast<LLVMFuncOp>(*funcOp);
+
+    mlir::OpBuilder b(op->getParentOfType<FunctionOpInterface>());
+    return b.create<LLVM::LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  }
+};
+
 static void populateConvertGPUToAMDGPUPatterns(RewritePatternSet &patterns) {
   patterns.add<ReplaceGPUBarrierWithLDSBarrier>(patterns.getContext());
+  patterns.add<LowerToFP16MathOps>(patterns.getContext());
 }
 
 } // namespace

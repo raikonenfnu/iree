@@ -375,7 +375,7 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
   // TODO: Acc should not need a fill. The attention op should get a filled
   // input instead of an empty input.
 
-  // Type f32Type = rewriter.getF32Type();
+  Type f32Type = rewriter.getF32Type();
   Type outType = attnOp.getOutputType().getElementType();
   SmallVector<OpFoldResult> tileSizes =
       llvm::map_to_vector(sizes, [](Range x) { return x.size; });
@@ -384,9 +384,9 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
   SmallVector<OpFoldResult> rowRedSize =
       applyPermutationMap<OpFoldResult>(maxMap, tileSizes);
 
-  Value accEmpty = rewriter.create<tensor::EmptyOp>(loc, accSize, outType);
+  Value accEmpty = rewriter.create<tensor::EmptyOp>(loc, accSize, f32Type);
   Value zeroAcc =
-      rewriter.create<arith::ConstantOp>(loc, rewriter.getZeroAttr(outType));
+      rewriter.create<arith::ConstantOp>(loc, rewriter.getZeroAttr(f32Type));
   Value accFill =
       rewriter.create<linalg::FillOp>(loc, ValueRange{zeroAcc}, accEmpty)
           .result();
