@@ -1030,7 +1030,17 @@ struct DistributeTrivialLayoutConversions final
                                          "Non-trivial layout conversion.");
     }
 
-    rewriter.replaceOp(toLayoutOp, toLayoutOp.getOperand());
+    Value srcOperand = toLayoutOp.getOperand();
+    if (llvm::dyn_cast_or_null<arith::ConstantOp>(srcOperand.getDefiningOp()) &&
+        !srcOperand.hasOneUse()) {
+      auto constOp = llvm::cast<arith::ConstantOp>(srcOperand.getDefiningOp());
+      srcOperand = rewriter.create<arith::ConstantOp>(
+          constOp.getLoc(), constOp.getType(), constOp.getValue());
+      llvm::outs() << "NEW:" << srcOperand << "\n";
+    }
+
+    if (srcOperand.getDefiningOp())
+      rewriter.replaceOp(toLayoutOp, srcOperand);
     return success();
   }
 };
