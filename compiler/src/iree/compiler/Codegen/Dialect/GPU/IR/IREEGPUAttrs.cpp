@@ -1031,9 +1031,6 @@ MMAScheduleAttr::getContractionLayout(VectorContractOpInfo &opInfo,
     llvm::errs() << "Getting mma layouts for:\n" << contractOp << "\n";
     llvm::errs() << "For schedule: " << *this << "\n";
   });
-  if (opInfo.getKDims().size() != 1) {
-    return contractOp->emitError("Unimplemented: > 1 k dims");
-  }
 
   int64_t rank = contractOp.getIteratorTypesArray().size();
   auto mmaAttr = llvm::cast<MMAAttr>(getIntrinsic());
@@ -1129,6 +1126,24 @@ MMAScheduleAttr::getContractionLayout(VectorContractOpInfo &opInfo,
   SmallVector<int64_t> subgroupMStrides(subgroupMBasis.size());
   SmallVector<int64_t> subgroupNStrides(subgroupNBasis.size());
 
+  // Set all but innermost K-dim to be batch, and only use innermost K-dim for
+  // intrinsics.
+  SmallVector<int64_t, 2> batchKSizes;
+  for (auto dim : opInfo.getKDims()) {
+    int64_t batchesUsed;
+    if (dim == opInfo.getKDims().back()) {
+      batchesUsed = bounds[dim] / intrinsicK;
+    } else {
+      // TODO: Implement multi K-dims fillOperandBatchOffsets support in
+      // contraction distribution. Currently this works because non-innermost
+      // K-dim tile is set to 1.
+      assert(bounds[dim] == 1 &&
+             "NYI: Non unit-dim K batch offset in contraction distribution.");
+      batchesUsed = bounds[dim];
+    }
+    batchKSizes.push_back(batchesUsed);
+  }
+
   auto mDimVec = opInfo.getMDims();
   llvm::SmallDenseSet<int64_t> mDims(mDimVec.begin(), mDimVec.end());
   auto nDimVec = opInfo.getNDims();
@@ -1201,7 +1216,11 @@ MMAScheduleAttr::getContractionLayout(VectorContractOpInfo &opInfo,
     aSubgroupSizes[dim] = subgroupMBasis[i];
     aSubgroupStrides[dim] = subgroupMStrides[i];
   }
-  aBatchSizes[afk] = bounds[opInfo.getKDims().back()] / intrinsicK;
+
+  SmallVector<int64_t> aKDims = opInfo.lhsKDims;
+  for (auto [i, dim] : llvm::enumerate(aKDims)) {
+    aBatchSizes[dim] = batchKSizes[i];
+  }
 
   auto aLayout = createNestedLayout(context, aRank, afm, afk,
                                     /*subgroupCount=*/aSubgroupSizes,
@@ -1221,7 +1240,11 @@ MMAScheduleAttr::getContractionLayout(VectorContractOpInfo &opInfo,
     bSubgroupSizes[dim] = subgroupNBasis[i];
     bSubgroupStrides[dim] = subgroupNStrides[i];
   }
-  bBatchSizes[bfk] = bounds[opInfo.getKDims().back()] / intrinsicK;
+
+  SmallVector<int64_t> bKDims = opInfo.rhsKDims;
+  for (auto [i, dim] : llvm::enumerate(bKDims)) {
+    bBatchSizes[dim] = batchKSizes[i];
+  }
 
   auto bLayout = createNestedLayout(context, bRank, bfk, bfn,
                                     /*subgroupCount=*/bSubgroupSizes,
