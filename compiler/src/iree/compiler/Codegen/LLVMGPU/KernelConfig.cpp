@@ -732,7 +732,7 @@ setAttentionVectorDistributionConfig(IREE::GPU::TargetAttr target,
   std::optional<GPUMMASchedule> schedule = deduceAttentionSchedule(
       qkMatmul, pvMatmul, intrinsics, pvMatmulSeeds, maxSharedMemoryBytes,
       targetSubgroupSize, transposedQ, transposedK, transposedV);
-  if (!schedule) {
+  if (!schedule.has_value()) {
     // Then try again by allowing upcasting accumulator.
     schedule = deduceAttentionSchedule(
         qkMatmul, pvMatmul, intrinsics, pvMatmulSeeds, maxSharedMemoryBytes,
