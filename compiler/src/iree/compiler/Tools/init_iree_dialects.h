@@ -34,6 +34,10 @@
 #include "iree/compiler/Modules/IO/Parameters/IR/IOParametersDialect.h"
 #include "iree/compiler/Preprocessing/TransformExtensions/PreprocessingExtensions.h"
 
+#ifdef IREE_BUILD_EXPERIMENTAL_TRITONIZER
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#endif
+
 namespace mlir::iree_compiler {
 
 // Add all the IREE dialects to the provided registry.
@@ -54,6 +58,9 @@ inline void registerIreeDialects(DialectRegistry &registry) {
                   IREE::VM::VMDialect,
                   IREE::VMVX::VMVXDialect,
                   IREE::VectorExt::IREEVectorExtDialect>();
+#ifdef IREE_BUILD_EXPERIMENTAL_TRITONIZER
+                  registry.insert<triton::TritonDialect>();
+#endif
   // clang-format on
 
   // External models.

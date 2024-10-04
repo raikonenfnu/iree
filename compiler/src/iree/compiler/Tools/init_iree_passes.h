@@ -34,6 +34,10 @@
 #include "iree/compiler/Pipelines/Pipelines.h"
 #include "iree/compiler/Preprocessing/Passes.h"
 
+#ifdef IREE_BUILD_EXPERIMENTAL_TRITONIZER
+#include "experimental/tritonizer/TritonExt/Transforms/Passes.h"
+#endif
+
 #ifdef IREE_HAVE_C_OUTPUT_FORMAT
 // TODO: Remove these once rolled up into explicit registration.
 #include "iree/compiler/Dialect/VM/Conversion/VMToEmitC/ConvertVMToEmitC.h"
@@ -67,6 +71,10 @@ inline void registerAllIreePasses() {
   IREE::VM::registerVMAnalysisTestPasses();
   IREE::VMVX::registerVMVXPasses();
   registerIREEVMTransformPassPipeline();
+
+#ifdef IREE_BUILD_EXPERIMENTAL_TRITONIZER
+  registerCodegenTritonPasses();
+#endif
 
   // We have some dangling passes that don't use explicit
   // registration and that we need to force instantiation

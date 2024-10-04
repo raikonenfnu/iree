@@ -34,6 +34,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 
 #define DEBUG_TYPE "iree-triton-lower-executable-target"
 
@@ -71,6 +72,7 @@ class TritonLowerExecutableTargetPass final
                 scf::SCFDialect,
                 tensor::TensorDialect,
                 transform::TransformDialect,
+                triton::TritonDialect,
                 vector::VectorDialect>();
     // clang-format on
   }

@@ -65,8 +65,19 @@ iree_cc_library(
     iree::compiler::Pipelines
     iree::compiler::Preprocessing::Passes
     iree::compiler::Preprocessing::TransformExtensions::PreprocessingExtensions
+    iree::experimental::tritonizer::TritonExt::Transforms::TRITON
   PUBLIC
 )
+
+if(${IREE_BUILD_EXPERIMENTAL_TRITONIZER})
+# TODO: Move add_dep of iree::experimental::tritonizer::TritonExt::Transforms::TRITON 
+#       to protected by this flag. Tried it but for some reason the include dirs set
+#       in TritonExt::Transforms::TRITON is not being included properly with this method.
+  target_compile_definitions(iree_compiler_Tools_init_iree_passes_and_dialects 
+  INTERFACE
+    "IREE_BUILD_EXPERIMENTAL_TRITONIZER"
+  )
+endif()
 
 iree_cc_library(
   NAME

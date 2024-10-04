@@ -329,8 +329,7 @@ static void addLowerAndOptimizeAddressComputationPasses(
       .addPass(createLowerAffinePass);
 }
 
-static void addLowerToTritonPasses(OpPassManager &modulePassManager,
-                                   bool forROCDL) {
+static void addLowerToTritonPasses(OpPassManager &modulePassManager) {
   modulePassManager.addPass(
       createConvertHALDescriptorTypeToGPUAddressSpacePass());
   modulePassManager.addPass(createCanonicalizerPass());
@@ -440,8 +439,7 @@ void buildTritonCodegenConfigurationPassPipeline(
       variantPassManager.nest<ModuleOp>());
 }
 
-void buildTritonCodegenPassPipeline(OpPassManager &variantPassManager,
-                                    bool useROCM) {
+void buildTritonCodegenPassPipeline(OpPassManager &variantPassManager) {
   {
     OpPassManager &modulePassManager = variantPassManager.nest<ModuleOp>();
     FunctionLikeNest(modulePassManager)
@@ -455,7 +453,7 @@ void buildTritonCodegenPassPipeline(OpPassManager &variantPassManager,
   //   - All Linalg/Loops/GPU/Affine/Standard ops are converted away.
   //   - The module contains the final llvm.module ready to be serialized.
   //===--------------------------------------------------------------------===//
-  addLowerToTritonPasses(variantPassManager.nest<ModuleOp>(), useROCM);
+  addLowerToTritonPasses(variantPassManager.nest<ModuleOp>());
 }
 
 //===---------------------------------------------------------------------===//
