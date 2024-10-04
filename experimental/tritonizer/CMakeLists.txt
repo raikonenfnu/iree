@@ -9,5 +9,5 @@
 ################################################################################
 
 iree_add_all_subdirs()
-
+set(_TRITONIZER_ROOT_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 ### BAZEL_TO_CMAKE_PRESERVES_ALL_CONTENT_BELOW_THIS_LINE ###
