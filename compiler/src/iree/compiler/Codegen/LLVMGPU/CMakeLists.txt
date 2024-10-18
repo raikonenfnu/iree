@@ -90,6 +90,7 @@ iree_cc_library(
     "LLVMGPUTileAndDistribute.cpp"
     "LLVMGPUVectorDistribute.cpp"
     "LLVMGPUVectorLowering.cpp"
+    "LLVMGPUVectorizeSpecialOps.cpp"
     "LLVMGPUVectorToGPU.cpp"
     "Passes.cpp"
     "ROCDLAnnotateKernelForTranslation.cpp"
