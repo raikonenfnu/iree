@@ -294,7 +294,8 @@ setAttentionMatmulAnchor(IREE::GPU::MMAScheduleAttr schedule,
     pvSchedule = transposeSchedule(rewriter, pvSchedule);
   }
 
-  if (failed(setContractionAnchor(qkSchedule, rewriter, qkMatmul))) {
+  if (failed(
+          setContractionAnchor(qkSchedule, rewriter, qkMatmul, true, false))) {
     return failure();
   }
 
