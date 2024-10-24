@@ -318,19 +318,19 @@ void DistributionLayout::onUpdate(DataFlowSolver *solver) const {
   if (enforcement) {
     // Make enforcement run on the parent.
     if (Operation *definingOp = value.getDefiningOp()) {
-      solver->enqueue({solver->getProgramPointAfter(definingOp), enforcement});
+      solver->enqueue({solver->getProgramPointBefore(definingOp), enforcement});
     } else {
       // TODO: This is not always correct. Ideally, we should enqueue all
       // predecessors of these block arguements.
       solver->enqueue(
-          {solver->getProgramPointAfter(value.getParentBlock()->getParentOp()),
+          {solver->getProgramPointBefore(value.getParentBlock()->getParentOp()),
            enforcement});
     }
 
     // Enforce users of this value also, as some other operands may need to
     // be updated.
     for (Operation *user : value.getUsers()) {
-      solver->enqueue({solver->getProgramPointAfter(user), enforcement});
+      solver->enqueue({solver->getProgramPointBefore(user), enforcement});
     }
   }
 }
@@ -852,10 +852,10 @@ LogicalResult PropagateLayout::initialize(Operation *root) {
 }
 
 LogicalResult PropagateLayout::visit(ProgramPoint *point) {
-  if (point->isBlockStart())
+  if (point->isBlockEnd())
     return success();
 
-  if (auto op = point->getPrevOp()) {
+  if (auto op = point->getNextOp()) {
     visitOperation(op);
     return success();
   }
@@ -978,7 +978,7 @@ LogicalResult EnforceLayout::visit(ProgramPoint *point) {
   if (point->isBlockStart())
     return success();
 
-  if (auto op = point->getPrevOp()) {
+  if (auto op = point->getNextOp()) {
     visitOperation(op);
     return success();
   }

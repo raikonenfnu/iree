@@ -78,23 +78,27 @@ LogicalResult setTransferReadAnchor(ArrayRef<int64_t> workgroupSize,
       getSlice(transfer, backwardOptions, forwardOptions);
 
   if (llvm::any_of(slice, llvm::IsaPred<vector::ContractionOp>)) {
+    llvm::outs()<<"CONTRACTION:"<<*transfer<<"\n";
     return success();
   }
 
   // Shared memory loads are expected to take the layout of the contraction.
   auto sourceMemRefType = dyn_cast<MemRefType>(transfer.getSource().getType());
   if (!sourceMemRefType || hasSharedMemoryAddressSpace(sourceMemRefType)) {
+    llvm::outs()<<"MEMREF:"<<*transfer<<"\n";
     return success();
   }
 
   // Take on layout of broadcast.
   if (transfer->hasOneUse() &&
       dyn_cast<vector::BroadcastOp>(*transfer->getUsers().begin())) {
+    llvm::outs()<<"TRANSFER:"<<*transfer<<"\n";
     return success();
   }
 
   // TODO: Support masking.
   if (transfer.getMask()) {
+    llvm::outs()<<"MASK!\n";
     transfer->emitOpError(
         "Anchoring on transfer_read with masks is not yet implemented.");
     return failure();
@@ -103,6 +107,7 @@ LogicalResult setTransferReadAnchor(ArrayRef<int64_t> workgroupSize,
   int64_t bitWidth = IREE::Util::getTypeBitWidth(
       getElementTypeOrSelf(transfer.getVectorType()));
   if (!llvm::isPowerOf2_64(bitWidth) || bitWidth > 128) {
+    llvm::outs()<<"NO POWER OF 2!\n";
     transfer->emitOpError(
         "Anchoring on transfer_read with element type of bitwidth " +
         std::to_string(bitWidth) + " is not yet implemented");
@@ -113,6 +118,7 @@ LogicalResult setTransferReadAnchor(ArrayRef<int64_t> workgroupSize,
       ShapedType::getNumElements(transfer.getVectorType().getShape());
   int64_t flatNumThreads = ShapedType::getNumElements(workgroupSize);
   if (flatNumElements % flatNumThreads != 0) {
+    llvm::outs()<<"NON DIVISIBLE!\n";
     transfer->emitOpError()
         << "Anchoring on transfer_read with unsupported number of elements "
            "(not divisible by workgroup size)"
@@ -124,6 +130,7 @@ LogicalResult setTransferReadAnchor(ArrayRef<int64_t> workgroupSize,
 
   AffineMap transferMap = transfer.getPermutationMap();
   if (transferMap.getNumDims() == 0) {
+    llvm::outs()<<"NUM DIM 0!\n";
     transfer->emitOpError("Anchoring on transfer_read with zero-rank "
                           "permutation map is not supported.");
     return failure();
@@ -287,11 +294,13 @@ struct LLVMGPUConfigureVectorLayoutsPass final
     });
 
     IRRewriter rewriter(func);
-
+    llvm::outs()<<"NUM of transfer_read:"<<reads.size()<<"\n";
     for (vector::TransferReadOp read : reads) {
+      // llvm::outs()<<"READ:"<<read<<"\n";
       if (failed(setTransferReadAnchor(workgroupSize, rewriter, read))) {
         return signalPassFailure();
       }
+      // llvm::outs()<<"READ After:"<<read<<"\n";
     }
   }
 };
