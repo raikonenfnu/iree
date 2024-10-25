@@ -229,6 +229,9 @@ static OpaqueMmaLayout getOpaqueMFMALayout(MLIRContext *context,
   case MMAIntrinsic::MFMA_F32_32x32x8_F16: {
     return OpaqueMmaLayout{32, 32, 8, f16, f16, f32};
   }
+  case MMAIntrinsic::MFMA_F32_16x16x32_F16: {
+    return OpaqueMmaLayout{16, 16, 32, f16, f16, f32};
+  }
   case MMAIntrinsic::MFMA_F32_16x16x32_F8E4M3FNUZ: {
     return OpaqueMmaLayout{16, 16, 32, f8E4M3FNUZ, f8E4M3FNUZ, f32};
   }
@@ -297,7 +300,8 @@ static ConcreteMmaLayout getConcreteMFMALayout(MLIRContext *context,
     return ConcreteMmaLayout{opaqueLayout, aMLayout, aKLayout, bKLayout,
                              bNLayout,     cMLayout, cNLayout};
   }
-  case MMAIntrinsic::MFMA_F32_16x16x16_F16: {
+  case MMAIntrinsic::MFMA_F32_16x16x16_F16:
+  case MMAIntrinsic::MFMA_F32_16x16x32_F16: {
     // #outer = #iree_vector_ext.per_dim_layout<[LANEX], [16]>
     // #inner = #iree_vector_ext.per_dim_layout<[LANEY, VECTORX], [4, 4]>
     // #layout_a = #iree_vector_ext.layout<#outer, #inner>
@@ -477,6 +481,7 @@ MMAAttr::getABCVectorTypes() const {
   }
   case MMAIntrinsic::MFMA_F32_16x16x32_F8E4M3FNUZ:
   case MMAIntrinsic::MFMA_F32_16x16x32_F8E5M2FNUZ:
+  case MMAIntrinsic::MFMA_F32_16x16x32_F16:
   case MMAIntrinsic::MFMA_I32_16x16x32_I8: {
     auto aType = VectorType::get({8}, getAType());
     auto bType = VectorType::get({8}, getBType());
@@ -519,6 +524,7 @@ int64_t MMAAttr::getBlockSize() const {
   switch (getIntrinsic().getValue()) {
   case MMAIntrinsic::MFMA_F32_16x16x4_F32:
   case MMAIntrinsic::MFMA_F32_16x16x16_F16:
+  case MMAIntrinsic::MFMA_F32_16x16x32_F16:
   case MMAIntrinsic::MFMA_I32_16x16x16_I8:
   case MMAIntrinsic::MFMA_F32_32x32x8_F16:
   case MMAIntrinsic::MFMA_I32_32x32x8_I8:
@@ -540,6 +546,7 @@ static int64_t getIntrinsicSubgroupSize(MMAIntrinsic intrinsic) {
   switch (intrinsic) {
   case MMAIntrinsic::MFMA_F32_16x16x4_F32:
   case MMAIntrinsic::MFMA_F32_16x16x16_F16:
+  case MMAIntrinsic::MFMA_F32_16x16x32_F16:
   case MMAIntrinsic::MFMA_I32_16x16x16_I8:
   case MMAIntrinsic::MFMA_F32_32x32x8_F16:
   case MMAIntrinsic::MFMA_I32_32x32x8_I8:
@@ -591,6 +598,18 @@ MMASingleSubgroupLayout getSingleSubgroupLayout(MMAIntrinsic intrinsic,
     case MMAFragment::Rhs:
       return {/*outer=*/{1, 1}, /*thread=*/{4, 16}, /*tstrides=*/{16, 1},
               /*element=*/{4, 1}};
+    case MMAFragment::Acc:
+      return {/*outer=*/{1, 1}, /*thread=*/{4, 16}, /*tstrides=*/{16, 1},
+              /*element=*/{4, 1}};
+    }
+  case MMAIntrinsic::MFMA_F32_16x16x32_F16:
+    switch (fragment) {
+    case MMAFragment::Lhs:
+      return {/*outer=*/{1, 1}, /*thread=*/{16, 4}, /*tstrides=*/{1, 16},
+              /*element=*/{1, 8}};
+    case MMAFragment::Rhs:
+      return {/*outer=*/{1, 1}, /*thread=*/{4, 16}, /*tstrides=*/{16, 1},
+              /*element=*/{8, 1}};
     case MMAFragment::Acc:
       return {/*outer=*/{1, 1}, /*thread=*/{4, 16}, /*tstrides=*/{16, 1},
               /*element=*/{4, 1}};
@@ -701,6 +720,35 @@ FailureOr<Value> MMAAttr::buildMmaOperation(OpBuilder &builder, Location loc,
         .create<amdgpu::MFMAOp>(loc, resultType, m, n, k, getBlockSize(), lhs,
                                 rhs, acc)
         .getResult();
+  }
+  case MMAIntrinsic::MFMA_F32_16x16x32_F16: {
+    // Generate mfma's for K with unrolled kernels.
+    const int64_t kPack = 2;
+    auto [m, n, k] = getMNKShape();
+    int64_t kWidth = k / kPack;
+
+    auto [aType, bType, cType] = getABCVectorTypes();
+    if (aType.getShape()[0] != bType.getShape()[0]) {
+      // Currently only support case where lhs and rhs
+      // has same vectorWidth.
+      return failure();
+    }
+    int64_t vectorWidth = aType.getShape()[0] / kPack;
+    for (int i = 0; i < kPack; i++) {
+      int64_t offset = vectorWidth * i;
+      Value sliced_lhs = builder.create<vector::ExtractStridedSliceOp>(
+          loc, lhs, ArrayRef<int64_t>{offset}, ArrayRef<int64_t>{vectorWidth},
+          ArrayRef<int64_t>{1});
+      Value sliced_rhs = builder.create<vector::ExtractStridedSliceOp>(
+          loc, rhs, ArrayRef<int64_t>{offset}, ArrayRef<int64_t>{vectorWidth},
+          ArrayRef<int64_t>{1});
+      acc = builder
+                .create<amdgpu::MFMAOp>(loc, resultType, m, n, kWidth,
+                                        getBlockSize(), sliced_lhs, sliced_rhs,
+                                        acc)
+                .getResult();
+    }
+    return acc;
   }
   case MMAIntrinsic::MFMA_I32_16x16x16_I8:
   case MMAIntrinsic::MFMA_F32_16x16x16_F16:
